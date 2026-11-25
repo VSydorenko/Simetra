@@ -40,7 +40,8 @@ Glossary: [GLOSSARY](../../GLOSSARY.md) § «Мультимовні дані» �
   ловить (ADR-0112).
 - Спільне редагування `RichText` (Yjs) і модуль «Документація».
 - Профіль `supabase` заморожено: механізми віхи — лише для профілю `postgres`,
-  без адаптера PostgREST, адаптерів і тестів `supabase`.
+  без адаптера PostgREST, адаптерів і тестів `supabase`
+  ([ADR-0117](../../adr/0117-supabase-profile-frozen.md)).
 
 ## 3. Блоки
 
