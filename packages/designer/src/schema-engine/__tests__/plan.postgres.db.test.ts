@@ -145,13 +145,6 @@ describe("plan and apply on the postgres profile", () => {
     // Схема агентів поза межею плану: ні `DROP`, ні гранту, ні згадки
     expect(text).not.toMatch(/agent_oauth/i)
 
-    // Таблиця `agent_oauth` між планом і застосуванням — не дрейф цілі
-    await admin(roleUrl(set, set.auth), (c) =>
-      c.query(
-        "create table agent_oauth.models (id text primary key, payload jsonb not null)"
-      )
-    )
-
     const applied = await executePlan(writer, target(), artifact, {
       mode: "apply",
       planHash: artifact.planHash,
@@ -189,6 +182,19 @@ describe("plan and apply on the postgres profile", () => {
       )
       expect(grants.rows[0]?.usage).toBe(true)
     })
+
+    // Нова таблиця `agent_oauth` після застосування, із зовнішнім ключем на
+    // таблицю ідентичності, — не дрейф: наступний план не має що робити
+    await admin(roleUrl(set, set.auth), (c) =>
+      c.query(
+        `create table agent_oauth.models (
+           id text primary key,
+           user_id uuid references better_auth."user" (id) on delete cascade,
+           payload jsonb not null)`
+      )
+    )
+    const again = await buildPlan(engine, dbs, model, shadowOptions(), [])
+    expect(again).toMatchObject({ status: "unchanged" })
 
     // Копія доказу: той самий режим `plpgsql_check`, без рядків цілі
     const extracted = await engine.extract(target(), artifact.scope)
