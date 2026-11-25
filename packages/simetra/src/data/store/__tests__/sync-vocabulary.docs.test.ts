@@ -18,12 +18,13 @@ describe("the codes of the read inventory", () => {
     "utf8"
   )
   const start = spec.indexOf("## Додаток Б.")
-  // Таблиця інвентаря: рядки `| <код> | …`, де код — літера й номер.
+  // Таблиця інвентаря: рядки `| <код> | …`, де код — літера й номер; Prettier
+  // добиває стовпець пробілами, тож після коду їх може бути кілька.
   const documented = spec
     .slice(start)
     .split("\n")
     .flatMap((line) => {
-      const m = /^\| ([A-Z]\d+) \|/.exec(line)
+      const m = /^\| ([A-Z]\d+)\s+\|/.exec(line)
       return m === null ? [] : [m[1]!]
     })
 
