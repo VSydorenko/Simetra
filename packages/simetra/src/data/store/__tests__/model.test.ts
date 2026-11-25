@@ -905,6 +905,17 @@ const LONG_INTERVAL_MS = 600_000
 /** Виглядів, які О3 порівняв із сервером за прогони: без них О3 порожній. */
 let o3Checks = 0
 
+/** Скільки разів О3 пропустив вигляд названим станом за прогони: реплей стану його вимагає. */
+const o3Skipped = new Map<O3State, number>()
+const O3_NAMED_STATES: readonly O3State[] = [
+  "first-load-error",
+  "discard-bound",
+  "stale-object",
+  "purged",
+  "card-without-duty",
+  "section-owner-removed",
+]
+
 /**
  * Прогін моделі. Ядро закривається наприкінці (і після збою): модель
  * перевіряє, що після закриття таймерів немає, і наступний прогін не бачить
@@ -4709,6 +4720,8 @@ async function runModelOn(
     }
     if (clock < end) fail("o3", "the model did not reach the last bound")
     o3Checks += o3.evaluated()
+    for (const state of O3_NAMED_STATES)
+      o3Skipped.set(state, (o3Skipped.get(state) ?? 0) + o3.skipped(state))
   }
 
   /** Розбіжність показу вигляду з правдою сервера; `undefined` — збігається. */
@@ -5332,17 +5345,19 @@ describe("core model regressions", () => {
     // О3: картка без власної вимоги й строку над рядком, якого сервер не має.
     {
       issue: "O3 card without duty",
+      o3: "card-without-duty" as const,
       seed: 0,
       path: "467",
     },
     // О3: ТЧ, чий власник `removed`, і шапку читає лише перечитування шапки.
     {
       issue: "O3 section over a removed owner",
+      o3: "section-owner-removed" as const,
       seed: -1579167006,
       path: "37:2:3:5:13:13:21:30:23:22:22:24:29:29:39:38:42:45:43:44:46:48:27:25:25:25:25:25:9:12:2:13:4:7:11:11:11:12:12:12:12:14:13:13:13:12:12:12:12:12",
     },
-    // Пауза повтору відкинутого завантаження кінчається будь-якою новою спробою
-    // вигляду, а не лише завантаженням: інакше модель вважала його «у польоті».
+    // Вигляд, чию паузу повтору модель брала за політ, хоча повтору вже не було:
+    // паузу тепер дає строк із причиною `retry` у `sync()`.
     {
       issue: "return rereads a view after a discarded load",
       seed: -565918531,
@@ -5384,9 +5399,10 @@ describe("core model regressions", () => {
     },
   ])(
     "replays the counterexample of #$issue (seed $seed)",
-    async ({ seed, path, rights = false, signals = false, o2 = false }) => {
+    async ({ seed, path, rights = false, signals = false, o2 = false, o3 }) => {
       o2Checks = 0
       o3Checks = 0
+      o3Skipped.clear()
       await fc.assert(property([], true, rights, signals), {
         seed,
         path,
@@ -5395,6 +5411,13 @@ describe("core model regressions", () => {
       })
       // Прогін із вимогами: без оціненого стану спокою О2 порожній.
       if (o2) assertEvaluated(o2Checks, `replay of seed ${seed}`)
+      // Реплей О3: фаза судила вигляди й справді пропустила названий стан.
+      if (o3 !== undefined) {
+        assertO3Evaluated(o3Checks, `replay of seed ${seed}`)
+        expect(o3Skipped.get(o3) ?? 0, `${o3} was never used`).toBeGreaterThan(
+          0
+        )
+      }
     },
     BUDGET_MS
   )
