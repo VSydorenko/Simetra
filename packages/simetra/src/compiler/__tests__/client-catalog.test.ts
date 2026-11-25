@@ -65,6 +65,9 @@ const SERVER_ONLY = [
   "function",
   // Нормалізована колонка поля пошуку — лише для читання T3
   "search",
+  // Мітки метаданих — для каталогу інструментів агента T3 (П4 §6.3)
+  "title",
+  "description",
 ]
 
 const keysOf = (value: unknown): string[] =>

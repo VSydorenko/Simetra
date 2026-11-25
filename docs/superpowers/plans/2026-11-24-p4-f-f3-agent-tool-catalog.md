@@ -70,7 +70,7 @@ ADR-0104, ADR-0109 (замінює ADR-0107), ADR-0110; П4 §6.3 (катало�
 | Р-F3-8 | Результат інструмента: `{ state, data?, truncated?, continuation? }` або помилка. `state` — `"done" \| "awaiting_confirmation"`; друге значення зарезервоване (ADR-0104) і в першому випуску не повертається. | §5.3: ім'я поля й значень |
 | Р-F3-9 | Помилка: `{ code, message, hint, outcome, error? }`. `code` — закритий перелік каталогу: коди `CommandError` T0 плюс власні `catalog.invalid-input`, `catalog.unknown-tool`, `catalog.unknown-object`, `catalog.rights-write-refused`, `catalog.result-too-large`. `outcome` — повне відображення `Record<код, "retry" \| "ask_user" \| "fix_input">`. Помилка рантайму несе вихідний `CommandError` без втрат у `error`. | none |
 | Р-F3-10 | Подання MCP — проста функція T3 без SDK: успіх — `structuredContent` = об'єкт результату, `content` = його повний JSON-текст; помилка — `isError: true`, лише `content` з текстом, що несе `code`, `message`, `hint`, `outcome` (клієнти Anthropic показують за помилки лише `content`). | none |
-| Р-F3-11 | Межа розміру — `maxResultChars` (типово 44 000, як у munin-mcp: 20 000 токенів × 2,2) на довжину тексту `content`. Сторінка `read` урізається з кінця до межі: `truncated: true`, `continuation: { offset }` наступного рядка; перелік `describe` — `truncated: true` і підказка назвати об'єкт. Картка `read`, що не вміщується, — `catalog.result-too-large` з `outcome: fix_input`. Після того як `run` завершився успіхом, результат `write`/`remove` ніколи не помилка: понад межу рядки змін урізаються до ключа й версії, далі — з кінця, з `truncated: true` і `state: "done"`; інакше агент повторив би закомічений пакет (новий корінь, дублікати). Урізаний результат узгоджений (`included` лише для лишених рядків). | none |
+| Р-F3-11 | Межа розміру — `maxResultChars` (типово 44 000, як у munin-mcp: 20 000 токенів × 2,2) на довжину тексту `content`. Сторінка `read` урізається з кінця до межі: `truncated: true`, `continuation: { offset }` наступного рядка; перелік `describe` — `truncated: true` і `continuation: { offset }`: вхід `describe` без `object` має необов'язковий `offset`, зі сторінок за зсувом агент досягає кожного об'єкта (назвати непобачений об'єкт він не може); `offset` разом з `object` — `catalog.invalid-input`. Картка (чи рядки ТЧ власника) `read`, що не вміщується, — `catalog.result-too-large` з `outcome: fix_input`. Після того як `run` завершився успіхом, результат `write`/`remove` ніколи не помилка: понад межу рядки змін урізаються до ключа й версії, далі — з кінця, з `truncated: true` і `state: "done"`; інакше агент повторив би закомічений пакет (новий корінь, дублікати). Урізаний результат узгоджений (`included` лише для лишених рядків). | none |
 | Р-F3-12 | `bigint` → десятковий рядок в одному місці — ядро каталогу; `toJson` designer замінюється функцією каталогу. | none |
 | Р-F3-13 | Designer: `data-read` кличе ядро `read`, `data-command` — запобіжник Р-F3-4 до `withData` і ядро `execute`; відмова модуля лишається в designer і йде першою на весь пакет (спека §5.3, Рт14). Подання designer (`present`, `summarizeData`) не змінюється; самодостатнє подання каталогу вживає F4. Рішення архітекторки (розвилка 4). Наслідок: пакет «довідник прав, потім об'єкт із модулем» без `--allow-rights-write` дає відмову модуля замість відмови прав; тестами не зафіксовано. | §5.3: адаптер designer зберігає своє подання; П4 §6.14: запобіжник прав — із T3 |
 | Р-F3-14 | Бюджет описів каталогу — тест T3 за зразком `TOOLS_LIST_BUDGET`: розмір JSON переліку `{ name, title, description, inputSchema: z.toJSONSchema(input), annotations }` ≤ `AGENT_TOOLS_BUDGET`; правило зміни бюджету — у коментарі тесту, як у designer. | none |
@@ -105,12 +105,33 @@ none — один блок, приймається цілим.
 
 ## 8. Задачі
 
-| # | Задача | Файли / модулі | Готово, коли | Після | Доказ |
-| --- | --- | --- | --- | --- | --- |
-| 1 | Мітки в каталозі рантайму (Р-F3-7) | `model/runtime/catalog.ts`, `compiler/runtime-catalog.ts`, `packages/create-simetra-app/template/generated/runtime-catalog.json` | об'єкт, реквізит, ТЧ рантайму несуть `title`/`description`, коли метадані їх мають; клієнтський каталог не змінився; згенерований артефакт шаблону оновлено `compile --out`; `pnpm metadata:check` зелений | 0 | `run-tests unit --filter packages/simetra/src/compiler/__tests__/runtime-catalog.test.ts` |
-| 2 | Ядро каталогу: `describe`, `read`, `execute`, запобіжник, JSON-значення | `server/agent/`, `server/index.ts` | І-F3-1…3 зелені на фейковому рантаймі (`server/__tests__/harness.ts`, `fake-database.ts`); І-F3-4 — у тестах T1; `describe` дає всі об'єкти каталогу; невідомий об'єкт — `catalog.unknown-object` | 1 | `run-tests unit --filter packages/simetra/src/server/__tests__/<тест ядра>` |
-| 3 | Шар інструментів: дескриптори, розбір входу, звуження дієслів, результат, помилки, межа розміру, подання MCP, бюджет | `server/agent/` | рядок F3 §3: позначки — значення §5.3 і всі явно; кожне поле `structuredContent` є в тексті `content`; помилка — текст із `code`, `hint`, `outcome`; понад межу — `truncated`; імена й довжини описів; `awaiting_confirmation` у типі й ніколи не повертається; І-F3-5 зелений; тест бюджету Р-F3-14 | 2 | `run-tests unit --filter packages/simetra/src/server/__tests__/<тест інструментів>` |
-| 4 | Designer — адаптер (Р-F3-12, Р-F3-13) | `packages/designer/src/tools/data-tools.ts`, `data-policy.ts` | `data-policy.ts` лишає тільки відмову модуля; запис прав — `agentWriteRefusal`; `toJson` — з каталогу; DB-тести й `data-tools.test.ts` без зміни очікувань (`git diff` порожній); І-F3-6 зелений; `TOOLS_LIST_BUDGET` не росте | 3 | `run-tests unit --filter packages/designer/src/__tests__/data-tools.test.ts`; `run-tests db --filter packages/designer/src/__tests__/data-tools.db.test.ts`; `run-tests db --filter packages/designer/src/__tests__/tenant-creation.db.test.ts` |
+### Задача 1. Мітки в каталозі рантайму (Р-F3-7)
+
+- **Файли / модулі:** `model/runtime/catalog.ts`, `compiler/runtime-catalog.ts`, `packages/create-simetra-app/template/generated/runtime-catalog.json`
+- **Готово, коли:** об'єкт, реквізит, ТЧ рантайму несуть `title`/`description`, коли метадані їх мають; клієнтський каталог не змінився; згенерований артефакт шаблону оновлено `compile --out`; `pnpm metadata:check` зелений
+- **Після:** 0
+- **Доказ:** `run-tests unit --filter packages/simetra/src/compiler/__tests__/runtime-catalog.test.ts`
+
+### Задача 2. Ядро каталогу: `describe`, `read`, `execute`, запобіжник, JSON-значення
+
+- **Файли / модулі:** `server/agent/`, `server/index.ts`
+- **Готово, коли:** І-F3-1…3 зелені на фейковому рантаймі (`server/__tests__/harness.ts`, `fake-database.ts`); І-F3-4 — у тестах T1; `describe` дає всі об'єкти каталогу; невідомий об'єкт — `catalog.unknown-object`
+- **Після:** 1
+- **Доказ:** `run-tests unit --filter packages/simetra/src/server/__tests__/<тест ядра>`
+
+### Задача 3. Шар інструментів: дескриптори, розбір входу, звуження дієслів, результат, помилки, межа розміру, подання MCP, бюджет
+
+- **Файли / модулі:** `server/agent/`
+- **Готово, коли:** рядок F3 §3: позначки — значення §5.3 і всі явно; кожне поле `structuredContent` є в тексті `content`; помилка — текст із `code`, `hint`, `outcome`; понад межу — `truncated`; імена й довжини описів; `awaiting_confirmation` у типі й ніколи не повертається; І-F3-5 зелений; тест бюджету Р-F3-14
+- **Після:** 2
+- **Доказ:** `run-tests unit --filter packages/simetra/src/server/__tests__/<тест інструментів>`
+
+### Задача 4. Designer — адаптер (Р-F3-12, Р-F3-13)
+
+- **Файли / модулі:** `packages/designer/src/tools/data-tools.ts`, `data-policy.ts`
+- **Готово, коли:** `data-policy.ts` лишає тільки відмову модуля; запис прав — `agentWriteRefusal`; `toJson` — з каталогу; DB-тести й `data-tools.test.ts` без зміни очікувань (`git diff` порожній); І-F3-6 зелений; `TOOLS_LIST_BUDGET` не росте
+- **Після:** 3
+- **Доказ:** `run-tests unit --filter packages/designer/src/__tests__/data-tools.test.ts`; `run-tests db --filter packages/designer/src/__tests__/data-tools.db.test.ts`; `run-tests db --filter packages/designer/src/__tests__/tenant-creation.db.test.ts`
 
 ## 9. Задача 0
 

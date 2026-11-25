@@ -18,6 +18,9 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "title": {
+        "en": "Clients"
+      },
       "rights": {
         "actions": [
           {
@@ -173,6 +176,9 @@
           "ref": {
             "object": "f3fd253a-a1a9-4d9d-ad46-379757fbbab5",
             "constraint": "client_country_id_fkey"
+          },
+          "title": {
+            "en": "Country"
           }
         },
         {
@@ -187,6 +193,9 @@
           "ref": {
             "object": "1220b990-252c-48c4-88e8-bc46b4f9344d",
             "constraint": "client_owner_id_fkey"
+          },
+          "title": {
+            "en": "Owner"
           }
         }
       ],
@@ -194,6 +203,9 @@
         {
           "id": "1b5bd8cd-ee2a-4d70-8c46-e6c59ff58fd5",
           "name": "contacts",
+          "title": {
+            "en": "Contacts"
+          },
           "table": {
             "schema": "app",
             "name": "client_contacts"
@@ -215,7 +227,10 @@
               "required": false,
               "maxLength": 150,
               "insert": true,
-              "update": true
+              "update": true,
+              "title": {
+                "en": "Name"
+              }
             },
             {
               "name": "phone",
@@ -226,7 +241,10 @@
               "required": false,
               "maxLength": 32,
               "insert": true,
-              "update": true
+              "update": true,
+              "title": {
+                "en": "Phone"
+              }
             },
             {
               "name": "owner_id",
@@ -343,6 +361,9 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "title": {
+        "en": "Countries"
+      },
       "rights": {
         "actions": [
           {
@@ -526,6 +547,9 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "title": {
+        "en": "Global role assignments"
+      },
       "rights": {
         "actions": [
           {
@@ -760,6 +784,9 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "title": {
+        "en": "Global roles"
+      },
       "rights": {
         "actions": [
           {
@@ -881,6 +908,10 @@
         {
           "id": "212f0a7e-14da-420e-9791-3efb9931b2f0#delta",
           "name": "delta",
+          "title": {
+            "uk": "Дельта",
+            "en": "Delta"
+          },
           "table": {
             "schema": "app",
             "name": "global_roles_delta"
@@ -1056,6 +1087,9 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "title": {
+        "en": "Users"
+      },
       "rights": {
         "actions": [
           {

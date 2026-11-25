@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { elementIdSchema } from "../schemas/element-id"
+import { localizedStringSchema } from "../schemas/localized-string"
 import { metadataKindSchema } from "../schemas/metadata-kind"
 import { metadataRefSchema } from "../schemas/metadata-ref"
 import { storageSchema } from "../schemas/storage"
@@ -100,6 +101,12 @@ export const catalogEntryAttributeSchema = z.strictObject({
 
 /** A runtime attribute: the shared part plus the database types of T3. */
 export const runtimeAttributeSchema = catalogEntryAttributeSchema.extend({
+  /**
+   * Людські мітки з метаданих, обидві мови як є. Лише в рантаймі: клієнтський
+   * каталог їх не несе (П4 §6.3), тож `kernelHash` і браузер не змінюються.
+   */
+  title: localizedStringSchema.optional(),
+  description: localizedStringSchema.optional(),
   /** Лише для `type` і декодування; у SQL не йде. */
   pgType: z.string(),
   castType: castTypeSchema,
@@ -152,6 +159,8 @@ export const catalogEntrySectionSchema = z.strictObject({
 /** A runtime tabular section: the shared part plus its constraints. */
 export const runtimeSectionSchema = catalogEntrySectionSchema
   .extend({
+    /** Мітка ТЧ з метаданих; опису в ТЧ немає. */
+    title: localizedStringSchema.optional(),
     attributes: z.array(runtimeAttributeSchema),
     constraints: z.array(runtimeConstraintSchema),
   })
@@ -327,6 +336,8 @@ export const runtimeObjectSchema = catalogEntrySchema
      * скоупом примушує платформа (`creatorMember`, спека П4 §6.13).
      */
     membership: z.strictObject({ userColumn: z.string() }).optional(),
+    title: localizedStringSchema.optional(),
+    description: localizedStringSchema.optional(),
     attributes: z.array(runtimeAttributeSchema),
     tabularSections: z.array(runtimeSectionSchema),
     operations: z
