@@ -16,14 +16,16 @@ import {
   CommandFailure,
 } from "simetra/model"
 import {
+  createAgentCore,
   createCommandRuntime,
+  toJson,
   type CommandRuntime,
   type LogEntry,
 } from "simetra/server"
 import { z } from "zod"
 import { DataFailure, withData } from "../io/data"
 import { readMetadataDir } from "../io/metadata-dir"
-import { dataCommandRefusal } from "./data-policy"
+import { dataPolicyRefusal } from "./data-policy"
 import {
   defineTool,
   type DataResource,
@@ -53,21 +55,6 @@ export type JsonReadResult =
 export type DataReadData = JsonReadResult | { error: CommandError }
 export type DataCommandData =
   { result: JsonCommandResult } | { error: CommandError }
-
-/**
- * JSON не має `bigint`, а формат передачі клієнтам — справа П4-B: інструмент
- * не клієнт П4-B, тож віддає десятковий рядок, який вхід `BigInt` T0 уже
- * приймає назад.
- */
-export function toJson(value: unknown): unknown {
-  if (typeof value === "bigint") return String(value)
-  if (Array.isArray(value)) return value.map(toJson)
-  if (value !== null && typeof value === "object")
-    return Object.fromEntries(
-      Object.entries(value).map(([k, v]) => [k, toJson(v)])
-    )
-  return value
-}
 
 /**
  * Зведення результату даних для тексту MCP і CLI: кількість рядків чи змін
@@ -221,7 +208,10 @@ export const dataReadTool = defineTool({
       compiled.model,
       warningsFor(compiled.model, compiled.diagnostics, [input.query.object]),
       async (rt, session) =>
-        toJson(await rt.read(session, input.query)) as JsonReadResult
+        (await createAgentCore({ runtime: rt }).read(
+          session,
+          input.query
+        )) as JsonReadResult
     )
   },
   present: {
@@ -256,15 +246,12 @@ export const dataCommandTool = defineTool({
       compiled.diagnostics,
       input.operations.map((op) => op.object)
     )
+    const catalog = buildRuntimeCatalog(model)
     // Політика — до з'єднання: база не бачить пакета, якому відмовлено
-    const refusal = dataCommandRefusal(
-      model,
-      buildRuntimeCatalog(model),
-      input.operations,
-      {
-        allowRightsWrite: ctx.allowRightsWrite === true,
-      }
-    )
+    const rightsWrite = ctx.allowRightsWrite === true
+    const refusal = dataPolicyRefusal(model, catalog, input.operations, {
+      rightsWrite,
+    })
     if (refusal?.kind === "command")
       return {
         ok: false,
@@ -272,7 +259,7 @@ export const dataCommandTool = defineTool({
         diagnostics: [],
         data: { error: refusal.error },
       }
-    if (refusal?.kind === "rights")
+    if (refusal !== undefined)
       return {
         ok: false,
         changes: [],
@@ -285,8 +272,11 @@ export const dataCommandTool = defineTool({
       model,
       warnings,
       async (rt, session) => {
-        const result = await rt.run(session, input.operations)
-        return { result: toJson(result) as JsonCommandResult }
+        const result = await createAgentCore({
+          runtime: rt,
+          permissions: { rightsWrite },
+        }).execute(session, input.operations)
+        return { result: result as JsonCommandResult }
       }
     )
   },

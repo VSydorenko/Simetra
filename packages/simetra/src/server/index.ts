@@ -1,3 +1,6 @@
+import type { AgentRuntime } from "./agent/core"
+import type { CommandRuntime } from "./runtime"
+
 export {
   createCommandRuntime,
   readRoleOf,
@@ -38,3 +41,43 @@ export {
   type ReconcileRefusal,
   type ReconcileReport,
 } from "./reconcile"
+export {
+  AgentUnknownObject,
+  AgentWriteRefused,
+  agentWriteRefusal,
+  createAgentCore,
+  OPERATION_VERBS,
+  toJson,
+  type AgentAttributeDescription,
+  type AgentCore,
+  type AgentCoreOptions,
+  type AgentCorePermissions,
+  type AgentObjectDescription,
+  type AgentObjectSummary,
+  AGENT_ERROR_CODES,
+  AGENT_OUTCOMES,
+  agentResultToMcp,
+  type AgentErrorCode,
+  type AgentMcpResult,
+  type AgentOutcome,
+  type AgentTool,
+  type AgentToolAnnotations,
+  type AgentToolError,
+  type AgentToolResult,
+  type AgentToolState,
+  type AgentToolSuccess,
+  type AgentVerb,
+} from "./agent"
+export {
+  createAgentToolCatalog,
+  type AgentToolCatalog,
+  type AgentToolCatalogOptions,
+} from "./agent-catalog"
+// `CommandRuntime` задовольняє структурну межу каталогу: розбіжність
+// сигнатур зламає перевірку типів тут, а не в адаптері.
+// Лише на рівні типів, без рантайм-інструкції: якщо `CommandRuntime` перестане
+// бути `AgentRuntime`, обмеження параметра не пройде перевірку типів.
+type CommandRuntimeIsAgentRuntime<T extends AgentRuntime> = T
+// Ім'я ніде не вживається: сенс аліаса — лише обмеження параметра вище
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type CommandRuntimeBoundary = CommandRuntimeIsAgentRuntime<CommandRuntime>

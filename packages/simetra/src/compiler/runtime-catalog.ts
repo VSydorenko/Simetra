@@ -4,6 +4,7 @@ import {
   KIND_REGISTRY,
   effectiveMaxBytes,
   isObjectTable,
+  type LocalizedString,
   type MetadataRef,
   type PhysicalTable,
   type CatalogRightsCarrier,
@@ -180,6 +181,23 @@ interface Facts {
   mainTable: (schema: string, name: string) => ObjectTable | undefined
 }
 
+/**
+ * Мітки джерела метаданих у формі рантайму: ключ лише коли мітка є, як і в
+ * решти необов'язкових полів каталогу.
+ */
+function labelsOf(
+  source: unknown
+): Pick<RuntimeObject, "title" | "description"> {
+  const { title, description } = (source ?? {}) as {
+    title?: LocalizedString
+    description?: LocalizedString
+  }
+  return {
+    ...(title === undefined ? {} : { title }),
+    ...(description === undefined ? {} : { description }),
+  }
+}
+
 function runtimeObject(
   object: SourceObject,
   contract: CatalogCommandContract,
@@ -197,6 +215,9 @@ function runtimeObject(
   )
   const operations = operationsOf(object.id, contract, facts.model)
   // Ключ — лише з `op.id`, версія — з `expectedVersion`: реквізитами вони не є.
+  const block = facts.model.presentation.objects.find(
+    (p) => p.objectId === object.id
+  )
   const header = attributes(
     fields.filter(
       (f) => f.columns[0] !== key && f.columns[0] !== versionColumn
@@ -207,6 +228,8 @@ function runtimeObject(
       update: new Set(contract.updateKeys),
       references: contract.references,
       header: true,
+      // Мітки стандартних реквізитів — з проєкції подання, не з файлу вдруге.
+      overrides: block?.standardAttributes,
     },
     facts
   )
@@ -224,13 +247,11 @@ function runtimeObject(
     versionColumn,
     versionName: fieldOf(fields, versionColumn).name,
     signal: isSignalObject(facts.model, object.id),
+    ...labelsOf(object.data),
     ...publicReadOf(facts.model, object.id, table),
     ...storageOf(object),
     ...rightsOf(object.id, header, contract, facts),
-    ...presentationOf(
-      facts.model.presentation.objects.find((p) => p.objectId === object.id),
-      fields
-    ),
+    ...presentationOf(block, fields),
     ...(scope?.origin.scopeKindId === undefined
       ? {}
       : { scopeKindId: scope.origin.scopeKindId, scopeColumn: scope.name }),
@@ -254,6 +275,7 @@ function runtimeObject(
       return {
         id: must(section.table.origin.tabularSectionId, section.table.name),
         name: source.name,
+        ...(source.title === undefined ? {} : { title: source.title }),
         table: { schema: section.table.schema, name: section.table.name },
         key: section.key,
         keyName: fieldOf(rows, section.key).name,
@@ -274,6 +296,8 @@ function runtimeObject(
             update: new Set(section.updateColumns),
             references: section.references,
             header: false,
+            overrides: block?.sections?.find((b) => b.sectionId === source.id)
+              ?.standardAttributes,
           },
           facts
         ),
@@ -482,6 +506,8 @@ function attributes(
     references: readonly CommandReference[]
     /** Шапка, а не ТЧ: лише в шапці реквізит буває лінивим (Рд25). */
     header: boolean
+    /** Перевизначення міток стандартних реквізитів за канонічним іменем. */
+    overrides?: PresentationBlock["standardAttributes"]
   },
   facts: Facts
 ): RuntimeAttribute[] {
@@ -575,6 +601,11 @@ function attributes(
       ...(lazy ? { load: "lazy" as const } : {}),
       ...(maxBytes === undefined ? {} : { maxBytes }),
       ...(search === undefined ? {} : { search }),
+      ...labelsOf(
+        field.standard === undefined
+          ? field.element
+          : keys.overrides?.[field.standard.logicalName]
+      ),
     }
   })
 }
