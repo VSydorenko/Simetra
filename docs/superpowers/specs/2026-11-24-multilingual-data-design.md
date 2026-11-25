@@ -2,7 +2,7 @@
 
 > **Статус:** погоджено власником, 2026-11-25.
 
-Issue: — (створюється після погодження; статус — у GitHub, `track`)
+Issue: #410 — статус у GitHub (`track`), не в цьому файлі
 Glossary: [GLOSSARY](../../GLOSSARY.md) § «Мультимовні дані» · ADR: [ADR-0111](../../adr/0111-localized-attribute-primary-in-header.md), [ADR-0112](../../adr/0112-dense-translation-rows-visible-value.md), [ADR-0113](../../adr/0113-data-languages-catalog-one-primary.md), [ADR-0114](../../adr/0114-t4-language-as-field-value-dimension.md), [ADR-0115](../../adr/0115-data-language-never-deleted.md), [ADR-0116](../../adr/0116-richtext-in-multilingual-milestone.md), [ADR-0026](../../adr/0026-invariants-in-db-behavior-in-ts.md) · Дослідження: [форми зберігання](../../research/analogues/multilingual-data-2026-11.md)
 
 ## 1. Мета
