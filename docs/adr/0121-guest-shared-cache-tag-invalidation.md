@@ -1,4 +1,4 @@
-# ADR-0120: спільний кеш відповіді гостю на публічному маршруті; інвалідація за тегами після коміту, TTL — страховка
+# ADR-0121: спільний кеш відповіді гостю на публічному маршруті; інвалідація за тегами після коміту, TTL — страховка
 
 Status: accepted 2026-11-25
 Decided by: architect
@@ -7,11 +7,11 @@ Spec: [публічна частина застосунку](../superpowers/spec
 
 ## Context
 
-ADR-0074 і Р41 платформної спеки забороняють кешувати дані користувача: HTML — `private, no-store` і `Vary: Cookie`; кожне нове кешування — новий ADR. `decorate` у `template/src/server.ts` ставить ці заголовки безумовно (Дх8 П4-D). Гостьова сторінка (ADR-0119) не залежить від користувача: її читає роль гостя під RLS, а знімка T4 у ній немає. Vercel кешує за `s-maxage` і не кешує відповідей із `Set-Cookie`, `Vary: Cookie` чи `private`; purge — за тегами (`Vercel-Cache-Tag`, <https://vercel.com/docs/caching/cdn-cache/purge>). Cloudflare не враховує `Vary`, крім `Accept-Encoding` (<https://developers.cloudflare.com/cache/concepts/cache-control/>). Цілі host-а — `node-server` і Vercel (Рт17 П4, ADR-0061).
+ADR-0074 і Р41 платформної спеки забороняють кешувати дані користувача: HTML — `private, no-store` і `Vary: Cookie`; кожне нове кешування — новий ADR. `decorate` у `template/src/server.ts` ставить ці заголовки безумовно (Дх8 П4-D). Гостьова сторінка (ADR-0120) не залежить від користувача: її читає роль гостя під RLS, а знімка T4 у ній немає. Vercel кешує за `s-maxage` і не кешує відповідей із `Set-Cookie`, `Vary: Cookie` чи `private`; purge — за тегами (`Vercel-Cache-Tag`, <https://vercel.com/docs/caching/cdn-cache/purge>). Cloudflare не враховує `Vary`, крім `Accept-Encoding` (<https://developers.cloudflare.com/cache/concepts/cache-control/>). Цілі host-а — `node-server` і Vercel (Рт17 П4, ADR-0061).
 
 ## Decision
 
-1. Відповідь `public` — лише коли разом: маршрут оголошено публічним, у запиті немає сесійного cookie, відповідь — 200 HTML (чи файл маршруту публічного файлу, ADR-0122) без `Set-Cookie`. Заголовок — `Cache-Control: public, max-age=0, s-maxage=N, stale-while-revalidate=M`, N і M — налаштування host-а, без `Vary: Cookie`. Будь-яка інша відповідь — як зараз.
+1. Відповідь `public` — лише коли разом: маршрут оголошено публічним, у запиті немає сесійного cookie, відповідь — 200 HTML (чи файл маршруту публічного файлу, ADR-0123) без `Set-Cookie`. Заголовок — `Cache-Control: public, max-age=0, s-maxage=N, stale-while-revalidate=M`, N і M — налаштування host-а, без `Vary: Cookie`. Будь-яка інша відповідь — як зараз.
 2. Сервер сам гарантує, що в публічній відповіді немає персональних даних; на `Vary` кешу не покладається.
 3. Відповідь гостю несе теги кешу `obj:<objectId>` і `row:<objectId>:<id>` за прочитаним.
 4. Відкликання: порт інвалідації кешу за тегами з двома операціями — `revoke` для відкликання (`unpublish`, `markDeletion`, видалення) і `invalidate` для зміни змісту. Після коміту команди, що змінила рядки об'єкта з `publicRead` ролі `anon`, T3 кличе порт з тегами змінених рядків і їхніх об'єктів через `afterCommit`. Інвалідація — best-effort; TTL — страховка: при збої purge зняте видно щонайбільше `s-maxage` + `stale-while-revalidate`.

@@ -1,4 +1,4 @@
-# ADR-0118: умовний `publicRead` — стандартна колонка `published` і переходи `publish`/`unpublish`; опубліковане — `published AND NOT deletion_mark`
+# ADR-0119: умовний `publicRead` — стандартна колонка `published` і переходи `publish`/`unpublish`; опубліковане — `published AND NOT deletion_mark`
 
 Status: accepted 2026-11-25
 Decided by: architect
