@@ -16,6 +16,7 @@ import {
   testSuperuserUrl,
 } from "./connection"
 import { type Exec, type Fetch, nodeExec, removeRunResources } from "./external"
+import { stackIndex } from "../../../../scripts/db-stack-index.mjs"
 import {
   PROVIDER_ENV,
   SUPERUSER_PRELUDE,
@@ -307,6 +308,21 @@ export function stackMismatch(
 }
 
 /**
+ * Why the server that reports stack index `reported` (`simetra.stack_index`;
+ * empty or `null` for a stack not yet rebuilt) cannot be the stack `locked`
+ * whose lock the run holds, or `null` when it can. An empty value is accepted
+ * only under the lock of stack 1.
+ */
+export function stackIndexMismatch(
+  locked: number,
+  reported: string | null | undefined
+): string | null {
+  const empty = reported === undefined || reported === null || reported === ""
+  if (empty ? locked === 1 : reported === String(locked)) return null
+  return `the server reports stack index ${empty ? "none" : reported}, but the run holds the lock of stack ${locked}. A SIMETRA_TEST_* variable likely points at another stack; a run there would not hold that stack's lock.`
+}
+
+/**
  * Throws unless every effective address of the run (`testDatabaseUrl()` and
  * `testSuperuserUrl()`) reaches the stack of profile `p`.
  */
@@ -319,17 +335,28 @@ export async function assertStack(
     // піднято командою свого профілю
     const client = await openAdmin(url, "postgres", o)
     let supabaseAdmin: boolean
+    let reported: string | null | undefined
     try {
-      supabaseAdmin =
-        (
-          await client.query<{ present: boolean }>(
-            "select exists (select from pg_catalog.pg_roles where rolname = 'supabase_admin') as present"
-          )
-        ).rows[0]?.present === true
+      // Індекс стека — тим самим запитом: параметр сервера, який ставить
+      // compose стека `postgres`
+      const row = (
+        await client.query<{
+          present: boolean
+          stack_index: string | null
+        }>(
+          "select exists (select from pg_catalog.pg_roles where rolname = 'supabase_admin') as present, pg_catalog.current_setting('simetra.stack_index', true) as stack_index"
+        )
+      ).rows[0]
+      supabaseAdmin = row?.present === true
+      reported = row?.stack_index
     } finally {
       await client.end()
     }
-    const mismatch = stackMismatch(p, { supabaseAdmin })
+    const mismatch =
+      stackMismatch(p, { supabaseAdmin }) ??
+      (p === "postgres"
+        ? stackIndexMismatch(stackIndex(process.env), reported)
+        : null)
     if (mismatch !== null) {
       // Без пароля: повідомлення йде в лог прогону
       const { username, host, pathname } = new URL(url)

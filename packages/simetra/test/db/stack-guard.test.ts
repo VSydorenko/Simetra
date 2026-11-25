@@ -1,13 +1,17 @@
+import { spawn, type ChildProcess } from "node:child_process"
+import { once } from "node:events"
 import {
   existsSync,
   globSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs"
+import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { basename, join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { PROVIDER_EVENT_SOURCES, PROVIDER_OWNER_ROLES } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import designerConfig from "../../../designer/vitest.config"
@@ -20,19 +24,23 @@ import {
   type TestProvider,
 } from "./profile"
 import {
-  acquireLock,
+  acquireStack,
   diff,
   IDENTITY_SQL,
   leakMessage,
   endChecks,
   leftoverReport,
   lockPath,
+  probeStack,
   startChecks,
+  takeStack,
 } from "./stack-guard"
 import {
   type ClientFactory,
   dropRunDatabase,
+  assertStack,
   manualSweepSql,
+  stackIndexMismatch,
   stackMismatch,
   stopRunBackends,
   sweepRun,
@@ -724,12 +732,342 @@ describe("acquireLock", () => {
     try {
       const lock = join(dir, "stack.lock")
       writeFileSync(lock, `${process.pid}\n${process.cwd()}\nnow\n`)
-      await expect(acquireLock(lock, "postgres")).rejects.toThrow(
+      await expect(
+        acquireStack({
+          candidates: [1],
+          provider: "postgres",
+          lockOf: () => lock,
+        })
+      ).rejects.toThrow(
         "one DB project per vitest process (run each with its own --project)"
       )
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+const TSX = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href
+const PICK_FIXTURE = fileURLToPath(
+  new URL("./fixtures/pick-stack.ts", import.meta.url)
+)
+
+/** Рядок замка, який тримає живий процес, що не є цим тестом (батько воркера). */
+const foreignLock = (): string =>
+  `${process.ppid}\n/elsewhere\n2026-11-25T00:00:00.000Z\n`
+
+describe("the pool pick", () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "simetra-pool-"))
+    vi.stubEnv("SIMETRA_STACK", undefined)
+    vi.stubEnv("SIMETRA_STACK_POOL", undefined)
+    vi.stubEnv("SIMETRA_TEST_DATABASE_URL", "")
+    vi.stubEnv("SIMETRA_TEST_SUPERUSER_URL", "")
+    delete process.env.SIMETRA_TEST_DATABASE_URL
+    delete process.env.SIMETRA_TEST_SUPERUSER_URL
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+    rmSync(dir, { recursive: true, force: true })
+  })
+  const lockOf = (index: number): string => join(dir, `stack-${index}.lock`)
+  const base = {
+    provider: "postgres",
+    lockOf,
+    pollMs: 10,
+  } as const
+
+  /** Конкуренти в окремих процесах стартують разом і друкують свої записи. */
+  async function compete(
+    count: number,
+    candidates: string,
+    mode: string[],
+    env: Record<string, string> = {}
+  ): Promise<{
+    children: ChildProcess[]
+    exited: Promise<unknown>[]
+    output: string[][]
+  }> {
+    const goFile = join(dir, "go")
+    const output: string[][] = Array.from({ length: count }, () => [])
+    const childEnv = { ...process.env }
+    delete childEnv.SIMETRA_STACK
+    delete childEnv.SIMETRA_STACK_POOL
+    const children = Array.from({ length: count }, (_, i) => {
+      const child = spawn(
+        process.execPath,
+        ["--import", TSX, PICK_FIXTURE, dir, candidates, goFile, ...mode],
+        {
+          env: {
+            ...childEnv,
+            ...env,
+            SIMETRA_TEST_DATABASE_URL: "postgresql://x:x@127.0.0.1:1/postgres",
+            SIMETRA_TEST_SUPERUSER_URL: "postgresql://x:x@127.0.0.1:1/postgres",
+          },
+          stdio: ["ignore", "pipe", "inherit"],
+        }
+      )
+      child.stdout!.setEncoding("utf8")
+      child.stdout!.on("data", (chunk: string) =>
+        output[i]!.push(...chunk.split("\n").filter(Boolean))
+      )
+      return child
+    })
+    const until = async (done: () => boolean): Promise<void> => {
+      for (let i = 0; i < 4000 && !done(); i++)
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      if (!done()) throw new Error(`timeout: ${JSON.stringify(output)}`)
+    }
+    // Слухач `exit` — до виходу: пізніше подію вже не дочекатися
+    const exited = children.map((child) => once(child, "exit"))
+    await until(() => output.every((lines) => lines.includes("ready")))
+    writeFileSync(goFile, "")
+    return {
+      children,
+      exited,
+      output: Object.assign(output, {
+        wait: until,
+      }) as unknown as string[][],
+    }
+  }
+
+  // Інваріант 2: вибір і замок — одна дія. Конкуренти в окремих процесах, що
+  // стартують разом, ніколи не тримають один замок одночасно
+  it("never lets two processes hold the same stack at once", async () => {
+    const { exited, output } = await compete(6, "1,2", ["hold", "150"])
+    const wait = (
+      output as unknown as { wait: (f: () => boolean) => Promise<void> }
+    ).wait
+    await wait(() =>
+      output.every((lines) => lines.some((l) => l.startsWith("released")))
+    )
+    await Promise.all(exited)
+    const spans = output.map((lines) => {
+      const picked = lines.find((l) => l.startsWith("picked"))!.split(" ")
+      const released = lines.find((l) => l.startsWith("released"))!.split(" ")
+      return {
+        index: picked[1]!,
+        from: Number(picked[2]),
+        to: Number(released[2]),
+      }
+    })
+    expect(new Set(spans.map((s) => s.index))).toEqual(new Set(["1", "2"]))
+    for (const a of spans)
+      for (const b of spans)
+        if (a !== b && a.index === b.index)
+          expect(a.from >= b.to || b.from >= a.to).toBe(true)
+  }, 60_000)
+
+  it("skips a stack that is not live and frees its lock", async () => {
+    const { exited, output } = await compete(1, "1,2", ["hold", "50"], {
+      FAKE_DEAD: "1",
+    })
+    const wait = (
+      output as unknown as { wait: (f: () => boolean) => Promise<void> }
+    ).wait
+    await wait(() => output[0]!.some((l) => l.startsWith("released")))
+    await exited[0]
+    expect(output[0]!.find((l) => l.startsWith("picked"))).toMatch(
+      /^picked 2 \d+ env=2$/
+    )
+    expect(existsSync(lockOf(1))).toBe(false)
+  }, 60_000)
+
+  it("with no live candidate throws naming them and pnpm db:pg:start", async () => {
+    await expect(
+      acquireStack({ ...base, candidates: [1, 2], live: async () => false })
+    ).rejects.toThrow(
+      /candidates 1, 2: start one with pnpm db:pg:start or SIMETRA_STACK=2 pnpm db:pg:start/
+    )
+    expect([existsSync(lockOf(1)), existsSync(lockOf(2))]).toEqual([
+      false,
+      false,
+    ])
+  })
+
+  // Усі живі зайняті: чекаємо будь-який, а не лише перший
+  it("polls every live candidate and takes the one that frees", async () => {
+    writeFileSync(lockOf(1), foreignLock())
+    writeFileSync(lockOf(2), foreignLock())
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true)
+    const taking = acquireStack({
+      ...base,
+      candidates: [1, 2],
+      live: async () => true,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    rmSync(lockOf(2))
+    const taken = await taking
+    expect(taken.index).toBe(2)
+    expect(readFileSync(lockOf(1), "utf8")).toBe(foreignLock())
+    expect(String(err.mock.calls[0]![0])).toMatch(
+      /^All live local postgres stacks \(1, 2\) are busy: DB run PID \d+ \(\/elsewhere, since 2026-11-25T00:00:00.000Z\), /
+    )
+    taken.release()
+    expect(existsSync(lockOf(2))).toBe(false)
+  })
+
+  it("busy line of stack 1 alone keeps its old form, of stack 2 names the index", async () => {
+    writeFileSync(lockOf(1), foreignLock())
+    writeFileSync(lockOf(2), foreignLock())
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true)
+    for (const [index, name] of [
+      [1, "stack is busy"],
+      [2, "stack 2 is busy"],
+    ] as const) {
+      err.mockClear()
+      await expect(
+        acquireStack({ ...base, candidates: [index], waitMs: 20, pollMs: 50 })
+      ).rejects.toThrow()
+      expect(String(err.mock.calls[0]![0])).toContain(
+        `The local postgres ${name}: DB run PID`
+      )
+    }
+  })
+
+  it("takes over the lock of a dead process but not a fresh empty one", async () => {
+    writeFileSync(lockOf(1), "2147483646\n/gone\nthen\n")
+    expect((await acquireStack({ ...base, candidates: [1] })).index).toBe(1)
+    rmSync(lockOf(1))
+    writeFileSync(lockOf(2), "")
+    await expect(
+      acquireStack({ ...base, candidates: [2], waitMs: -1 })
+    ).rejects.toThrow("still busy")
+    expect(existsSync(lockOf(2))).toBe(true)
+  })
+
+  it("pool: puts the chosen index into SIMETRA_STACK", async () => {
+    const taken = await takeStack("postgres", {
+      lockOf,
+      live: async (index) => index === 2,
+      pollMs: 10,
+    })
+    expect(taken.index).toBe(2)
+    expect(process.env.SIMETRA_STACK).toBe("2")
+    taken.release()
+  })
+
+  it("explicit SIMETRA_STACK is one stack and is not probed", async () => {
+    vi.stubEnv("SIMETRA_STACK", "3")
+    const taken = await takeStack("postgres", { lockOf })
+    expect(taken.index).toBe(3)
+    expect(existsSync(lockOf(3))).toBe(true)
+    expect([1, 2, 4].some((i) => existsSync(lockOf(i)))).toBe(false)
+    taken.release()
+  })
+
+  it("a SIMETRA_TEST_*_URL override turns the pool off: stack 1 without SIMETRA_STACK", async () => {
+    vi.stubEnv("SIMETRA_TEST_SUPERUSER_URL", "postgresql://x:x@127.0.0.1:1/y")
+    const taken = await takeStack("postgres", { lockOf })
+    expect(taken.index).toBe(1)
+    expect(process.env.SIMETRA_STACK).toBe("1")
+    expect(existsSync(lockOf(2))).toBe(false)
+    taken.release()
+  })
+
+  // Прибиральник на сигналі й `release` звільняють замок обраного N, а не 1
+  it("on a signal the run frees the lock of the chosen stack only", async () => {
+    writeFileSync(lockOf(1), foreignLock())
+    const { children, exited, output } = await compete(1, "1,2", ["interrupt"])
+    const wait = (
+      output as unknown as { wait: (f: () => boolean) => Promise<void> }
+    ).wait
+    await wait(() => output[0]!.some((l) => l.startsWith("picked")))
+    expect(output[0]!.find((l) => l.startsWith("picked"))).toMatch(/ env=2$/)
+    expect(existsSync(lockOf(2))).toBe(true)
+    children[0]!.kill("SIGTERM")
+    await exited[0]
+    expect(existsSync(lockOf(2))).toBe(false)
+    expect(readFileSync(lockOf(1), "utf8")).toBe(foreignLock())
+  }, 90_000)
+
+  it("release leaves a lock another run took over", async () => {
+    const taken = await acquireStack({ ...base, candidates: [1] })
+    writeFileSync(lockOf(1), foreignLock())
+    taken.release()
+    expect(readFileSync(lockOf(1), "utf8")).toBe(foreignLock())
+  })
+
+  describe("probeStack", () => {
+    const fake = (reported: string | null | Error) => (): GuardClientLike => ({
+      connect: async () => {
+        if (reported instanceof Error) throw reported
+      },
+      query: async <R>() => ({ rows: [{ idx: reported }] as R[] }),
+      end: async () => undefined,
+      escapeIdentifier: (name: string) => name,
+    })
+    type GuardClientLike = ReturnType<ClientFactory>
+
+    it.each([
+      [2, "2", true],
+      [2, "", false],
+      [2, null, false],
+      [2, "3", false],
+      [1, "", true],
+      [1, "2", false],
+    ] as const)("stack %s reporting %j is live: %s", async (n, rep, ok) => {
+      expect(await probeStack(n, fake(rep))).toBe(ok)
+    })
+
+    it("an unreachable stack is not live", async () => {
+      expect(await probeStack(2, fake(new Error("ECONNREFUSED")))).toBe(false)
+    })
+  })
+})
+
+describe("the stack index check of assertStack", () => {
+  beforeEach(() => {
+    vi.stubEnv(PROVIDER_ENV, "postgres")
+    vi.stubEnv("SIMETRA_STACK", undefined)
+    for (const name of [
+      "SIMETRA_TEST_DATABASE_URL",
+      "SIMETRA_TEST_SUPERUSER_URL",
+    ]) {
+      vi.stubEnv(name, "")
+      delete process.env[name]
+    }
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+  const answer = (reported: string | null) => (sql: string) =>
+    sql.includes("'supabase_admin'")
+      ? [{ present: false, stack_index: reported }]
+      : []
+  const check = (locked: string | undefined, reported: string | null) => {
+    vi.stubEnv("SIMETRA_STACK", locked)
+    return assertStack("postgres", {
+      client: fakeConnections(answer(reported)).factory,
+    })
+  }
+
+  it("accepts the reported index equal to the locked one", async () => {
+    await expect(check("2", "2")).resolves.toBeUndefined()
+    await expect(check(undefined, "1")).resolves.toBeUndefined()
+  })
+
+  it("accepts an empty value only under the lock of stack 1", async () => {
+    await expect(check(undefined, "")).resolves.toBeUndefined()
+    await expect(check("1", null)).resolves.toBeUndefined()
+    await expect(check("2", "")).rejects.toThrow(
+      "reports stack index none, but the run holds the lock of stack 2"
+    )
+  })
+
+  it("refuses another index naming both", async () => {
+    await expect(check("2", "3")).rejects.toThrow(
+      "reports stack index 3, but the run holds the lock of stack 2"
+    )
+    await expect(check(undefined, "2")).rejects.toThrow(
+      "reports stack index 2, but the run holds the lock of stack 1"
+    )
+  })
+
+  it("stackIndexMismatch is null for a match", () => {
+    expect(stackIndexMismatch(4, "4")).toBeNull()
   })
 })
 
@@ -924,6 +1262,16 @@ describe("leftoverReport", () => {
     expect(lines.filter((line) => line.includes("sweep.ts"))).toEqual([
       "    cd packages/simetra && SIMETRA_STACK=2 SIMETRA_TEST_PROVIDER=postgres node --import tsx test/db/sweep.ts abc123",
     ])
+  })
+
+  it("names the stack in one header line for N other than 1, none for 1", () => {
+    const input = { databases: ["simetra_copy_abc123_q1w2e3"], roles: [] }
+    vi.stubEnv("SIMETRA_STACK", undefined)
+    expect(leftoverReport(input, "postgres", NOW)[0]).toContain("they are not")
+    vi.stubEnv("SIMETRA_STACK", "2")
+    expect(leftoverReport(input, "postgres", NOW)[0]).toBe(
+      "Stack postgres-2 (SIMETRA_STACK=2) — the objects below are on it:"
+    )
   })
 
   it("names untagged shadows with a DROP each, apart from tagged objects", () => {

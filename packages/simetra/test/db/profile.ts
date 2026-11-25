@@ -64,7 +64,15 @@ export function profileStack(p: TestProvider): TestStack {
     assertSupabaseUnindexed(process.env)
     return SUPABASE_STACK
   }
-  const s = postgresStack(stackIndex(process.env))
+  return postgresStackAt(stackIndex(process.env))
+}
+
+/**
+ * Стек `postgres` з індексом `index` — для сторожа, що перебирає кандидатів
+ * пулу до того, як індекс потрапив у середовище.
+ */
+export function postgresStackAt(index: number): TestStack {
+  const s = postgresStack(index)
   const server = `postgresql://postgres:postgres@127.0.0.1:${s.pgPort}`
   return {
     index: s.index,
