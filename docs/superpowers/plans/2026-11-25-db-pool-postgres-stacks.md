@@ -13,8 +13,8 @@
   зупиняють, не перезапускають і не чистять. Перевірки блоку йдуть на стеках
   2 і 3, які виконавиця піднімає сама й зупиняє з томами в кінці перевірок.
   На стеку 1 — лише `run-tests db --filter <файл>`, перед першим — один рядок
-  архітекторці. Перебудова стека 1 після зміни `compose.yaml` — розвилка до
-  архітекторки (вікно з іншими архітекторками), задача власника 1.
+  архітекторці. Перебудова стека 1 після зміни `compose.yaml` — вікно архітекторки
+  (§8), не власника.
 - **Межі:** без зміни kit (`~/agent-kit`); профіль `supabase` не
   параметризується (ADR-0117). `.github/**` не змінюється. `AGENTS.md` —
   лише текст власнику у agents-md-db-pool.md у теці брифів основного checkout.
@@ -127,16 +127,62 @@
 
 Команди — цільові; `<файл>` — тест, який задача змінює.
 
-| # | Задача | Файли | Done when | Після | Перевірка |
-| --- | --- | --- | --- | --- | --- |
-| 0 | Звірка якорів з кодом; поправки спеки й ADR | спека §10.1–§10.3, ADR-0124 у `docs/adr/`, `docs/GLOSSARY.md` (термін «стек N», якщо його ще немає) | §10.1: порти й проєкт за індексом, `garage.toml` → inline config; §10.2: команди з `SIMETRA_STACK`, речення про bind-монтування переписано, чергу тримає сторож, не `run-tests`; §10.3: замок на стек N, пул, звірка індексу, мітка за ключем стека; ADR-0124 accepted; `doc anchors && doc lint` чисто | — | `doc anchors`, `doc lint` |
-| 1 | Модуль індексу | новий модуль у `scripts/` з `.d.mts`, його unit-тест у `packages/simetra/test/db/` | Р-POOL-1, Р-POOL-2, Р-POOL-10; інваріант 6 для ідентичності; недійсні значення обох змінних — помилки | 0 | `run-tests unit --filter <файл>` |
-| 2 | Стек за індексом: compose і скрипт | `docker/postgres-stack/compose.yaml`, видалення `garage.toml`, `scripts/db-stack.mjs`, `db-stack.d.mts`, `stack-files.test.ts` | Р-POOL-3, Р-POOL-4, Р-POOL-9 (команди); `stackFilesHash`, `assertSameStack`, Garage-кроки й `stackUrl` — зі стека індексу; тест `garage.toml` переписано на inline config без секретів; `publishedPorts` знає форму з інтерполяцією й тримає лише `127.0.0.1`; рядок `image: simetra-pg/postgres:…` той самий (його читають CI й `imageTagVersion`) | 1 | `run-tests unit --filter stack-files` |
-| 3 | Адреси прогону з індексу | `test/db/profile.ts`, `connection.ts`, `s3.ts`, `external.ts`, `sweep.ts`, `signal-stand.ts`, їхні тести, `skip-boundary.test.ts` (регекс імені `TEST_STACKS`); `packages/simetra/scripts/builtin-functions.ts`, `catalog-functions.ts` | `TEST_STACKS`-константи немає; Р-POOL-7 (вимкнення пулу), Р-POOL-8; інваріанти 1 (частина адрес), 5 | 1 | `run-tests unit --filter profile`, `--filter external`, `--filter connection` |
-| 4 | Пул у сторожі *(лінза Opus)* | `stack-guard.ts`, `stack-guard.test.ts`, `sweep.ts` (`assertStack`) | Р-POOL-5, Р-POOL-6 (ліміт і текст очікування), Р-POOL-7 (звірка індексу); інваріанти 1–4; тест переривання й прибиральник на сигналі звільняють саме свій замок N | 3 | `run-tests unit --filter stack-guard` |
-| 5 | Демо й профіль kit | `create-simetra-app/scripts/lib/demo.mts`, `demo.test.ts`, `.agents/kit.profile.json` | Р-POOL-9 (демо), Р-POOL-6 (поля профілю); `kit-setup --check` зелений | 2, 4 | `run-tests unit --filter demo`; `kit-setup --check` |
-| 6 | Два стеки поруч *(контролерка, не імплементерка)* | — (лише прогони) | `SIMETRA_STACK=2` і `=3 pnpm db:pg:start` з робочого дерева блоку; `docker inspect` Garage стека 2 — без `bind`; два одночасні `SIMETRA_STACK_POOL=2,3 run-tests db --package simetra --filter <файл>` зелені, у стартових рядках сторожа різні індекси; третій такий самий прогін чекає з рядком «busy» і бере стек, що звільнився; один прогін e2e на стеку 2 (`SIMETRA_STACK=2 run-tests e2e --filter <spec>`) зелений; вивід — у тілі PR; потім `SIMETRA_STACK=2/3 pnpm db:pg:stop --volumes` | 5 | команди з колонки «Done when» |
-| 7 | Текст для `AGENTS.md` | agents-md-db-pool.md у теці брифів основного checkout (поза git) | текст для розділу "Commands and gates": «один стек на профіль на машину» → пул стеків `postgres` за `SIMETRA_STACK`; «стартувати стек з основного checkout» прибрано; чергу тримає сторож | 6 | — |
+### Задача 0. Звірка якорів з кодом; поправки спеки й ADR
+
+- **Файли:** спека §10.1–§10.3, ADR-0124 у `docs/adr/`, `docs/GLOSSARY.md` (термін «стек N», якщо його ще немає)
+- **Done when:** §10.1: порти й проєкт за індексом, `garage.toml` → inline config; §10.2: команди з `SIMETRA_STACK`, речення про bind-монтування переписано, чергу тримає сторож, не `run-tests`; §10.3: замок на стек N, пул, звірка індексу, мітка за ключем стека; ADR-0124 accepted; `doc anchors && doc lint` чисто
+- **Після:** —
+- **Перевірка:** `doc anchors`, `doc lint`
+
+### Задача 1. Модуль індексу
+
+- **Файли:** новий модуль у `scripts/` з `.d.mts`, його unit-тест у `packages/simetra/test/db/`
+- **Done when:** Р-POOL-1, Р-POOL-2, Р-POOL-10; інваріант 6 для ідентичності; недійсні значення обох змінних — помилки
+- **Після:** 0
+- **Перевірка:** `run-tests unit --filter <файл>`
+
+### Задача 2. Стек за індексом: compose і скрипт
+
+- **Файли:** `docker/postgres-stack/compose.yaml`, видалення `garage.toml`, `scripts/db-stack.mjs`, `db-stack.d.mts`, `stack-files.test.ts`
+- **Done when:** Р-POOL-3, Р-POOL-4, Р-POOL-9 (команди); `stackFilesHash`, `assertSameStack`, Garage-кроки й `stackUrl` — зі стека індексу; тест `garage.toml` переписано на inline config без секретів; `publishedPorts` знає форму з інтерполяцією й тримає лише `127.0.0.1`; рядок `image: simetra-pg/postgres:…` той самий (його читають CI й `imageTagVersion`)
+- **Після:** 1
+- **Перевірка:** `run-tests unit --filter stack-files`
+
+### Задача 3. Адреси прогону з індексу
+
+- **Файли:** `test/db/profile.ts`, `connection.ts`, `s3.ts`, `external.ts`, `sweep.ts`, `signal-stand.ts`, їхні тести, `skip-boundary.test.ts` (регекс імені `TEST_STACKS`); `packages/simetra/scripts/builtin-functions.ts`, `catalog-functions.ts`
+- **Done when:** `TEST_STACKS`-константи немає; Р-POOL-7 (вимкнення пулу), Р-POOL-8; інваріанти 1 (частина адрес), 5
+- **Після:** 1
+- **Перевірка:** `run-tests unit --filter profile`, `--filter external`, `--filter connection`
+
+### Задача 4. Пул у сторожі *(лінза Opus)*
+
+- **Файли:** `stack-guard.ts`, `stack-guard.test.ts`, `sweep.ts` (`assertStack`)
+- **Done when:** Р-POOL-5, Р-POOL-6 (ліміт і текст очікування), Р-POOL-7 (звірка індексу); інваріанти 1–4; тест переривання й прибиральник на сигналі звільняють саме свій замок N
+- **Після:** 3
+- **Перевірка:** `run-tests unit --filter stack-guard`
+
+### Задача 5. Демо й профіль kit
+
+- **Файли:** `create-simetra-app/scripts/lib/demo.mts`, `demo.test.ts`, `.agents/kit.profile.json`
+- **Done when:** Р-POOL-9 (демо), Р-POOL-6 (поля профілю); `kit-setup --check` зелений
+- **Після:** 2, 4
+- **Перевірка:** `run-tests unit --filter demo`; `kit-setup --check`
+
+### Задача 6. Два стеки поруч *(контролерка, не імплементерка)*
+
+- **Файли:** — (лише прогони)
+- **Done when:** `SIMETRA_STACK=2` і `=3 pnpm db:pg:start` з робочого дерева блоку; `docker inspect` Garage стека 2 — без `bind`; два одночасні `SIMETRA_STACK_POOL=2,3 run-tests db --package simetra --filter <файл>` зелені, у стартових рядках сторожа різні індекси; третій такий самий прогін чекає з рядком «busy» і бере стек, що звільнився; один прогін e2e на стеку 2 (`SIMETRA_STACK=2 run-tests e2e --filter <spec>`) зелений; вивід — у тілі PR; потім `SIMETRA_STACK=2/3 pnpm db:pg:stop --volumes`
+- **Після:** 5
+- **Перевірка:** команди з колонки «Done when»
+
+### Задача 7. Текст для `AGENTS.md`
+
+- **Файли:** agents-md-db-pool.md у теці брифів основного checkout (поза git)
+- **Done when:** текст для розділу "Commands and gates": «один стек на профіль на машину» → пул стеків `postgres` за `SIMETRA_STACK`; «стартувати стек з основного checkout» прибрано; чергу тримає сторож
+- **Після:** 6
+- **Перевірка:** —
+
 
 Нотатки виконавиці:
 - Задачі 1–3 і 5 — Sonnet; ревʼю задачі 4 — Opus, решти — Sonnet.
@@ -146,17 +192,22 @@
   з гілки перемітить тег, але контейнери стека 1 тримають свій образ і свою
   мітку; `assertSameStack` звіряє мітки контейнерів, не образу.
 
-## 8. Задачі власника
+## 8. Вікно архітекторки й задачі власника
 
-*Виконуються лише після погодження.*
+**Вікно архітекторки** (не власника; узгоджує з М4 і М5c):
 
-1. **Перебудова стека 1** після злиття блоку: зміна `compose.yaml` міняє хеш
-   файлів стека, тож `pnpm db:pg:start` на старому стеку 1 відмовить
-   (`STACK_DIFFERS`), хоч DB-прогони на ньому й далі йдуть (Р-POOL-5 приймає
-   порожній індекс для N = 1). Вікно погоджує архітекторка з М4 і М5c;
-   команда — `node scripts/db-stack.mjs stop postgres`, потім
-   `pnpm db:pg:start`.
-2. **Правка `AGENTS.md`** за текстом задачі 7 — власник.
+1. **Перебудова стека 1 — одразу після `pr-gate land`, до будь-якого
+   рестарту Garage стека 1.** `land` перемотує основний checkout, і
+   `garage.toml` зникає з диска, поки Garage стека 1 ще тримає bind mount на
+   старий файл: рестарт контейнера до перебудови впаде. Зміна `compose.yaml`
+   міняє хеш файлів стека, тож `pnpm db:pg:start` на старому стеку 1
+   відмовить (`STACK_DIFFERS`), хоч DB-прогони на ньому й далі йдуть
+   (Р-POOL-5 приймає порожній індекс для N = 1). Команда —
+   `node scripts/db-stack.mjs stop postgres`, потім `pnpm db:pg:start`.
+
+**Задачі власника** (*лише після погодження*):
+
+2. **Правка `AGENTS.md`** за текстом задачі 7.
 
 ## 9. Підсумок аудиту
 
