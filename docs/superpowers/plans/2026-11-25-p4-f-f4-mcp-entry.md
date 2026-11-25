@@ -73,15 +73,15 @@ claims агента, подія виклику; стану між запитам
 | Р-F4-1 | Ключі сервера авторизації (cookie, ключ підпису) — зі змінних середовища; при `NODE_ENV=production` без них шаблон не стартує з діагностикою (навіть коли інші змінні — dev-значення); у dev — ефемерні ключі процесу з `console.warn` (після рестарту клієнт перепідключається). Перевірка — у легкому `config.ts` і `startup-plugin`, а не в модулі сервера авторизації. Рішення архітекторки 2026-11-25. | §5.4, рядок F4 §3 — задача 0 |
 | Р-F4-2 | MCP 2026-07-28 плюс stateless-фолбек SDK для ери 2025-11-25 (`createMcpHandler` з `legacy: "stateless"`: без `Mcp-Session-Id`, GET/DELETE — 405); перевірка токена й кожна відмова 401 — на кожному запиті обох ер, тести відмов ганяються на обох. `responseMode: "json"`. Наявність опції — з коду SDK 2.4.0 (`createMcpHandler-*.d.mts`, `legacy?: 'stateless' \| 'reject'`), виконавиця перевіряє її в `index.mjs` піненої версії. Рішення архітекторки 2026-11-25. | §5.4 «Протокол» — задача 0 |
 | Р-F4-3 | Схема `agent_oauth` — платформна, як `better_auth`: T2 додає її до `PROVIDER_ASSUMED_SCHEMAS.postgres` (`schema/apply/provider-trigger-boundary.ts`), кластер (`postgres-cluster.ts`) створює її з власником `simetra_auth`, політика рушія designer виключає її (без цього план рушія бачив би схему як дрейф), pgTAP базового стану `postgres` знає її. Профіль `supabase` не змінюється (заморожено, ADR-0117; вхід агентів там відмовляє). Таблиці (`models`, `agent_grants`) створює крок db-setup шаблону від `simetra_auth`. Нової ролі платформи немає. `agent_grants.user_id` — FK на `better_auth."user"` `ON DELETE CASCADE`. Рішення архітекторки 2026-11-25. | §5.4 (хто створює схему); спека профілю `postgres` (таблиця ролей: `simetra_auth` — власник схем `better_auth` і `agent_oauth`) — задача 0 |
-| Р-F4-4 | «Застосунок має види скоупу» — `catalog.objects.some(o => o.root !== undefined)` над каталогом рантайму; зміни `model/runtime/catalog.ts` немає. Адаптер вимагає `pin` за цим правилом; сервер авторизації бере той самий прапорець від шаблону (`requiresTenant`), тож тести шаблону з тенантами задають його явно — шаблон видів скоупу не має. Членство в тенанті F4 не перевіряє: закріплення поза скоупами користувача дає порожньо (F1, §5.1), список тенантів — F5. | none |
-| Р-F4-5 | Маршрути `/mcp` і PRM (`/.well-known/oauth-protected-resource/mcp`) монтуються у Fetch-entry поряд із сервером авторизації (обидва всередині `createEntryFetch`: межа тіла, адреса клієнта, заголовки), а не маршрутом Start: даних по HTTP шаблон не має (Server Function `dataFn`), а entry не тягне Start на шлях агента. Модулі адаптера й сервера авторизації імпортуються через `await import()` на першому запиті свого шляху. | §5.4 «Маршрут MCP — поряд із наявним маршрутом даних» — уточнення, задача 0 |
-| Р-F4-6 | Нормалізація CIMD — як у F0 і `munin-mcp`: метод `none` і видалення `jwks_uri`/`jwks`/`token_endpoint_auth_signing_alg` для кожного прийнятого документа; `application_type: "native"` — лише документу без `application_type`, усі `redirect_uri` якого loopback. Вебклієнт (claude.ai, ChatGPT) native не стає: інакше бібліотека послаблює перевірку `redirect_uri` для https. Документ, що не оголошує `none` і не має його в `token_endpoint_auth_methods_supported`, відхиляється. | §5.4 (рядок про `application_type`) — задача 0 |
-| Р-F4-7 | Перевірки `/token` до вживання токена оновлення — у шарі монтування над клоном тіла (після межі тіла entry): `grant_type=refresh_token` без `resource`, з кількома `resource` чи з `resource`, відмінним від канонічної адреси MCP, — `invalid_target` без виклику бібліотеки (клієнти MCP завжди шлють `resource`). Приватних внутрішностей бібліотеки (`grantTypeHandlers`, як `tokenGate` у `munin-mcp`) не вживати. | none |
+| Р-F4-4 | «Застосунок має види скоупу» — будь-який об'єкт каталогу рантайму має `scopeKindId` (скоуплений об'єкт) або `rights.root` (корінь виду скоупу); правило закрите: будь-яка з ознак — `pin` обов'язковий. Зміни `model/runtime/catalog.ts` немає. Тест — на каталозі з `buildRuntimeCatalog` (`compiler/runtime-catalog.ts`) над скоупленою фікстурою компілятора, а не на рукописному об'єкті. Адаптер вимагає `pin` за цим правилом; сервер авторизації бере той самий прапорець від шаблону (`requiresTenant`), тож тести шаблону з тенантами задають його явно — шаблон видів скоупу не має. Членство в тенанті F4 не перевіряє: закріплення поза скоупами користувача дає порожньо (F1, §5.1), список тенантів — F5. Для приймання архітекторкою. | none |
+| Р-F4-5 | Маршрути `/mcp` і PRM (`/.well-known/oauth-protected-resource/mcp`) монтуються у Fetch-entry поряд із сервером авторизації (обидва всередині `createEntryFetch`: межа тіла, адреса клієнта, заголовки), а не маршрутом Start: даних по HTTP шаблон не має (Server Function `dataFn`), а entry не тягне Start на шлях агента. Модулі адаптера й сервера авторизації імпортуються через `await import()` на першому запиті свого шляху. Для приймання архітекторкою. | §5.4 «Маршрут MCP — поряд із наявним маршрутом даних» — уточнення, задача 0 |
+| Р-F4-6 | Нормалізація CIMD — як у F0 і `munin-mcp`: метод `none` і видалення `jwks_uri`/`jwks`/`token_endpoint_auth_signing_alg` для кожного прийнятого документа; `application_type: "native"` — лише документу без `application_type`, усі `redirect_uri` якого loopback. Вебклієнт (claude.ai, ChatGPT) лишається `web`, як у заміряних F0 і `munin-mcp`: порт `redirect_uri` бібліотека ігнорує лише для `native` (`#redirectAllowed`, `lib/models/client.js`), а вебклієнтам змінний порт не потрібен. Документ, що не оголошує `none` і не має його в `token_endpoint_auth_methods_supported`, відхиляється. Для приймання архітекторкою. | §5.4 (рядок про `application_type`) — задача 0 |
+| Р-F4-7 | Перевірки `/token` до вживання токена оновлення — у шарі монтування над клоном тіла (після межі тіла entry): `grant_type=refresh_token` з кількома `resource` чи з `resource`, відмінним від канонічної адреси MCP, — `invalid_target` без виклику бібліотеки: `resolveResource` (`lib/helpers/resolve_resource.js`) іде після `refreshToken.consume()` (`lib/actions/grants/refresh_token.js`), тож його відмова спалила б токен. Оновлення без `resource` бібліотека розв'язує в наданий ресурс (`useGrantedResource`) — воно проходить. Приватних внутрішностей бібліотеки (`grantTypeHandlers`, як `tokenGate` у `munin-mcp`) не вживати. Для приймання архітекторкою. | none |
 | Р-F4-8 | Peer `@modelcontextprotocol/server` — точна версія `2.4.0`, як у шаблоні: адаптер покладається на опції `createMcpHandler` і ери протоколу конкретної версії; оновлення — разом із тестами адаптера. Для приймання архітекторкою. | none |
 | Р-F4-9 | Подія виклику — одна на кожен `tools/call`, що пройшов перевірку токена (успіх, помилка каталогу, виняток → `catalog`-помилка `internal`). Запити з 401 і службові методи (`tools/list`, `initialize`, `server/discover`) події не дають: без особи немає `sub`, а відмови видно в журналі HTTP. Хеш входу — HMAC-SHA-256 hex канонічного JSON входу ключем, який host передає адаптеру (Web Crypto, без Node API в T6); шаблон бере підключ, виведений із ключів сервера авторизації з окремою міткою (Р-F4-1), не сам ключ cookie. Простий SHA-256 не годиться: вхід із малою множиною значень (id, email у фільтрі) відновлюється перебором із журналу. Шаблон без налаштувань пише подію JSON-рядком у stdout за моделлю даних логів OpenTelemetry; зі змінною `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` (або `OTEL_EXPORTER_OTLP_ENDPOINT` + `/v1/logs`) шле OTLP/HTTP JSON через `fetch` без SDK OpenTelemetry; збій експорту не ламає виклику. Для приймання архітекторкою. | §5.4 «Подія виклику агента» — «ключований хеш входу», задача 0 |
-| Р-F4-10 | Захист від DNS rebinding (транспорт MCP): запит на `/mcp` із заголовком `Origin`, що не дорівнює origin застосунку, — 403 до перевірки токена. Запит без `Origin` (серверні клієнти) проходить. | none |
-| Р-F4-11 | Порт шаблону на кожен запит: `AccessToken.find`, відмова токену з `jkt`/`cnf` (DPoP) і простроченому за тим самим годинником, `Grant.find` з тим самим `clientId` і `accountId` і не простроченим `exp`, рядок `agent_grants` гранту не відкликаний і не прострочений, `tenant` рядка дорівнює закріпленню токена, користувач Better Auth є; потім `last_used_at`. Усі строки — один годинник JS (`Date.now()`), тож керований годинник тестів діє на бібліотеку, адаптер сховища й `agent_grants.expires_at` однаково. | none |
-| Р-F4-12 | API взаємодії — функції сервера шаблону над `Request` (не екрани): `interactionDetails` (клієнт, хост `client_id`, хост `redirect_uri`, ім'я клієнта з позначкою «вказано клієнтом», `requiresTenant`, токен CSRF), `submitConsent` (тенант, CSRF), `abortInteraction`, `listAgentGrants`, `revokeAgentGrant(grantId)`; користувача дві останні беруть із сесії Better Auth запиту, а не з параметра, і бачать та відкликають лише свої гранти. Функції взаємодії знаходять її лише через `interactionDetails(req, res)` (cookie браузера). Кожен результат згоди несе `login.accountId` користувача поточної сесії Better Auth запиту, а не попередньої особи взаємодії. Cookie `_interaction` бібліотека ставить зі шляхом сторінки взаємодії, тож `interactionDetails`, `submitConsent` і `abortInteraction` обслуговуються лише під `/agent/connect/<uid>` (не Server Function `/_serverFn/…`), а шлях cookie не розширюється. `listAgentGrants` показує лише рядки, `Grant` яких ще є в сховищі. `findAccount` шукає користувача Better Auth: оновлення токена видаленого користувача — `invalid_grant`. Токен CSRF — HMAC ключем cookie від `uid` і `jti` взаємодії. URL сторінки взаємодії — `/agent/connect/$uid`; маршрут сторінки й екрани — F5; F4 має лише функції й тестовий помічник `connectAgent`. | none |
+| Р-F4-10 | Захист від DNS rebinding (транспорт MCP): запит на `/mcp` із заголовком `Origin`, що не дорівнює origin застосунку, — 403 до перевірки токена. Запит без `Origin` (серверні клієнти) проходить. Для приймання архітекторкою. | none |
+| Р-F4-11 | Порт шаблону на кожен запит: `AccessToken.find`, відмова токену з `jkt`/`cnf` (DPoP) і простроченому за тим самим годинником, `Grant.find` з тим самим `clientId` і `accountId` і не простроченим `exp`, рядок `agent_grants` гранту не відкликаний і не прострочений, `tenant` рядка дорівнює закріпленню токена, користувач Better Auth є; потім `last_used_at`. Усі строки — один годинник JS (`Date.now()`), тож керований годинник тестів діє на бібліотеку, адаптер сховища й `agent_grants.expires_at` однаково. Для приймання архітекторкою. | none |
+| Р-F4-12 | API взаємодії — функції сервера шаблону над `Request` (не екрани): `interactionDetails` (клієнт, хост `client_id`, хост `redirect_uri`, ім'я клієнта з позначкою «вказано клієнтом», `requiresTenant`, токен CSRF), `submitConsent` (тенант, CSRF), `abortInteraction`, `listAgentGrants`, `revokeAgentGrant(grantId)`; користувача дві останні беруть із сесії Better Auth запиту, а не з параметра, і бачать та відкликають лише свої гранти. Функції взаємодії знаходять її лише через `interactionDetails(req, res)` (cookie браузера). Кожен результат згоди несе `login.accountId` користувача поточної сесії Better Auth запиту, а не попередньої особи взаємодії. Cookie `_interaction` бібліотека ставить зі шляхом сторінки взаємодії, тож `interactionDetails`, `submitConsent` і `abortInteraction` обслуговуються лише під `/agent/connect/<uid>` (не Server Function `/_serverFn/…`), а шлях cookie не розширюється. `listAgentGrants` показує лише рядки, `Grant` яких ще є в сховищі. `findAccount` шукає користувача Better Auth: оновлення токена видаленого користувача — `invalid_grant`. Токен CSRF — HMAC ключем cookie від `uid` і `jti` взаємодії. URL сторінки взаємодії — `/agent/connect/$uid`; маршрут сторінки й екрани — F5; F4 має лише функції й тестовий помічник `connectAgent`. Для приймання архітекторкою. | none |
 
 ## 5. Інтерфейси
 
@@ -89,7 +89,7 @@ claims агента, подія виклику; стану між запитам
 | --- | --- | --- |
 | дає (T0, `simetra/model`) | `VerifyAgentToken` | `(token: string, resource: string) => Promise<AgentTokenInfo \| null>`; `AgentTokenInfo` — zod-схема `{ sub, isAnonymous, clientId, aud: string[], pin?: guid }`; адаптер розбирає вихід порту схемою, хибна форма — 401 |
 | дає (T0) | `OnAgentCall`, `AgentCallEvent` | `{ time, durationMs, tool, inputHash, status: "ok" \| "error", errorCode?, rows?, sub, actor, pin? }`; значень даних, тексту входу й токенів немає |
-| дає (T6, `simetra/shell/mcp`) | `createMcpEntry(options)` | вхід: `catalog: AgentToolCatalog`, `runtimeCatalog`, `resource` (канонічна адреса MCP), `authorizationServer`, `verifyAgentToken`, `onAgentCall`, `appOrigin`; вихід: `{ fetch(request): Promise<Response>, paths }`; профіль `supabase` — виняток на створенні з назвою профілю |
+| дає (T6, `simetra/shell/mcp`) | `createMcpEntry(options)` | вхід: `catalog: AgentToolCatalog`, `runtimeCatalog`, `resource` (канонічна адреса MCP), `authorizationServer`, `verifyAgentToken`, `onAgentCall`, `appOrigin`, `inputHashKey` (ключ HMAC хешу входу); вихід: `{ fetch(request): Promise<Response>, paths }`; профіль `supabase` — виняток на створенні з назвою профілю |
 | дає (шаблон) | маршрути сервера авторизації | `/authorize`, `/token`, `/revoke`, `/jwks`, `/.well-known/oauth-authorization-server` (issuer — origin застосунку) |
 | дає (шаблон, для F5) | API взаємодії, `agent_grants`, відкликання гранту | Р-F4-12; одна функція відкликання гранту (§5.4) |
 | бере (F3) | `AgentToolCatalog` | `tools`, `call(session, name, input)`; `agentResultToMcp`; виняток `call` адаптер ловить сам |
@@ -178,17 +178,27 @@ claims агента, подія виклику; стану між запитам
 назвою профілю; PRM з адресою сервера авторизації; `tools/list` дає
 інструменти каталогу з позначками без змін; успіх і помилка — через
 `agentResultToMcp`, виняток `call` — помилка з кодом, не 500; одна подія на
-`tools/call` з полями §5.4 і без сторожа входу; чужий `Origin` — 403 без виклику порту;
+`tools/call` з полями §5.4 і без сторожа входу; хеш події для відомого
+малого входу ≠ його простий SHA-256 (інваріант 16); чужий `Origin` — 403 без виклику порту;
 лінт-зона: імпорт SDK поза `src/shell/mcp` червоний, усередині — чистий;
 `outputSchema` не оголошується, якщо SDK тоді вимагає `structuredContent` і в
 `isError` (виконавиця перевіряє в коді 2.4.0, `mcp-*.mjs`).
 **Команда:** `run-tests unit --changed`.
+Нотатка виконавиці: SDK має власну залежність `zod` — перевірити, що
+zod-схеми входу каталогу F3 приймає `registerTool` 2.4.0.
 
 ### Задача 3. Схема `agent_oauth` у платформі (Р-F4-3)
 `packages/simetra/src/schema/apply/provider-trigger-boundary.ts`
-(`PROVIDER_ASSUMED_SCHEMAS`), `packages/simetra/src/schema/apply/postgres-cluster.ts`,
+(`PROVIDER_ASSUMED_SCHEMAS`), `packages/simetra/src/model/schemas/project.ts`
+(зарезервовані схеми профілю `postgres` — застосунок не оголосить
+`agent_oauth`), `packages/simetra/src/schema/apply/postgres-cluster.ts`
+(створення схеми, факти знімка цілі й відмова «відношення ролі `auth` поза
+`better_auth`» — тепер поза обома схемами),
 `packages/simetra/test/db/pgtap/postgres/stack-base-state.pgtap.sql`,
-`packages/designer/src/schema-engine/pg-delta/policy.ts`, їхні тести.
+`packages/designer/src/schema-engine/pg-delta/policy.ts` (кожен фільтр зі
+схемою `better_auth`), `packages/simetra/test/db/pgtap/postgres/roles.pgtap.sql`,
+їхні тести. Обсяг перевіряє виконавиця:
+`grep -rn "better_auth\|AUTH_SCHEMA" packages/simetra/src packages/designer/src`.
 Шлях перевірки: схема з'являється на тегованих базах DB-тестів під час
 їхнього прогону; нових ролей немає. Базова база спільного локального стека
 отримує схему лише з наступним налаштуванням стека, тож base-state pgTAP
@@ -196,6 +206,8 @@ claims агента, подія виклику; стану між запитам
 архітекторці сказати, що локальний стек після мерджу потребує повторного
 налаштування.
 **Готово:** DB-тест кластера: схема створена з власником `simetra_auth`,
+таблиця `simetra_auth` в `agent_oauth` не дає відмови «поза схемою», а поза
+обома схемами — дає;
 повторний прогін ідемпотентний; DB-тест плану рушія: таблиця в
 `agent_oauth` не дає дрейфу й `DROP`; base-state pgTAP зелений.
 **Команда:** `run-tests db --filter <файл тесту кластера>`, `run-tests db
@@ -222,7 +234,7 @@ claims агента, подія виклику; стану між запитам
 повторне вживання відкликає лише свій грант; після `/revoke` токена доступу
 оновлення — `invalid_grant`, рядок відкликано; оновлення на 29-й день
 простою працює, на 31-й — `invalid_grant` (керований годинник); оновлення з
-чужим, відсутнім чи подвійним `resource` не спалює токена; production без ключів не стартує;
+чужим чи подвійним `resource` не спалює токена, а без `resource` — працює; production без ключів не стартує;
 `server-startup.test.ts` зелений без зміни межі.
 **Команда:** `run-tests db --filter template/test/agent-oauth-*.db.test.ts`
 (після «ok» архітекторки), `run-tests unit --changed`.
@@ -253,8 +265,7 @@ FROM`); користувач B через `listAgentGrants`/`revokeAgentGrant` �
 наступному виклику, `Grant` знищено, рядок `agent_grants` відкликано, у
 `listAgentGrants` його немає; `tenant` рядка ≠ `pin` токена, рядок `agent_grants`
 прострочений, `Grant` з іншим `clientId` чи `accountId` або прострочений, видалений
-користувач Better Auth, користувач, якого після гранту позначено анонімним, — 401 (інваріанти 17, 18); хеш події ≠ простий
-SHA-256 входу; виклик MCP оновлює `last_used_at`; виклик
+користувач Better Auth, користувач, якого після гранту позначено анонімним, — 401 (інваріанти 17, 18); виклик MCP оновлює `last_used_at`; виклик
 `describe` клієнтом MCP SDK (`StreamableHTTPClientTransport` з `fetch` на
 entry в процесі) з грантом від `connectAgent`; кожен виклик дає одну подію
 §5.4 без значень даних і тексту входу (stdout JSON; OTLP — unit над
