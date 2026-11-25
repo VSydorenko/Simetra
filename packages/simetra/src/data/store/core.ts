@@ -2510,6 +2510,11 @@ export function createCore(options: {
       )
     }
 
+    const waitingKeys = new Set(
+      (receiver?.waitingKeys() ?? []).map(
+        (w) => `${w.object}\u0000${w.key.toLowerCase()}`
+      )
+    )
     const retries = new Map(
       (receiver?.minVersionRetries() ?? []).map((r) => [
         `${r.object}\u0000${r.key.toLowerCase()}`,
@@ -2550,6 +2555,8 @@ export function createCore(options: {
           r.kind === "version-epoch-switched" ||
           (r.kind === "min-version" && retry !== undefined)
         const flights: SyncFlight[] = flying.has(key) ? [{ kind: "keys" }] : []
+        // Одне джерело черги ключа: хвіст writer і партії приймача, що чекають
+        // польоту (single-flight), — разом, одним записом.
         const queued: SyncQueued[] =
           tail?.pending.has(key) === true
             ? [
@@ -2561,7 +2568,9 @@ export function createCore(options: {
                   },
                 },
               ]
-            : []
+            : waitingKeys.has(`${o.name}\u0000${key.toLowerCase()}`)
+              ? [{ kind: "keys", cause: { reason: "signal" } }]
+              : []
         record(
           withOptional(
             {

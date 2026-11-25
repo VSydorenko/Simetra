@@ -474,6 +474,47 @@ describe("sync(): every due it shows is read by then", () => {
     await expectReadByDue(h, rowTarget(1))
   })
 
+  it("the key of the receiver that waits behind the read in flight is queued in sync()", async () => {
+    const h = await withSignals(keysView(1, 2))
+    const served = h.fake.edit(TASK, key(1), { title: "v" })
+    h.transport.emit(channel, {
+      id: "1",
+      object: task.id,
+      op: "update",
+      keys: { id: key(1) },
+      row_ver: served + 1,
+    })
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    expect(stateOf(h, rowTarget(1))!.due).toBe(Date.now() + 500)
+    // Читання іншого ключа лишається в польоті: приймач single-flight.
+    h.fake.hold = () => true
+    h.transport.emit(channel, {
+      id: "2",
+      object: task.id,
+      op: "update",
+      keys: { id: key(2) },
+      row_ver: h.fake.edit(TASK, key(2), { title: "w" }),
+    })
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    expect(h.fake.pending.length).toBeGreaterThan(0)
+    // Пауза повтору минула: ключ чекає польоту в черзі партій.
+    await vi.advanceTimersByTimeAsync(500)
+    await settle()
+    expect(stateOf(h, rowTarget(1))).toMatchObject({
+      queued: [{ kind: "keys", cause: { reason: "signal" } }],
+    })
+    // Політ осів — ключ іде читанням, черги в рядка більше нема.
+    h.fake.hold = undefined
+    h.fake.deliverAll()
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    h.fake.deliverAll()
+    await settle()
+    expect(stateOf(h, rowTarget(1))?.queued ?? []).toEqual([])
+  })
+
   it("the min-version of an own write: the interval of its holder view", async () => {
     const h = await loaded()
     write(h, (w) => w.markStale(TASK, [key(1)], 99))
