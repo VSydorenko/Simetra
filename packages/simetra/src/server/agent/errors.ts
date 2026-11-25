@@ -114,6 +114,7 @@ export interface AgentToolError {
   error?: CommandError
 }
 
+/** An error result with the `hint` and `outcome` of its code. */
 export function agentError(
   code: AgentErrorCode,
   message: string,

@@ -13,6 +13,7 @@ export {
 export {
   AGENT_ERROR_CODES,
   AGENT_OUTCOMES,
+  agentError,
   type AgentErrorCode,
   type AgentOutcome,
   type AgentToolError,

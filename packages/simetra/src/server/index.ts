@@ -56,6 +56,7 @@ export {
   type AgentObjectSummary,
   AGENT_ERROR_CODES,
   AGENT_OUTCOMES,
+  agentError,
   agentResultToMcp,
   type AgentErrorCode,
   type AgentMcpResult,
