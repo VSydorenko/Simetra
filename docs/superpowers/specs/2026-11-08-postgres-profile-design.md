@@ -67,7 +67,7 @@
 | `simetra_signal_consumer` | `NOLOGIN NOINHERIT` | — | `roles` |
 | `simetra_files` | `NOLOGIN NOINHERIT` | — | `roles`; блок ПГ-5 |
 | `simetra_signals` | `LOGIN NOINHERIT`; `ALTER ROLE simetra_signals SET role = 'simetra_signal_consumer'` | `simetra_signal_consumer` `WITH INHERIT FALSE, SET TRUE` | `roles`, в обох профілях; роль і `simetra_signal_consumer` приносить блок ПГ-4 (до нього `roles` їх не створює) |
-| `simetra_auth` | `LOGIN NOINHERIT` | — | `roles`; власник схеми `better_auth` |
+| `simetra_auth` | `LOGIN NOINHERIT` | — | `roles`; власник схем `better_auth` і `agent_oauth` (сервер авторизації агентів, П4-F §5.4) |
 
 Правила:
 
