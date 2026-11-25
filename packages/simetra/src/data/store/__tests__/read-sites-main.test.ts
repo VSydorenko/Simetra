@@ -879,9 +879,13 @@ async function run(
  * Кожну пару запущено. `unreached` — клітинка, де `request: false` не є
  * рішенням шляху чи шлюзу щодо умови: шлях до рішення не дійшов. Причину
  * названо й перевірено мутацією на копії (її вимкнення дає запит); решта
- * `request: false` — наслідок перевірки умови самим шляхом. Для `closed` це
- * не так у R1–R4, R8, R9, K1, K2: `close()` знімає таймери й приймач, тож шлях
- * не досягнуто (`unreached`; це читання коду, а не мутація).
+ * `request: false` — наслідок перевірки умови самим шляхом. У колонці `closed`
+ * `request: false` тримається й без перевірки шляху (після `close()` збирач
+ * відмовляє кожне читання), тож її міряє `attempted`; де він лишається false і
+ * без усіх перевірок закриття — `unreached`. Червоніє `attempted` лише в M1, M2,
+ * M6, M8, R11, R15, S1, S2 (S2 — на одній перевірці `requestRights`; решта — на
+ * сукупній мутації); P1 на власній перевірці `loadMore` не червоніє: `close()`
+ * вже обнулив `window` і `subsets`.
  * `closing` у M1, M2, M3 і S3 вимірює закриту перевірку `core.view`
  * (`closedHandle`), а не рішення самого шляху; `attempted` для S3 не
  * вимірюється: S3 — частина, яку ядро додає всередині `dispatch`, а не політ
@@ -890,7 +894,7 @@ async function run(
  */
 const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
   M1: {
-    closed: { request: false, then: "purged" },
+    closed: { request: false, then: "purged", attempted: false },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -900,7 +904,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     closing: { request: false, then: "purged", attempted: false },
   },
   M2: {
-    closed: { request: false, then: "purged" },
+    closed: { request: false, then: "purged", attempted: false },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -910,14 +914,24 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     closing: { request: false, then: "purged", attempted: false },
   },
   M3: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
     closing: { request: false, then: "purged", attempted: false },
   },
   M4: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -930,14 +944,19 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   M5: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
     closing: { request: false, then: "purged", attempted: false },
   },
   M6: {
-    closed: { request: false, then: "purged" },
+    closed: { request: false, then: "purged", attempted: false },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -950,7 +969,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   M7: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -963,7 +987,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   M8: {
-    closed: { request: false, then: "purged" },
+    closed: { request: false, then: "purged", attempted: false },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -976,14 +1000,24 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   P1: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
     closing: { request: false, then: "purged", attempted: false },
   },
   P2: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -996,7 +1030,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   P3: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -1018,7 +1057,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       request: false,
       then: "purged",
       unreached:
-        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+        "core onClose clears scheduled/wave and calls scheduler.stop() and receiver.stop(), so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
     },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
@@ -1043,7 +1082,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       request: false,
       then: "purged",
       unreached:
-        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+        "core onClose clears scheduled/wave and calls scheduler.stop() and receiver.stop(), so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
     },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
@@ -1068,7 +1107,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       request: false,
       then: "purged",
       unreached:
-        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+        "core onClose clears scheduled/wave and calls scheduler.stop() and receiver.stop(), so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
     },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
@@ -1093,7 +1132,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       request: false,
       then: "purged",
       unreached:
-        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+        "core onClose clears scheduled/wave and calls scheduler.stop() and receiver.stop(), so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
     },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
@@ -1114,21 +1153,36 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   R5: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
     closing: { request: false, then: "purged", attempted: false },
   },
   R6: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
     closing: { request: false, then: "purged", attempted: false },
   },
   R7: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -1142,7 +1196,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       request: false,
       then: "purged",
       unreached:
-        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+        "core onClose clears scheduled/wave and calls scheduler.stop() and receiver.stop(), so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
     },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
@@ -1162,7 +1216,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       request: false,
       then: "purged",
       unreached:
-        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+        "core onClose clears scheduled/wave and calls scheduler.stop() and receiver.stop(), so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
     },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
@@ -1178,7 +1232,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   R10: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
@@ -1188,7 +1247,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   R11: {
-    closed: { request: false, then: "purged" },
+    closed: { request: false, then: "purged", attempted: false },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -1201,7 +1260,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   R12: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -1219,21 +1283,31 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   R13: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: false, then: "ready" },
     "tab-hidden": { request: false, then: "ready" },
     closing: { request: false, then: "purged", attempted: false },
   },
   R14: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
     closing: { request: false, then: "purged", attempted: false },
   },
   R15: {
-    closed: { request: false, then: "purged" },
+    closed: { request: false, then: "purged", attempted: false },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -1246,7 +1320,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   R16: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -1259,7 +1338,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   R17: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -1277,7 +1361,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   R18: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": {
       request: false,
       then: "error:command.stale-client+stale",
@@ -1294,7 +1383,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       request: false,
       then: "purged",
       unreached:
-        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+        "core onClose clears scheduled/wave and calls scheduler.stop() and receiver.stop(), so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
     },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
@@ -1314,7 +1403,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       request: false,
       then: "purged",
       unreached:
-        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+        "core onClose clears scheduled/wave and calls scheduler.stop() and receiver.stop(), so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
     },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
@@ -1330,7 +1419,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   K3: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "ready" },
     "tab-hidden": { request: true, then: "ready" },
@@ -1340,7 +1434,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   K4: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "ready" },
     "tab-hidden": { request: true, then: "ready" },
@@ -1350,21 +1449,26 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   S1: {
-    closed: { request: false, then: "purged" },
+    closed: { request: false, then: "purged", attempted: false },
     "stale-object": { request: true, then: "ready+stale" },
     "discard-bound": { request: true, then: "ready" },
     "tab-hidden": { request: true, then: "ready" },
     closing: { request: false, then: "purged", attempted: false },
   },
   S2: {
-    closed: { request: false, then: "purged" },
+    closed: { request: false, then: "purged", attempted: false },
     "stale-object": { request: true, then: "ready+stale" },
     "discard-bound": { request: true, then: "ready" },
     "tab-hidden": { request: true, then: "ready" },
     closing: { request: false, then: "purged", attempted: false },
   },
   S3: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "the path does not call read of the core even with every closed check removed (token validity, isClosed, alive): close() clears subsets, windows and handles, closes the batcher and drops the held answer; verified by that combined mutation, the masking layer is not named per path",
+    },
     "stale-object": { request: true, then: "error:command.stale-client+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
