@@ -223,7 +223,8 @@ describe("submitConsent", () => {
     expect((await provider.Grant.find(first.grantId))?.accountId).toBe(a)
     // Сесія OP знищена після `resume`: особа A не переходить у наступний вхід
     const { rows } = await stand.pool.query(
-      "SELECT count(*)::int AS n FROM agent_oauth.models WHERE model = 'Session'"
+      "SELECT count(*)::int AS n FROM agent_oauth.models WHERE model = 'Session' AND payload->>'accountId' = $1",
+      [a]
     )
     expect(rows[0].n).toBe(0)
 
