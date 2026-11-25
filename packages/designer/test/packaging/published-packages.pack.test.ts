@@ -108,6 +108,7 @@ describe("simetra", () => {
       "./server",
       "./server/signals",
       "./shell",
+      "./shell/mcp",
       "./ui",
     ])
     expect(manifest.private).toBeUndefined()
@@ -135,6 +136,8 @@ describe("simetra", () => {
       "dist/ui/index.d.ts",
       "dist/shell/index.js",
       "dist/shell/index.d.ts",
+      "dist/shell/mcp/index.js",
+      "dist/shell/mcp/index.d.ts",
       "schemas/catalogs.schema.json",
       "LICENSE",
       "README.md",
@@ -563,10 +566,29 @@ describe("simetra/data", () => {
       "simetra/model",
       "simetra/ui",
     ])
+    // `dist/shell/mcp` — окремий вхід `simetra/shell/mcp` зі своєю перевіркою нижче.
     const specifiers = [
-      ...(await packedSources(tarballs.simetra, "dist/shell/", ".js")).values(),
-    ].flatMap(bareSpecifiers)
+      ...(await packedSources(tarballs.simetra, "dist/shell/", ".js")),
+    ]
+      .filter(([f]) => !f.startsWith("dist/shell/mcp/"))
+      .flatMap(([, source]) => bareSpecifiers(source))
     expect(specifiers).toContain("@tanstack/react-router")
+    expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
+  })
+
+  // SDK MCP — необов'язковий peer лише входу `simetra/shell/mcp` (спека П4-F §5.4).
+  it("the shell/mcp entry imports only the MCP SDK and the lower tiers", async () => {
+    const allowed = new Set([
+      "@modelcontextprotocol/server",
+      "simetra/model",
+      "simetra/server",
+    ])
+    const specifiers = [
+      ...(
+        await packedSources(tarballs.simetra, "dist/shell/mcp/", ".js")
+      ).values(),
+    ].flatMap(bareSpecifiers)
+    expect(specifiers).toContain("@modelcontextprotocol/server")
     expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
   })
 })
