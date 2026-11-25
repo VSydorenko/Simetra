@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Ручний запуск — для замороженого профілю supabase (job db-supabase), ADR-0117
+  workflow_dispatch:
 
 # Лише читання: CI нічого не публікує і не пише в репозиторій
 permissions:
@@ -61,7 +63,8 @@ jobs:
     name: Checks
     needs: changes
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Модельні тести T4 мають бюджети 300/600 с, крок Test іде 15–18 хв: межа із запасом
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Версію pnpm бере з поля packageManager у package.json
@@ -175,11 +178,11 @@ jobs:
         run: ${{ matrix.run }}
 
   # Тести, що вимагають стека Supabase (проєкт db-supabase), і набір базового
-  # стану провайдера. Шарди — з тієї самої причини, що в db: один рядок
-  # перевищив би timeout-minutes
+  # стану провайдера. Профіль supabase заморожено (ADR-0117): job іде лише
+  # ручним запуском, не на PR і не на push у main. Шарди — з тієї самої
+  # причини, що в db: один рядок перевищив би timeout-minutes
   db-supabase:
-    needs: changes
-    if: needs.changes.outputs.code != 'false' # agent-kit: docs-only
+    if: github.event_name == 'workflow_dispatch'
     name: Database Supabase (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 30

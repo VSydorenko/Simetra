@@ -587,6 +587,10 @@ describe("sync(): the pause before the retry of a discarded load", () => {
     expect(objectDue).toBeLessThan(Date.now() + pause)
     expect(state.due).toBe(Date.now() + pause)
     expect(state.dueCause).toBe("retry")
+    // Рядок, який тримає цей вигляд, дістає той самий строк: таймери об'єкта
+    // вигляд у польоті не читають.
+    write(h, (w) => w.markStale(TASK, [key(1)], 99))
+    expect(stateOf(h, rowTarget(1))!.due).toBe(state.due)
     const due = state.due!
     // Повтор стартує не пізніше кінця паузи.
     events.length = 0

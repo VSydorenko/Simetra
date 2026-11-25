@@ -2582,9 +2582,11 @@ export function createCore(options: {
             {
               due: earliest(
                 timersRead(o.name) ? retry?.at : undefined,
+                // Вигляд-тримач у паузі повтору читає кінець паузи, а не таймери
+                // об'єкта (вони читають вигляд у польоті лише хвостом).
                 ...holders
                   .filter((s) => s.owned.has(key))
-                  .map((s) => timerDue(s))
+                  .map((s) => s.retryAt ?? timerDue(s))
               ),
             }
           ),
