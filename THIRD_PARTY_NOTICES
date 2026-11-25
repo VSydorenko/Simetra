@@ -76,6 +76,8 @@ Entries
   Copyright:     Copyright 2026 Volodymyr Sydorenko
   Files:         packages/create-simetra-app/template/src/server/agent-oauth/safe-fetch.ts
                  packages/create-simetra-app/template/src/server/agent-oauth/store.ts
+                 packages/create-simetra-app/template/src/server/agent-oauth/provider.ts
+                 packages/create-simetra-app/template/src/server/agent-oauth/keys.ts
                  packages/create-simetra-app/template/test/fixtures/cimd/chatgpt.json
                  packages/create-simetra-app/template/test/fixtures/cimd/claude-ai.json
                  packages/create-simetra-app/template/test/fixtures/cimd/claude-code.json
@@ -89,7 +91,10 @@ Entries
                  revocation (adapter.ts, revoke.ts): Kysely replaced by pg,
                  tables moved to the agent_oauth schema, grant activity
                  replaced by agent_grants, timestamps from the JS clock,
-                 pairing, script keys and audit removed
+                 pairing, script keys and audit removed; the oidc-provider
+                 configuration and Ed25519 key handling (provider.ts, keys.ts):
+                 tokenGate, DCR, MCP bases and pino removed, keys from the
+                 environment, Better Auth account lookup, tenant pin claim
 
                                    Apache License
                              Version 2.0, January 2004

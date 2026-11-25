@@ -10,6 +10,7 @@ import {
   authSecret,
   signalsConfig,
 } from "./server/config"
+import { withAgentOauth } from "./server/agent-oauth/mount"
 import { BodyTooLarge, bodyExceeded, limitBody } from "./server/body-limit"
 import { serverHash } from "./server/runtime"
 // Server Function потрапляє в маніфест збірки лише через граф модулів. Явний
@@ -139,5 +140,7 @@ export function createEntryFetch<Rest extends unknown[]>(inner: Fetch<Rest>) {
 }
 
 export default createServerEntry({
-  fetch: createEntryFetch(createStartHandler(defaultStreamHandler)),
+  fetch: createEntryFetch(
+    withAgentOauth(createStartHandler(defaultStreamHandler))
+  ),
 })
