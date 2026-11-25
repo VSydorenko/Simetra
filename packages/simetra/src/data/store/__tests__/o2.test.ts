@@ -379,12 +379,95 @@ describe("O2 self-check", () => {
       expect(o2.step(input({ ...visible, now: 2_001 }))).toMatch(/no promise/)
     })
 
-    it("excuses a view that never applied a read, until it does (row 18)", () => {
+    it("excuses a view that never applied a read by its holder, with a bound (row 18)", () => {
       const states = [state(view(9), { requirements: [composition] })]
-      expect(createO2().step(input({ states, attempts: [] }))).toBeUndefined()
+      const never = {
+        states,
+        attempts: [] as AttemptEvent[],
+        revalidateMs: 100,
+      }
+      // Без видимого тримача — названий стан.
       expect(
-        createO2().step(input({ states, attempts: settled(5, 9, "page") }))
+        createO2().step(input({ ...never, holderVisible: () => false }))
+      ).toBeUndefined()
+      // З видимим тримачем — не довше за інтервал плюс паузу збоїв.
+      const o2 = createO2()
+      const seen = { ...never, holderVisible: () => true }
+      expect(o2.step(input({ ...seen, now: 0 }))).toBeUndefined()
+      expect(o2.step(input({ ...seen, now: 200 }))).toBeUndefined()
+      expect(o2.step(input({ ...seen, now: 201 }))).toMatch(/no promise/)
+      // Застосоване читання знімає виняток.
+      expect(
+        createO2().step(
+          input({
+            states,
+            attempts: settled(5, 9, "page"),
+          })
+        )
       ).toMatch(/no promise/)
+    })
+
+    it("excuses a view in the state of the first-load error without a time bound (row 18)", () => {
+      const states = [state(view(9), { requirements: [composition] })]
+      const failedLoad: AttemptEvent[] = [
+        ...settled(5, 9, "load").slice(0, 1),
+        {
+          phase: "settled",
+          attempt: 5,
+          kind: "load",
+          target: { kind: "view", object: OBJECT, id: 9 },
+          outcome: "failed",
+        },
+      ]
+      const base = {
+        states,
+        revalidateMs: 100,
+        holderVisible: () => true,
+      }
+      const o2 = createO2()
+      expect(
+        o2.step(input({ ...base, attempts: failedLoad, now: 0 }))
+      ).toBeUndefined()
+      expect(
+        o2.step(input({ ...base, attempts: failedLoad, now: 10_000 }))
+      ).toBeUndefined()
+      // Не в цьому стані (нове завантаження ще не осіло) — межа діє.
+      const started = failedLoad.concat(settled(6, 9, "load").slice(0, 1))
+      const other = createO2()
+      other.step(input({ ...base, attempts: started, now: 0 }))
+      expect(
+        other.step(input({ ...base, attempts: started, now: 201 }))
+      ).toMatch(/no promise/)
+    })
+
+    describe("a purged view is a named condition; a restored pair owes a read", () => {
+      const states = [state(view(1), { requirements: [composition] })]
+      const bare = [...alive, state(view(1))]
+      const holder = { holderVisible: () => true, revalidateMs: 100 }
+
+      it("needs no promise while purged", () => {
+        expect(
+          createO2().step(input({ states, purgedView: () => true }))
+        ).toBeUndefined()
+        expect(createO2().step(input({ states }))).toMatch(/no promise/)
+      })
+
+      it("must be read after the restore, within the bound", () => {
+        const run = (events: StampedEvent[]) => {
+          const o2 = createO2()
+          o2.step(input({ states, purgedView: () => true }))
+          o2.step(input({ ...holder, states: bare, now: 10 }))
+          return o2.step(input({ ...holder, states: bare, now: 300, events }))
+        }
+        expect(run([])).toMatch(/no read of the target within/)
+        expect(run([read(1, 0)])).toBeUndefined()
+      })
+
+      it("may leave sync() instead", () => {
+        const o2 = createO2()
+        o2.step(input({ states, purgedView: () => true }))
+        expect(o2.step(input({ states: alive, now: 10 }))).toBeUndefined()
+      })
     })
 
     it("excuses target-behind-header by the holder of the target (row 17)", () => {

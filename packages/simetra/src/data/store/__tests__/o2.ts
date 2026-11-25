@@ -48,6 +48,8 @@ export interface O2Input {
   readonly lastJoin?: () => number | undefined
   /** Модель вилучила ключ власника (`purge`): картка чи ТЧ іде разом із ним. */
   readonly ownerPurged?: (object: string, key: string) => boolean
+  /** Вигляд у стані `purged` за публічним знімком моделі: умова «вигляд знищено purge». */
+  readonly purgedView?: (target: SyncTarget) => boolean
   /** Чи тримає ціль будь-яке утримання (підписник чи `preload`): без нього вона йде зі звільненням. */
   readonly targetHeld?: (target: SyncTarget) => boolean
   /** Чи тримає вигляд підписник чи `preload` (видимість не питаємо). */
@@ -59,7 +61,11 @@ export interface O2Input {
 }
 
 /** Вхід кроку з тим, що оракул веде сам: вигляди, що вже застосували читання. */
-export type O2Context = O2Input & { readonly applied: ReadonlySet<number> }
+export type O2Context = O2Input & {
+  readonly applied: ReadonlySet<number>
+  /** Вигляди, чия остання спроба завантаження збоїла: стан помилки першого завантаження. */
+  readonly firstLoadFailed: ReadonlySet<number>
+}
 
 /**
  * Винятки О2: лише «Відомі прогалини `main`» спеки §5.13, кожна названа станом,
@@ -151,7 +157,9 @@ export const O2_EXCEPTIONS: readonly O2Exception[] = [
   },
   // Рядок 18: вигляд, що жодного разу не застосував читання (перше завантаження
   // збоїло чи не закінчилось), планувальник не читає: його читає лише
-  // `refresh()`. Названий стан діє до першого застосованого читання.
+  // `refresh()`. Без видимого тримача на видимій вкладці — названий стан; з
+  // ним перше застосоване читання стартує не пізніше інтервалу плюс паузи
+  // збоїв (межа О3 для видимих виглядів), інакше це дефект `main`.
   {
     rows: [18],
     kinds: [
@@ -159,9 +167,17 @@ export const O2_EXCEPTIONS: readonly O2Exception[] = [
       "channel-rejoin",
       "target-behind-header",
     ],
-    holds: (state, input) =>
-      state.target.kind === "view" &&
-      !input.applied.has((state.target as { id: number }).id),
+    holds: (state, input) => {
+      const target = state.target
+      if (target.kind !== "view" || input.applied.has(target.id)) return false
+      // Стан помилки першого завантаження: меж у часі немає, стан кінчається
+      // першим застосованим читанням чи `refresh()`.
+      if (input.firstLoadFailed.has(target.id)) return true
+      if (input.holderVisible === undefined) return false
+      return input.holderVisible(target) ? "bounded" : true
+    },
+    boundMs: (input) =>
+      input.revalidateMs === undefined ? undefined : 2 * input.revalidateMs,
   },
 ]
 
@@ -476,6 +492,10 @@ export function createO2(): O2 {
   }
 
   const applied = new Set<number>()
+  const firstLoadFailed = new Set<number>()
+  // Знищені `purge` вигляди, що їх О2 бачив: після відновлення пари вигляд
+  // мусить бути прочитаний.
+  const purgedSeen = new Set<string>()
   let attemptsSeen = 0
 
   const step = (raw: O2Input): string | undefined => {
@@ -484,8 +504,13 @@ export function createO2(): O2 {
       const a = raw.attempts[attemptsSeen]!
       if (a.phase === "settled" && a.outcome === "applied")
         applied.add(a.target.id)
+      if (a.kind === "load") {
+        if (a.phase === "settled" && a.outcome === "failed")
+          firstLoadFailed.add(a.target.id)
+        else firstLoadFailed.delete(a.target.id)
+      }
     }
-    const input: O2Context = { ...raw, applied }
+    const input: O2Context = { ...raw, applied, firstLoadFailed }
     const { states, now, events, fake } = input
     const idle = fake.pending.length === 0 && fake.inFlight === 0
     // Політ судить лише спокій: у польоті запит складається з частин, які
@@ -496,6 +521,29 @@ export function createO2(): O2 {
     const byKey = new Map(states.map((s) => [targetKey(s.target), s]))
     const closed =
       states.length === 0 || states.some((s) => s.refusal === "closed")
+
+    // Знищений purge вигляд — названа умова; відновлення пари вимагає читання.
+    for (const key of [...purgedSeen]) {
+      const state = byKey.get(key)
+      if (state === undefined) purgedSeen.delete(key)
+      else if (input.purgedView?.(state.target) !== true) {
+        purgedSeen.delete(key)
+        followUps.set(key, {
+          kind: "read",
+          sinceEvent: events.length,
+          sinceTime: now,
+          holderSince:
+            input.holderVisible?.(state.target) === true ? now : undefined,
+        })
+      }
+    }
+    for (const state of states)
+      if (input.purgedView?.(state.target) === true) {
+        const key = targetKey(state.target)
+        purgedSeen.add(key)
+        obligations.delete(key)
+        followUps.delete(key)
+      }
 
     // Дотримання обіцянок попередніх станів спокою.
     for (const [key, promise] of [...obligations]) {
@@ -592,6 +640,7 @@ export function createO2(): O2 {
       if (state.requirements.length === 0) continue
       evaluated = true
       if (state.refusal !== undefined) continue
+      if (input.purgedView?.(state.target) === true) continue
       if (state.deferral !== undefined && state.deferral !== "promised")
         continue
       const key = targetKey(state.target)
@@ -671,6 +720,9 @@ export function createO2(): O2 {
         }
         // Відмова цілі (`discard-bound`, `stale-object`) — названа умова: ядро
         // нічого не читає, вимоги йому не потрібні.
+        // Знищений purge вигляд не читають, вимоги йому не потрібні.
+        if (state !== undefined && input.purgedView?.(state.target) === true)
+          continue
         // Вийшовши з відмови, ціль мусить бути прочитана.
         if (state?.refusal !== undefined) {
           if (was.target.kind === "view" && !followUps.has(key))

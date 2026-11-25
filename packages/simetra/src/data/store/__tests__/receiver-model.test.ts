@@ -776,6 +776,9 @@ async function runOn(
       releaseDelayMs: DEFAULT_CORE_LIMITS.releaseDelayMs,
       lastJoin: () => joinMark,
       // Тримач — підписка вигляду з кроків моделі, видима на видимій вкладці.
+      purgedView: (target) =>
+        target.kind === "view" &&
+        handles[specs.indexOf(target.spec)]?.getSnapshot().status === "purged",
       holderPresent: (target) =>
         target.kind === "view" &&
         offs[specs.indexOf(target.spec)] !== undefined,
