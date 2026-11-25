@@ -78,8 +78,14 @@ function allows(column: FilterColumn, op: FilterOperator): boolean {
     case "eq":
     case "ne":
     case "in":
-      // Json і масив рівністю не порівнюються; `Raw` пише лише платформа.
-      return !array && column.type !== "Json" && column.type !== "Raw"
+      // Json, RichText і масив рівністю не порівнюються; `Raw` пише лише
+      // платформа.
+      return (
+        !array &&
+        column.type !== "Json" &&
+        column.type !== "RichText" &&
+        column.type !== "Raw"
+      )
     case "lt":
     case "lte":
     case "gt":
@@ -88,6 +94,7 @@ function allows(column: FilterColumn, op: FilterOperator): boolean {
         !array &&
         !pair &&
         column.type !== "Json" &&
+        column.type !== "RichText" &&
         column.type !== "Bytes" &&
         column.type !== "Raw"
       )

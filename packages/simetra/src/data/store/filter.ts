@@ -121,6 +121,7 @@ function kindOf(field: FieldDescriptor): Kind {
     case "Boolean":
       return "boolean"
     case "Json":
+    case "RichText":
     case "Raw":
       return "none"
     default:
@@ -318,12 +319,18 @@ function allows(field: FieldDescriptor, op: FilterOperator): boolean {
     case "eq":
     case "ne":
     case "in":
-      return !array && field.type !== "Json" && field.type !== "Raw"
+      return (
+        !array &&
+        field.type !== "Json" &&
+        field.type !== "RichText" &&
+        field.type !== "Raw"
+      )
     default:
       return (
         !array &&
         !pair &&
         field.type !== "Json" &&
+        field.type !== "RichText" &&
         field.type !== "Bytes" &&
         field.type !== "Raw"
       )
@@ -534,6 +541,7 @@ const sortable = (field: FieldDescriptor) =>
   field.attribute?.array !== true &&
   field.targets === undefined &&
   field.type !== "Json" &&
+  field.type !== "RichText" &&
   field.type !== "Bytes" &&
   field.type !== "Raw"
 

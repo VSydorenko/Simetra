@@ -24,8 +24,8 @@ const invalid = (path: string): { error: CommandError } => ({
 })
 
 /**
- * A logical value as the text of a bound `where` parameter. Json and arrays
- * are not comparable by equality there.
+ * A logical value as the text of a bound `where` parameter. Json, RichText
+ * and arrays are not comparable by equality there.
  */
 export function encodeParam(
   attribute: RuntimeAttribute,
@@ -36,7 +36,11 @@ export function encodeParam(
     // Пара — дві рівності; кожну частину дає `encodePair`.
     throw new Error(`internal: pair ${attribute.name} goes through encodePair`)
   }
-  if (attribute.array === true || attribute.type === "Json") {
+  if (
+    attribute.array === true ||
+    attribute.type === "Json" ||
+    attribute.type === "RichText"
+  ) {
     return invalid(path)
   }
   const encoded = encodeItemValue(attribute, value, path)
