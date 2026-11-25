@@ -4470,7 +4470,7 @@ async function runModelOn(
     const quietNow = fake.pending.length === 0 && fake.inFlight === 0
     // Факт для О2 на нехолостих кроках: ключ рядка стоїть у черзі приймача за
     // польотом, що тримає single-flight (з `sync()`, не вгадується); на мить
-    // кроку, де час переходить строк, О2 бере перший такий запис не раніше строку.
+    // кроку, де час переходить строк, О2 бере запис ПЕРШОГО кроку не раніше строку (порожній запис теж запис).
     if (judge && signals && !quietNow && closed === undefined) {
       const rows = inspect
         .sync()
@@ -4482,7 +4482,8 @@ async function runModelOn(
             ? [`${st.target.object}\u0000${st.target.key}`]
             : []
         )
-      if (rows.length > 0) waitingAt.push({ at: clock, rows })
+      // Порожній запис теж: ключ, поставлений у чергу після строку, не підходить.
+      waitingAt.push({ at: clock, rows })
     }
     const o2Problem =
       !judge || !quietNow

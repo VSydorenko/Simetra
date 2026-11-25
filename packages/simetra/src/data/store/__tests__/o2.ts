@@ -679,22 +679,36 @@ export function createO2(): O2 {
       // «черга» з межею — політ, що тримав чергу. Після його осідання (цей
       // стан спокою) читання ключа мусить стартувати (інакше червоний) або діє
       // умова прихованої вкладки, якщо `suspend` був до осідання.
+      const queuedKey =
+        state.target.kind === "row"
+          ? `${state.target.object}\u0000${state.target.key}`
+          : undefined
+      // Запис ПЕРШОГО нехолостого кроку не раніше строку: ключ, поставлений у
+      // чергу пізніше, не береться.
+      const atDeadline = input.waitingAt?.find((w) => w.at >= promise.due)
+      // Мить осідання польоту — останній крок, де ключ ще стояв у черзі.
+      const settleAt =
+        queuedKey === undefined
+          ? undefined
+          : input.waitingAt?.filter((w) => w.rows.includes(queuedKey)).at(-1)
+              ?.at
       if (
         promise.kind === "due" &&
         state.due === undefined &&
         now >= promise.due &&
-        state.target.kind === "row" &&
-        input.waitingAt
-          ?.find((w) => w.at >= promise.due)
-          ?.rows.includes(`${state.target.object}\u0000${state.target.key}`) ===
-          true
+        queuedKey !== undefined &&
+        atDeadline?.rows.includes(queuedKey) === true
       ) {
         obligations.delete(key)
         if (
           input.tabHidden === true &&
           input.suspends !== undefined &&
           promise.suspends !== undefined &&
-          input.suspends > promise.suspends
+          input.suspends > promise.suspends &&
+          // `suspend` мусив бути не пізніше осідання польоту.
+          input.hiddenSince !== undefined &&
+          settleAt !== undefined &&
+          input.hiddenSince <= settleAt
         )
           followUps.set(key, {
             kind: "shown",

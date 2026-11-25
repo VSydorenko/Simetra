@@ -412,6 +412,28 @@ describe("O2 self-check", () => {
     expect(
       at(stuck, 2_000, { suspends: 0, tabHidden: false, waitingAt: queuedRow })
     ).toMatch(/queued behind the flight did not start/)
+    // Поставлено в чергу ПІСЛЯ строку: запис першого кроку строку без ключа.
+    const late = start()
+    expect(
+      at(late, 2_000, {
+        suspends: 1,
+        tabHidden: true,
+        waitingAt: [
+          { at: 1_200, rows: [] },
+          { at: 1_800, rows: [`${OBJECT}\u0000k`] },
+        ],
+      })
+    ).toMatch(/no read by its deadline|no promise and no condition/)
+    // `suspend` ПІСЛЯ осідання польоту (останній крок із ключем у черзі).
+    const afterSettle = start()
+    expect(
+      at(afterSettle, 2_000, {
+        suspends: 1,
+        tabHidden: true,
+        hiddenSince: 1_500,
+        waitingAt: queuedRow,
+      })
+    ).toMatch(/queued behind the flight did not start/)
     // `suspend` до осідання: діє умова прихованої вкладки.
     const hidden = start()
     expect(
