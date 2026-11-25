@@ -5373,6 +5373,9 @@ describe("core model regressions", () => {
     await modelRun(runModel(steps, true, "scroll", [], true, true, true))
   })
 
+  // Без хвоста `{ time 5000 }, answer`: після нескінченного штучного циклу
+  // відкидань вимога рядка `version-epoch-switched` переживає обмежений виняток
+  // (родина рядка 19 §5.14, SK-4) — див. #360. Це випадок списку, не виняток.
   it("agrees with the core on a view in the M8 retry pause", async () => {
     const answer: Step = { t: "answer", pick: 0, how: "ok", at: 0 }
     const refresh: Step = { t: "refresh", v: 0, showNew: false }
