@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { catalogIndex, type ReadQuery } from "simetra/model"
 import type { AttemptEvent } from "../attempts"
+import type { ReadEvent } from "../source"
 import { DISCARDS_MAX } from "../session"
 import type { SiteCode } from "../sync/vocabulary"
 import type { FakePart } from "../testing/fake-source"
@@ -52,7 +53,8 @@ const event = (
   journal: number,
   at = 0
 ): StampedEvent => ({
-  reason: "user",
+  // Не `mount` і не `user`: ці причини О4 допускає й без винятків таблиці.
+  reason: "retry",
   target: { kind: "view", object, id: 0 },
   site,
   request: journal + 1,
@@ -260,23 +262,62 @@ describe("O1 over a real core", () => {
 })
 
 describe("O4: the idle window of a hidden tab", () => {
-  it("is red for a read of a code outside the exceptions inside the window", async () => {
+  // Події читання подає тест сам: причина — те, що судить О4, а не код рядка.
+  const feed = () => {
+    let listener: ((event: ReadEvent) => void) | undefined
+    return {
+      source: {
+        watchReads: (l: (event: ReadEvent) => void) => {
+          listener = l
+          return () => {}
+        },
+      },
+      emit: (event: ReadEvent) => listener?.(event),
+    }
+  }
+  const target = { kind: "view", object: TASK, id: 1 } as const
+  const window = async (event: ReadEvent) => {
     const h = setup()
-    seed(h.fake, 1, 2)
-    watch(h.core.view({ kind: "full", object: TASK }))
-    await settle()
-    h.core.suspend()
-    await settle()
-    const collector = collectReads(h.inspect, h.fake, { standalone: true })
+    const f = feed()
+    const collector = collectReads(f.source, h.fake, { standalone: true })
     // Крок, після якого вкладка прихована й запитів без відповіді немає,
     // відкриває вікно; сам він не оцінюється.
     expect(collector.idleStep({ quiet: false, idle: true })).toBeUndefined()
-    // Підписка на прихованій вкладці — дія host-а: `mount` не виняток.
-    watch(h.core.view({ kind: "full", object: ORG }))
-    await settle()
-    expect(collector.idleStep({ quiet: true, idle: true })).toMatch(
-      /a read in the idle window: M[12]/
-    )
+    f.emit(event)
+    return collector.idleStep({ quiet: true, idle: true })
+  }
+
+  it("is red for a read of a code and reason outside the exceptions inside the window", async () => {
+    expect(
+      await window({
+        reason: "interval",
+        target,
+        site: "R2",
+        request: 1,
+      } as ReadEvent)
+    ).toMatch(/a read in the idle window: R2/)
+    // M6 з причиною `requirement` (черга R11) — читання вкладки у спокої.
+    expect(
+      await window({
+        reason: "requirement",
+        requirement: "access-narrowed",
+        target,
+        site: "M6",
+        request: 1,
+      } as ReadEvent)
+    ).toMatch(/a read in the idle window: M6 \(requirement\)/)
+  })
+
+  it("admits the reasons `mount` and `user`: an action, not a tab at rest", async () => {
+    // M6 з причиною `mount` (черга підписки) і підписка на прихованій вкладці.
+    for (const [reason, site] of [
+      ["mount", "M6"],
+      ["mount", "M1"],
+      ["user", "R7"],
+    ] as const)
+      expect(
+        await window({ reason, target, site, request: 1 } as ReadEvent)
+      ).toBeUndefined()
   })
 
   it("is green for a quiet step without reads, and a step with an action closes the window", async () => {

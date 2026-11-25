@@ -330,6 +330,9 @@ export const IDLE_EXCEPTIONS: readonly IdleException[] = [
   { site: "R17", row: 13, after: "object", delayMs: 0 },
 ]
 
+/** Причини читань, що вкладку у спокої не порушують: дія host-а чи користувача. */
+const ADMITTED_AT_REST: ReadonlySet<string> = new Set(["mount", "user"])
+
 const sameTarget = (a: ReadEvent["target"], b: ReadEvent["target"]) =>
   a.kind === "service"
     ? b.kind === "service" && a.service === b.service
@@ -473,6 +476,10 @@ export function collectReads(
       if (open && quiet) {
         windowSteps++
         for (const event of events.slice(mark)) {
+          // Читання з причиною `mount` чи `user` — наслідок дії host-а чи
+          // користувача, а не вкладки у спокої (§5.3: клітинка `mount` ×
+          // `tab-hidden` — допуск); черга M6 несе причину свого виклику.
+          if (ADMITTED_AT_REST.has(event.reason)) continue
           if (excused(event)) continue
           const target =
             event.target.kind === "service"

@@ -5159,6 +5159,26 @@ describe("core model regressions", () => {
   // Пауза повтору береться з `sync()` (строк із причиною `retry`): `return` під
   // час живої паузи, відповіді й плин часу — модель і ядро згодні, чи вигляд
   // у польоті, на кожному кроці.
+  // Явні кроки того ж реплею: `sub` на прихованій вкладці ставить завантаження в
+  // чергу (M6 з причиною `mount`); його старт — наслідок дії, не вкладка у спокої.
+  it("does not take a queued `mount` load on a hidden tab for a tab at rest", async () => {
+    const steps: Step[] = [
+      { t: "suspend" },
+      { t: "revalidate", org: false, visibleOnly: false },
+      { t: "epoch", which: 1 },
+      { t: "answer", pick: 0, how: "missing", at: 0 },
+      { t: "epoch", which: 2 },
+      { t: "sub", v: 10 },
+      { t: "answer", pick: 0, how: "stale", at: 0 },
+      { t: "churn", v: 1, scroll: false },
+      { t: "epoch", which: 1 },
+      { t: "answer", pick: 0, how: "missing", at: 0 },
+      { t: "purgeScope", org: false, scope: 0 },
+      { t: "due" },
+    ]
+    await modelRun(runModel(steps, true, "burial", [], true, true, false))
+  })
+
   it("agrees with the core on a view in the M8 retry pause", async () => {
     const answer: Step = { t: "answer", pick: 0, how: "ok", at: 0 }
     const refresh: Step = { t: "refresh", v: 0, showNew: false }
@@ -5374,6 +5394,14 @@ describe("core model regressions", () => {
       signals: true,
       seed: 681021836,
       path: "6052:3:2:1:7:9:14:14:16:16:16:22:22:22:26:27:27:30:31:32:32:32:16",
+    },
+    // О4: черга M6 несе причину `mount` підписки (дія на прихованій вкладці):
+    // це не читання вкладки у спокої.
+    {
+      issue: "O4 queued mount on a hidden tab",
+      rights: true,
+      seed: -404532396,
+      path: "1072:4:0:4:10:15:10:11:36:19:42:81:11:17:48:31:39:35:16:41:52:45:72:13:19:20:20:25:32:39:37:42:41:19:66:31:35:34:63:32:32:35:37:41:35:42:34:34:42:45:45:45:45:38:38:38:38:38:38:38:38:38:38:38:38:38:38:38:38:38:38",
     },
     {
       issue: "O2 purged row returns",
