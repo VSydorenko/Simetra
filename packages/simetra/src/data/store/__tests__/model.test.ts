@@ -5681,6 +5681,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "revalidate-no-tail",
   "scheduler-reads-unavailable",
   "sync-pause-no-cause",
+  "discard-no-retry",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -5737,6 +5738,10 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // `sync()` показує паузу повтору звичайним строком: модель, що бере паузу з
   // `sync()`, бачить вигляд поза польотом і чекає від ядра перечитування.
   "sync-pause-no-cause": /not re-read after hide/,
+  // Відкинуте за епохою завантаження без повтору лишає вигляд у `loading`: О3.
+  // Межу О2 (читання не пізніше кінця паузи повтору) доводить її самотест: у
+  // прогоні модель читає вигляд іншим шляхом (такт), і борг О2 закривається ним.
+  "discard-no-retry": /^o3: view \d+ past its bound/,
   // Знімок прав (B5b-2): кожен дефект — своїм шляхом. Без бар'єра читання
   // пари, що стартувало до знімка, пише її рядок уже після нього (`race`).
   "rights-no-barrier": /written past the rights barrier/,

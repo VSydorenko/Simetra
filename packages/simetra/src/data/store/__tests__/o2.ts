@@ -418,13 +418,17 @@ export interface O2 {
  * Що ядро ще винне цілі, вимога якої зникла без доказу за винятком таблиці:
  * `leave` — ціль мусить піти з `sync()` до кінця затримки звільнення; `read` —
  * читання цілі, межа якого — інтервал плюс пауза збоїв від появи видимого
- * тримача.
+ * тримача; `retry` — вимогу зняла спроба, відкинута за епохою: наступне читання
+ * цілі стартує не пізніше кінця паузи повтору (строк із причиною `retry` у
+ * `sync()`), а для невидимого вигляду — плюс інтервал.
  */
 interface FollowUp {
-  readonly kind: "leave" | "read"
+  readonly kind: "leave" | "read" | "retry"
   readonly sinceEvent: number
   sinceTime: number | undefined
   holderSince: number | undefined
+  /** `retry`: межа початку читання — кінець паузи повтору, щойно її видно в `sync()`. */
+  deadline?: number
 }
 
 export function createO2(): O2 {
@@ -658,6 +662,25 @@ export function createO2(): O2 {
         f.holderSince = undefined
         continue
       }
+      if (f.kind === "retry") {
+        if (events.slice(f.sinceEvent).some((e) => startedRead(e, target))) {
+          followUps.delete(key)
+          continue
+        }
+        if (state.dueCause === "retry" && state.due !== undefined)
+          f.deadline = state.due
+        const slack =
+          input.holderVisible?.(target) === false
+            ? (input.revalidateMs ?? 0)
+            : 0
+        if (now > (f.deadline ?? f.sinceTime ?? now) + slack) {
+          problems.push(
+            `${describe(target)}: no read of the target by the end of its retry pause after a discarded load`
+          )
+          followUps.delete(key)
+        }
+        continue
+      }
       if (events.slice(f.sinceEvent).some((e) => settledRead(e, target))) {
         followUps.delete(key)
         continue
@@ -823,22 +846,26 @@ export function createO2(): O2 {
             requirement.kind === "target-behind-header" &&
             was.target.kind === "view"
           ) {
-            const failed = windowOf().attempts.some(
-              (a) =>
-                a.phase === "settled" &&
-                // Відкинута за епохою спроба підтверджує так само мало, як збійна:
-                // вимогу знімає ядро, а читання йде повтором після паузи.
-                (a.outcome === "failed" ||
-                  a.outcome === "discarded-by-epoch") &&
-                a.kind !== "page" &&
-                a.target.id === (was.target as { id: number }).id
-            )
+            const settledAs = (outcome: string) =>
+              windowOf().attempts.some(
+                (a) =>
+                  a.phase === "settled" &&
+                  a.outcome === outcome &&
+                  a.kind !== "page" &&
+                  a.target.id === (was.target as { id: number }).id
+              )
+            const failed = settledAs("failed")
+            // Відкинута за епохою спроба знімає вимогу так само, як збійна, але
+            // читання за нею йде повтором (M8): його строк ядро показує у `sync()`.
+            const discarded = settledAs("discarded-by-epoch")
             const held = input.holderPresent?.(was.target)
             const trigger = purged
               ? "leave"
               : failed || held === false
                 ? "read"
-                : undefined
+                : discarded
+                  ? "retry"
+                  : undefined
             if (trigger !== undefined) {
               followUps.set(key, {
                 kind: trigger,

@@ -569,7 +569,7 @@ describe("O2 self-check", () => {
       const start = (o2: ReturnType<typeof createO2>) =>
         o2.step(input({ states: standing, holderPresent: () => true }))
 
-      it.each(["failed", "discarded-by-epoch"] as const)(
+      it.each(["failed"] as const)(
         "after a %s read: a read within the interval and the pause once a holder is visible",
         (outcome) => {
           const failed = [
@@ -609,6 +609,74 @@ describe("O2 self-check", () => {
           ).toBeUndefined()
         }
       )
+
+      it("after a read discarded by the epoch: a read by the end of the retry pause, or red", () => {
+        const discarded = [
+          ...loaded,
+          ...settled(8, 1, "reread").slice(0, 1),
+          {
+            phase: "settled",
+            attempt: 8,
+            kind: "reread",
+            target: { kind: "view", object: OBJECT, id: 1 },
+            outcome: "discarded-by-epoch",
+          } as AttemptEvent,
+        ]
+        // Після відкинутої спроби `sync()` показує паузу повтору: строк із причиною.
+        const pause = (due: number) => [
+          ...alive,
+          state(section, { due, dueCause: "retry" }),
+        ]
+        const run = (
+          steps: readonly {
+            now: number
+            states: SyncState[]
+            seen?: StampedEvent[]
+          }[],
+          visible = true
+        ) => {
+          const o2 = createO2()
+          start(o2)
+          let last: string | undefined
+          for (const step of steps)
+            last = o2.step(
+              input({
+                ...model,
+                now: step.now,
+                states: step.states,
+                attempts: discarded,
+                events: step.seen ?? [],
+                holderPresent: () => true,
+                holderVisible: () => visible,
+              })
+            )
+          return last
+        }
+        const waiting = { now: 10, states: pause(110) }
+        // До кінця паузи — зелений; у строк і після нього без читання — червоний.
+        expect(run([waiting, { now: 100, states: pause(110) }])).toBeUndefined()
+        expect(run([waiting, { now: 111, states: pause(110) }])).toMatch(
+          /no read of the target by the end of its retry pause/
+        )
+        // Повтор стартував (подія читання цілі) — борг закрито.
+        expect(
+          run([waiting, { now: 200, states: bare, seen: [read(1, 0, 77)] }])
+        ).toBeUndefined()
+        // Паузи в `sync()` немає й читання теж: ядро повтор не поставило.
+        expect(
+          run([
+            { now: 10, states: bare },
+            { now: 20, states: bare },
+          ])
+        ).toMatch(/no read of the target by the end of its retry pause/)
+        // Невидимий вигляд: плюс інтервал.
+        expect(
+          run([waiting, { now: 111, states: pause(110) }], false)
+        ).toBeUndefined()
+        expect(run([waiting, { now: 300, states: pause(110) }], false)).toMatch(
+          /no read of the target by the end of its retry pause/
+        )
+      })
 
       it("after the holder is released: a read once a holder appears", () => {
         const o2 = createO2()

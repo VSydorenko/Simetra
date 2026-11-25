@@ -620,6 +620,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             )
             return
           }
+          // Мутація самотесту: відкинуте за епохою завантаження не повторюється.
+          if (ctx.defects.has("discard-no-retry")) return
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           s.retryAt = ctx.now() + pause
