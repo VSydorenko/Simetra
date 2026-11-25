@@ -112,6 +112,8 @@ export type DefectFlag =
   | "receiver-ignores-horizon"
   /** A page settle drops the requirement "composition not confirmed" of its view. */
   | "page-drops-requirement"
+  /** The pause before the retry of a discarded load never ends. */
+  | "retry-sleeps-forever"
   /** A load discarded by the epoch is not retried: no pause, no M8 read. */
   | "discard-no-retry"
   /** `sync()` shows the pause before a load retry as an ordinary deadline, without the cause `retry`. */

@@ -4750,6 +4750,11 @@ async function runModelOn(
       if (closed !== undefined) return
       judge()
     }
+    // Пауза повтору скінчена: стан `retry-pause` — не вічна умова. Пауза, що не
+    // кінчається в межах часу моделі, — дефект (повтор не прийшов), а не названий
+    // стан: оракул не судить уявну нескінченну паузу.
+    if (views().some((view) => view.state === "retry-pause"))
+      fail("o3", "a retry pause did not end within the model time")
     if (clock < end) fail("o3", "the model did not reach the last bound")
     o3Checks += o3.evaluated()
     for (const state of O3_NAMED_STATES)
@@ -6060,6 +6065,30 @@ describe("core model self-check", () => {
       await modelRun(runModel(steps, false, "full", [], checks))
     }
   )
+
+  // `retry-pause` — названий стан О3 лише доти, доки пауза скінченна: пауза, що
+  // не кінчається в межах часу моделі, червонить О3, а не лишається умовою.
+  it("turns O3 red when the retry pause of a discarded load never ends", async () => {
+    const answer: Step = { t: "answer", pick: 0, how: "ok", at: 0 }
+    const refresh: Step = { t: "refresh", v: 0, showNew: false }
+    const steps: Step[] = [
+      { t: "sub", v: 0 },
+      answer,
+      { t: "epoch", which: 1 },
+      refresh,
+      answer,
+      { t: "epoch", which: 2 },
+      refresh,
+      answer,
+      { t: "epoch", which: 1 },
+      refresh,
+      answer,
+    ]
+    await expect(
+      modelRun(runModel(steps, false, "full", ["retry-sleeps-forever"], true))
+    ).rejects.toThrow(/a retry pause did not end within the model time/)
+    await modelRun(runModel(steps, false, "full", [], true))
+  })
 
   // О3 (Р-SK0-9): хвиля приєднання не читає. Профіль з інтервалом набагато
   // більшим за джитер: такт не підміняє хвилю, тож лише хвиля виправляє рядок,

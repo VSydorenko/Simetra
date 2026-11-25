@@ -625,7 +625,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           s.retryAt = ctx.now() + pause
-          return session.sleep(pause).then(() => {
+          // Мутація самотесту: пауза не кінчається.
+          const slept = ctx.defects.has("retry-sleeps-forever")
+            ? new Promise<void>(() => {})
+            : session.sleep(pause)
+          return slept.then(() => {
             s.retryAt = undefined
             return token.valid
               ? attempt({ reason: "retry", site: "M8" })
