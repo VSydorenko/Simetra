@@ -2,9 +2,8 @@ import { describe, expect, it } from "vitest"
 import type { MetadataRef } from "simetra/model"
 import { coreInternals } from "../core"
 import type { CorePart } from "../source"
-import type { Flight } from "../sync/flight"
-import type { ReadCause, ReadTarget } from "../sync/vocabulary"
-import { TEST_FLIGHT } from "../testing/fake-source"
+import { issueTestFlight, type Flight } from "../sync/flight"
+import { TEST_SITE, type ReadCause, type ReadTarget } from "../sync/vocabulary"
 import { TASK, key, seed, settle, setup } from "./core-support"
 
 /*
@@ -36,25 +35,37 @@ describe("read of the core takes only a flight of its own gate", () => {
     lease.release()
   })
 
+  // Оренда є в кожному політі: інакше відмову дала б стара перевірка оренди
+  // (`a read of rows without a write lease`), а не шлюз.
+  const GATE = /without a flight of the gate/
+
   it("rejects a literal with the same reason, target and code, and sends nothing", async () => {
     const h = armed()
     const lease = h.source.lease()
     // Літерал зі справжніми полями: бренд і запис шлюзу — те, чого в нього немає.
     const forged = { ...cause, target, site: "R7", lease } as Flight
-    await expect(h.source.read(parts, forged)).rejects.toThrow()
+    await expect(h.source.read(parts, forged)).rejects.toThrow(GATE)
     await settle()
     expect(h.fake.log).toHaveLength(0)
   })
 
-  it("rejects a flight of another session, and a flight of the test entry", async () => {
+  it("rejects a flight of another session", async () => {
     const h = armed()
     const other = armed()
     const lease = h.source.lease()
     const foreign = other.source.admit(cause, target, "R7", { lease })
-    await expect(h.source.read(parts, foreign)).rejects.toThrow()
-    await expect(h.source.read(parts, TEST_FLIGHT)).rejects.toThrow()
+    await expect(h.source.read(parts, foreign)).rejects.toThrow(GATE)
     await settle()
     expect(h.fake.log).toHaveLength(0)
     expect(other.fake.log).toHaveLength(0)
+  })
+
+  it("rejects a flight of the test entry", async () => {
+    const h = armed()
+    const lease = h.source.lease()
+    const testing = issueTestFlight(cause, target, TEST_SITE, { lease })
+    await expect(h.source.read(parts, testing)).rejects.toThrow(GATE)
+    await settle()
+    expect(h.fake.log).toHaveLength(0)
   })
 })
