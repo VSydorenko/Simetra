@@ -351,6 +351,12 @@ const EXTENSIONS_SCHEMA = "extensions"
 const AUTH_SCHEMA = PROVIDER_IDENTITY_SOURCES.postgres.table.schema
 const AGENT_SCHEMA = "agent_oauth"
 const AUTH_SCHEMAS = [AUTH_SCHEMA, AGENT_SCHEMA]
+/**
+ * Schemas the auth role owns in a target database of the postgres profile:
+ * Better Auth and the agents' authorization server. A host that prepares a
+ * database without `roles` (the shared-stack stands) creates exactly these.
+ */
+export const POSTGRES_AUTH_SCHEMAS: readonly string[] = AUTH_SCHEMAS
 const CHECK_EXTENSION = "plpgsql_check"
 
 /**

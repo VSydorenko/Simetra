@@ -2,7 +2,7 @@
 // production-збірки: одне джерело для фікстури e2e і `pnpm demo`. Тестового
 // коду тут немає — демо його не імпортує; адреси й паролі дає той, хто кличе.
 import { spawn, execFile, type ChildProcess } from "node:child_process"
-import { randomUUID } from "node:crypto"
+import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto"
 import { readFileSync, rmSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
@@ -17,7 +17,10 @@ import {
 } from "simetra/model"
 import { PROVIDER_SHADOW_TEMPLATES } from "simetra/schema"
 // Той самий SQL грантів, що робить `simetra roles`: друга копія розійшлася б
-import { identityGrantSql } from "../../../simetra/src/schema/apply/postgres-cluster"
+import {
+  identityGrantSql,
+  POSTGRES_AUTH_SCHEMAS,
+} from "../../../simetra/src/schema/apply/postgres-cluster"
 import { runDbSetup } from "../../template/scripts/db-setup-steps.mjs"
 
 const exec = promisify(execFile)
@@ -107,13 +110,25 @@ export function connectPrivilegeSql(
 }
 
 /**
+ * Схеми ролі `auth` у базі застосунку — той самий перелік, що створює
+ * `simetra roles` (`better_auth` і `agent_oauth`): база стенда йде з шаблону
+ * тінь-баз, де їх немає, а таблиці `agent_oauth` створює крок `runDbSetup`.
+ */
+export function authSchemaSql(authRole: string): string[] {
+  return POSTGRES_AUTH_SCHEMAS.map(
+    (schema) =>
+      `CREATE SCHEMA IF NOT EXISTS "${schema}" AUTHORIZATION "${authRole}"`
+  )
+}
+
+/**
  * База розробника тим самим `runDbSetup`, що й `scripts/db-setup.mjs`
  * (міграція Better Auth, `plan`, `apply --yes`), і ознака
  * `simetra.environment = 'development'` рівня бази. Крок `simetra roles`
  * замінено власним: на спільному стеку логіни Simetra мають явний `CONNECT` до
  * бази `simetra`, і `roles` відмовляє (`roles.shared-cluster`) для будь-якої
  * іншої бази. Замість нього — база з шаблону тінь-баз власником профілю,
- * `CONNECT` і схема `better_auth` до міграції та гранти власнику на таблицю
+ * `CONNECT` і схеми ролі auth (`authSchemaSql`) до міграції та гранти власнику на таблицю
  * ідентичності після неї (`identityGrantSql`). `created` — одразу після
  * `CREATE DATABASE`: демо ставить на базу мітку власності до будь-якого
  * іншого кроку.
@@ -155,9 +170,7 @@ export async function prepareDatabase(o: {
           PLATFORM_LOGIN_ROLES.signals,
         ]))
           await client.query(sql)
-        await client.query(
-          `CREATE SCHEMA IF NOT EXISTS "${schema}" AUTHORIZATION "${authRole}"`
-        )
+        for (const sql of authSchemaSql(authRole)) await client.query(sql)
       })
     },
     afterMigration: async () => {
@@ -257,8 +270,29 @@ export async function buildTemplate(): Promise<void> {
 }
 
 /**
- * Оточення сервера збірки: лише рантайм і автентифікація; DSN власника й
- * суперкористувача серверу не потрібні.
+ * Ключі сервера авторизації агентів стенда (Р-F4-1): production без них не
+ * стартує. Нові на кожен запуск, як ключі сигналів: жодного ключа в git.
+ */
+export function agentOauthKeyEnv(): Record<string, string> {
+  const jwk = generateKeyPairSync("ed25519").privateKey.export({
+    format: "jwk",
+  })
+  return {
+    SIMETRA_AGENT_OAUTH_COOKIE_KEYS: JSON.stringify([
+      randomBytes(32).toString("base64url"),
+    ]),
+    SIMETRA_AGENT_OAUTH_SIGNING_KEY: JSON.stringify({
+      kty: "OKP",
+      crv: "Ed25519",
+      x: jwk.x,
+      d: jwk.d,
+    }),
+  }
+}
+
+/**
+ * Оточення сервера збірки: лише рантайм, автентифікація й ключі сервера
+ * авторизації агентів; DSN власника й суперкористувача серверу не потрібні.
  */
 export function appServerEnv(o: {
   dsns: AppDsns
@@ -278,6 +312,7 @@ export function appServerEnv(o: {
     BETTER_AUTH_SECRET: o.secret,
     SIMETRA_RUNTIME_DATABASE_URL: o.dsns.SIMETRA_RUNTIME_DATABASE_URL,
     SIMETRA_AUTH_DATABASE_URL: o.dsns.SIMETRA_AUTH_DATABASE_URL,
+    ...agentOauthKeyEnv(),
     ...(o.signals === undefined
       ? {}
       : {
