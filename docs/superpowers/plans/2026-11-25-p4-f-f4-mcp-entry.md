@@ -78,10 +78,10 @@ claims агента, подія виклику; стану між запитам
 | Р-F4-6 | Нормалізація CIMD — як у F0 і `munin-mcp`: метод `none` і видалення `jwks_uri`/`jwks`/`token_endpoint_auth_signing_alg` для кожного прийнятого документа; `application_type: "native"` — лише документу без `application_type`, усі `redirect_uri` якого loopback. Вебклієнт (claude.ai, ChatGPT) native не стає: інакше бібліотека послаблює перевірку `redirect_uri` для https. Документ, що не оголошує `none` і не має його в `token_endpoint_auth_methods_supported`, відхиляється. | §5.4 (рядок про `application_type`) — задача 0 |
 | Р-F4-7 | Перевірки `/token` до вживання токена оновлення — у шарі монтування над клоном тіла (після межі тіла entry): `grant_type=refresh_token` з `resource`, відмінним від канонічної адреси MCP, — `invalid_target` без виклику бібліотеки. Приватних внутрішностей бібліотеки (`grantTypeHandlers`, як `tokenGate` у `munin-mcp`) не вживати. | none |
 | Р-F4-8 | Peer `@modelcontextprotocol/server` — точна версія `2.4.0`, як у шаблоні: адаптер покладається на опції `createMcpHandler` і ери протоколу конкретної версії; оновлення — разом із тестами адаптера. Для приймання архітекторкою. | none |
-| Р-F4-9 | Подія виклику — одна на кожен `tools/call`, що пройшов перевірку токена (успіх, помилка каталогу, виняток → `catalog`-помилка `internal`). Запити з 401 і службові методи (`tools/list`, `initialize`, `server/discover`) події не дають: без особи немає `sub`, а відмови видно в журналі HTTP. Хеш входу — SHA-256 hex канонічного JSON входу (Web Crypto, без Node API в T6). Шаблон без налаштувань пише подію JSON-рядком у stdout за моделлю даних логів OpenTelemetry; зі змінною `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` (або `OTEL_EXPORTER_OTLP_ENDPOINT` + `/v1/logs`) шле OTLP/HTTP JSON через `fetch` без SDK OpenTelemetry; збій експорту не ламає виклику. Для приймання архітекторкою. | none |
+| Р-F4-9 | Подія виклику — одна на кожен `tools/call`, що пройшов перевірку токена (успіх, помилка каталогу, виняток → `catalog`-помилка `internal`). Запити з 401 і службові методи (`tools/list`, `initialize`, `server/discover`) події не дають: без особи немає `sub`, а відмови видно в журналі HTTP. Хеш входу — HMAC-SHA-256 hex канонічного JSON входу ключем, який host передає адаптеру (Web Crypto, без Node API в T6); шаблон бере ключ із ключів сервера авторизації (Р-F4-1). Простий SHA-256 не годиться: вхід із малою множиною значень (id, email у фільтрі) відновлюється перебором із журналу. Шаблон без налаштувань пише подію JSON-рядком у stdout за моделлю даних логів OpenTelemetry; зі змінною `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` (або `OTEL_EXPORTER_OTLP_ENDPOINT` + `/v1/logs`) шле OTLP/HTTP JSON через `fetch` без SDK OpenTelemetry; збій експорту не ламає виклику. Для приймання архітекторкою. | §5.4 «Подія виклику агента» — «ключований хеш входу», задача 0 |
 | Р-F4-10 | Захист від DNS rebinding (транспорт MCP): запит на `/mcp` із заголовком `Origin`, що не дорівнює origin застосунку, — 403 до перевірки токена. Запит без `Origin` (серверні клієнти) проходить. | none |
 | Р-F4-11 | Порт шаблону на кожен запит: `AccessToken.find`, відмова токену з `jkt`/`cnf` (DPoP) і простроченому за тим самим годинником, `Grant.find` з тим самим `clientId` і `accountId`, рядок `agent_grants` гранту не відкликаний і не прострочений, `tenant` рядка дорівнює закріпленню токена, користувач Better Auth є; потім `last_used_at`. Усі строки — один годинник JS (`Date.now()`), тож керований годинник тестів діє на бібліотеку, адаптер сховища й `agent_grants.expires_at` однаково. | none |
-| Р-F4-12 | API взаємодії — функції сервера шаблону над `Request` (не екрани): `interactionDetails` (клієнт, хост `client_id`, хост `redirect_uri`, ім'я клієнта з позначкою «вказано клієнтом», `requiresTenant`, токен CSRF), `submitConsent` (тенант, CSRF), `abortInteraction`, `listAgentGrants(userId)`, `revokeAgentGrant(userId, grantId)`. Кожна знаходить взаємодію лише через `interactionDetails(req, res)` (cookie браузера). Токен CSRF — HMAC ключем cookie від `uid` і `jti` взаємодії. URL сторінки взаємодії — `/agent/connect/$uid`; маршрут сторінки й екрани — F5; F4 має лише функції й тестовий помічник `connectAgent`. | none |
+| Р-F4-12 | API взаємодії — функції сервера шаблону над `Request` (не екрани): `interactionDetails` (клієнт, хост `client_id`, хост `redirect_uri`, ім'я клієнта з позначкою «вказано клієнтом», `requiresTenant`, токен CSRF), `submitConsent` (тенант, CSRF), `abortInteraction`, `listAgentGrants`, `revokeAgentGrant(grantId)`; користувача дві останні беруть із сесії Better Auth запиту, а не з параметра, і бачать та відкликають лише свої гранти. Функції взаємодії знаходять її лише через `interactionDetails(req, res)` (cookie браузера). Cookie `_interaction` бібліотека ставить зі шляхом сторінки взаємодії, тож `interactionDetails`, `submitConsent` і `abortInteraction` обслуговуються лише під `/agent/connect/<uid>` (не Server Function `/_serverFn/…`), а шлях cookie не розширюється. `listAgentGrants` показує лише рядки, `Grant` яких ще є в сховищі. `findAccount` шукає користувача Better Auth: оновлення токена видаленого користувача — `invalid_grant`. Токен CSRF — HMAC ключем cookie від `uid` і `jti` взаємодії. URL сторінки взаємодії — `/agent/connect/$uid`; маршрут сторінки й екрани — F5; F4 має лише функції й тестовий помічник `connectAgent`. | none |
 
 ## 5. Інтерфейси
 
@@ -130,6 +130,17 @@ claims агента, подія виклику; стану між запитам
 14. Токен агента на маршруті токенів сигналів шаблону дає токен каналу (лише
     тест над `verifySession`, без зміни коду сигналів).
 15. `Origin` чужого сайту на `/mcp` проходить до перевірки токена.
+16. Хеш входу без ключа → хеш події для відомого малого входу дорівнює його
+    простому SHA-256.
+17. `/revoke` токена доступу без `revokeGrantPolicy: true` чи без перевірки
+    `Grant` у порту → відкликаний токен доступу на наступному `/mcp` дає 200
+    (обидві ери).
+18. Порт без звірки `tenant` рядка з `pin` токена, без строку рядка
+    `agent_grants`, без звірки `clientId`/`accountId` гранту чи без
+    користувача Better Auth → токен проходить; `isAnonymous` сталий, а не з
+    запису користувача → анонімний користувач проходить.
+19. `listAgentGrants`/`revokeAgentGrant` за ідентифікатором із запиту, а не
+    сесії → користувач B бачить або відкликає грант A.
 
 ## 7. Частини
 
@@ -152,7 +163,7 @@ claims агента, подія виклику; стану між запитам
 **Команда:** `run-tests unit --changed`.
 
 ### Задача 2. Адаптер `simetra/shell/mcp`
-`packages/simetra/src/shell/mcp/`; `package.json` (`exports`,
+`packages/simetra/src/shell` (нова тека `mcp`); `package.json` (`exports`,
 `publishConfig.exports`, peer + `peerDependenciesMeta`, dev-залежність),
 `tsdown.config.ts` (entry `shell/mcp/index`), `eslint.tier-zones.js`
 (заборона `@modelcontextprotocol/server` у `src/**`, окремий блок дозволу
@@ -190,7 +201,7 @@ claims агента, подія виклику; стану між запитам
 --filter <файл тесту політики>`; повний `db` — CI.
 
 ### Задача 4. Сервер авторизації в шаблоні
-`packages/create-simetra-app/template/src/server/agent-oauth/` (провайдер,
+`packages/create-simetra-app/template/src/server` (нова тека `agent-oauth`) (провайдер,
 сховище, транспорт CIMD, ключі), `src/server/config.ts`,
 `src/server/startup-plugin.ts`, `src/server.ts`, `template/scripts/db-setup-steps.mjs`
 (крок DDL), `package.json`, `eslint.config.js` (`GRANTS` для `pg`),
@@ -198,7 +209,7 @@ claims агента, подія виклику; стану між запитам
 і `munin-mcp` із заголовками; викинути статичний клієнт `probe`,
 `/oauth-probe`, похідні від `authSecret()` ключі. Конфіг §5.4 повністю, плюс
 `extraTokenClaims` (тенант гранту → `pin`), власний `renderError`,
-`interactions.url` Р-F4-12. Р-F4-1, 5, 6, 7, 11.
+`interactions.url` Р-F4-12. Р-F4-1, 5, 6, 7, 11. Нотатка виконавиці: `provider.proxy` з F0 довіряє `X-Forwarded-*` — вмикати лише тоді, коли host за довіреним проксі (`SIMETRA_CLIENT_IP_SOURCE` — заголовок), і перевірити, що обмін коду з чужим `resource` не відкликає гранту.
 **Готово:** DB-тести шаблону: три документи CIMD реєструються публічними
 клієнтами, `jwks_uri` не завантажується; приватна адреса `client_id`
 відхилена справжнім транспортом; `/authorize` без PKCE S256 чи з
@@ -219,18 +230,27 @@ claims агента, подія виклику; стану між запитам
 **Готово:** DB-тести: анонімна сесія гранту не отримує; `submitConsent` без
 тенанта за `requiresTenant` — гранту немає, з тенантом без `requiresTenant` —
 відмова; повторна авторизація трійки відкликає попередній грант, старий токен
-доступу — 401; `revokeAgentGrant` відкликає грант пари, інші живуть, старий
+доступу — 401 (і з тенантом, і без: порівняння `tenant` — `IS NOT DISTINCT
+FROM`); користувач B через `listAgentGrants`/`revokeAgentGrant` не бачить і
+не відкликає гранту A; помічник `connectAgent` тримає cookie за `Path`, а не
+шле cookie взаємодії вручну; `revokeAgentGrant` відкликає грант пари, інші живуть, старий
 токен — 401; згода з cookie іншого браузера чи без CSRF — гранту немає;
 вихід із сесії Better Auth не обриває підключення, оновлення працює; сесія
 `oidc-provider` знищена після `resume`.
 **Команда:** `run-tests db --filter template/test/agent-oauth-interaction.db.test.ts`.
+Нотатка виконавиці: слухач `grant.revoked` з F0 ковтає помилку позначки
+рядка — у F4 він її журналює.
 
 ### Задача 6. Порт, маршрут MCP і приймач події
 `template/src/server/agent-oauth/verify-token.ts`, `src/server/agent-entry.ts`
 (монтування `createMcpEntry` лінивим імпортом), приймач події поряд з
 `src/instrument.ts`. Р-F4-5, 9, 10, 11. Після приймання частини A.
 **Готово:** DB-тести на обох ерах: токен оновлення, токен іншого ресурсу,
-токен з `jkt` як bearer — 401; виклик MCP оновлює `last_used_at`; виклик
+токен з `jkt` як bearer — 401; токен доступу після `/revoke` — 401 на
+наступному виклику; `tenant` рядка ≠ `pin` токена, рядок `agent_grants`
+прострочений, `Grant` з іншим `clientId` чи `accountId`, видалений
+користувач Better Auth — 401 (інваріанти 17, 18); хеш події ≠ простий
+SHA-256 входу; виклик MCP оновлює `last_used_at`; виклик
 `describe` клієнтом MCP SDK (`StreamableHTTPClientTransport` з `fetch` на
 entry в процесі) з грантом від `connectAgent`; кожен виклик дає одну подію
 §5.4 без значень даних і тексту входу (stdout JSON; OTLP — unit над
@@ -253,7 +273,7 @@ entry в процесі) з грантом від `connectAgent`; кожен в�
 - `orient --plan` і `doc anchors` плану; дельти — сюди.
 - Поправки спеки П4-F: §5.4 — ключі в production (Р-F4-1), «Протокол»
   (Р-F4-2), хто створює схему (Р-F4-3), маршрут MCP у Fetch-entry (Р-F4-5),
-  `application_type` лише для loopback (Р-F4-6); §3 рядок F4 — «у
+  `application_type` лише для loopback (Р-F4-6), ключований хеш входу (Р-F4-9); §3 рядок F4 — «у
   production» в пункті про ключі.
 
 **Після F1.** Жоден пункт «Готово» рядка F4 не залежить від SQL F1: адаптер
