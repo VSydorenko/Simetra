@@ -1,6 +1,8 @@
 import {
   PLATFORM_SCHEMA,
   quoteIdent,
+  RICH_TEXT_PROFILE,
+  RICH_TEXT_WHITESPACE,
   SESSION_CLAIMS_SETTING,
   isObjectOrigin,
   type DatabaseProvider,
@@ -27,7 +29,7 @@ import type { ParsedObject } from "../stages/files"
 import { kindLabelOf, sqlLiteral } from "../stages/model"
 import { IDENTITIES_TABLE } from "./identities"
 import { outboxUnits } from "./outbox"
-import { CURRENT_USER_FUNCTION } from "./names"
+import { CURRENT_USER_FUNCTION, RICH_TEXT_IS_EMPTY_FUNCTION } from "./names"
 
 /**
  * Призначення ролей, що кличуть функцію сесії: у політиці її виконує роль
@@ -115,13 +117,15 @@ export function buildPlatformUnits(
 ): SqlUnit[] {
   const { users } = input.contracts
   const { provider } = input.project.database
-  // Outbox сигналів — у кожному проєкті, незалежно від «Користувачів».
+  // Outbox сигналів і порожність `RichText` — у кожному проєкті, незалежно
+  // від «Користувачів».
   const outbox = outboxUnits(input.project.name, provider, parse)
+  const richText = richTextEmptinessUnits(input.project.name, provider, parse)
   if (users === undefined) {
     const subject = hasSessionUser(input.contracts, provider)
       ? subjectUserUnits(input.project.name, provider, parse, source)
       : []
-    return [...subject, ...outbox].sort((a, b) =>
+    return [...subject, ...richText, ...outbox].sort((a, b) =>
       compareStrings(a.identity, b.identity)
     )
   }
@@ -171,6 +175,7 @@ export function buildPlatformUnits(
     ]),
     ...triggers(source).map((sql) => unit(sql)),
     unit(kindLabelsView(input.objects, input.physical)),
+    ...richText,
     ...outbox,
   ]
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
@@ -201,6 +206,68 @@ function subjectUserUnits(
       provider
     ).map(unit),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
+}
+
+/**
+ * `simetra.rich_text_is_empty(jsonb)` (Р-B7-7, Р-B7-8) і її `EXECUTE` кожній
+ * ролі сесії: CHECK таблиці перекладів (B3) обчислює роль, що пише, а писати
+ * може кожна роль із грантом запису. Одиниця проєкту без власника-об'єкта, як
+ * outbox: CHECK потрібен і без «Користувачів». `USAGE` схеми дає не вона, а
+ * `platformSchemaGrants` чи стан застосування.
+ */
+function richTextEmptinessUnits(
+  module: string,
+  provider: DatabaseProvider,
+  parse: SqlParser
+): SqlUnit[] {
+  const unit = (sql: string): SqlUnit => ({
+    ...generatedUnit(sql, PLATFORM_SCHEMA, parse),
+    module,
+    generator: "platformLayer",
+  })
+  return [
+    unit(richTextIsEmptyFunction()),
+    ...executeGrants(
+      `${qualified(RICH_TEXT_IS_EMPTY_FUNCTION)}(jsonb)`,
+      SESSION_ROLES,
+      provider
+    ).map(unit),
+  ].sort((a, b) => compareStrings(a.identity, b.identity))
+}
+
+/**
+ * Текст функції порожності — зі сталих T0, тож відповідь та сама, що в
+ * `isRichTextEmpty`. Режим jsonpath — `strict`: `lax` розгорнув би масив, і
+ * `type: ["text"]` став би текстовим вузлом; помилка доступу в фільтрі
+ * (`.type` не об'єкта, `like_regex` не рядка) у `strict` — `unknown`, тобто
+ * «не той вузол», а не помилка. Пробільні символи — явним класом із
+ * `RICH_TEXT_WHITESPACE`: `\s` Postgres залежить від локалі. Кожен символ
+ * класу — escape `\uXXXX` рядка jsonpath, тож SQL лишається ASCII без
+ * невидимих символів. Порядок опцій — той, у якому їх друкує каталог
+ * (`pg_get_functiondef`): розпізнавач порівнює їх переліком. Порожній
+ * `search_path` — інваріант кожної згенерованої функції
+ * (`assertPinnedSearchPath`), хоч виклик і кваліфіковано.
+ */
+function richTextIsEmptyFunction(): string {
+  const escape = (code: number) =>
+    `\\u${code.toString(16).toUpperCase().padStart(4, "0")}`
+  const nonWhitespace = `[^${RICH_TEXT_WHITESPACE.map(escape).join("")}]`
+  const filters = [
+    `(@.type == "text" && @.text like_regex "${nonWhitespace}")`,
+    ...RICH_TEXT_PROFILE.attachments.map(
+      (type) => `@.type == ${JSON.stringify(type)}`
+    ),
+  ]
+  const path = `strict $.** ? (${filters.join(" || ")})`
+  const body = `SELECT NOT pg_catalog.jsonb_path_exists(p_value, ${sqlLiteral(path)}::pg_catalog.jsonpath)`
+  const tag = dollarTag(body)
+  return (
+    `CREATE OR REPLACE FUNCTION ${qualified(RICH_TEXT_IS_EMPTY_FUNCTION)}(p_value jsonb)\n` +
+    `RETURNS boolean\n` +
+    `LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT\n` +
+    `SET search_path = ''\n` +
+    `AS ${tag}\n${body}\n${tag};`
+  )
 }
 
 /**
