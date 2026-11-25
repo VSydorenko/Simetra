@@ -406,9 +406,20 @@ function matches(spec: RichTextNodeSpec, type: string, rest: string): boolean {
  * the value is never changed, a missing attribute is accepted as its default
  * but not filled in. The walk is iterative and never throws, on any value; a
  * refusal names the first offending place (`at`, a path of keys and indexes
- * inside the value) and its rule.
+ * inside the value) and its rule. A value that throws while it is read (a
+ * proxy, a throwing getter) is refused as `shape` at the root.
  */
 export function checkRichText(value: unknown): RichTextCheck {
+  // Закривається, а не пропускає: B8 кличе перевірку на довільному значенні,
+  // і виняток з його читання — відмова, а не збій рендера.
+  try {
+    return walkRichText(value)
+  } catch {
+    return refuse([], "shape")
+  }
+}
+
+function walkRichText(value: unknown): RichTextCheck {
   // Шлях кадру — ланцюжок до батька, а не копія масиву: копія на кожен вузол
   // коштувала б глибина × вузли ще до межі глибини.
   type Frame = {
@@ -515,9 +526,17 @@ const MAX_JSON_DEPTH = 2 * RICH_TEXT_MAX_DEPTH + 2
  * within what a document of {@link RICH_TEXT_MAX_DEPTH} levels can reach. It
  * runs before the recursive size measure of a value, which a deeper value
  * would overflow, and never refuses a value `checkRichText` accepts.
- * Iterative; never throws.
+ * Iterative; never throws: a value that throws while it is read is refused.
  */
 export function richTextDepthOk(value: unknown): boolean {
+  try {
+    return walkDepth(value)
+  } catch {
+    return false
+  }
+}
+
+function walkDepth(value: unknown): boolean {
   const stack: { value: unknown; depth: number }[] = [{ value, depth: 1 }]
   while (stack.length > 0) {
     const { value: item, depth } = stack.pop()!
@@ -544,7 +563,8 @@ function hasNonWhitespace(text: string): boolean {
  * `type` is an attachment node of the profile. Defined over any JSON value,
  * not only a profile document: an array, a string or `{}` is empty. The SQL
  * function `simetra.rich_text_is_empty` gives the same answer. Iterative;
- * never throws.
+ * never throws on a plain JSON value (what an encoded value is); a value that
+ * throws while it is read (a proxy, a getter) is outside its contract.
  */
 export function isRichTextEmpty(value: unknown): boolean {
   const stack: unknown[] = [value]

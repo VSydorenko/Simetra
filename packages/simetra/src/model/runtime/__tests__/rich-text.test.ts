@@ -495,6 +495,51 @@ describe("checkRichText", () => {
   })
 })
 
+describe("values that throw while read", () => {
+  const revoked = () => {
+    const { proxy, revoke } = Proxy.revocable({}, {})
+    revoke()
+    return proxy
+  }
+  const throwingType = () =>
+    Object.defineProperty({}, "type", {
+      enumerable: true,
+      get() {
+        throw new Error("getter")
+      },
+    })
+  const throwingPrototype = () =>
+    new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error("trap")
+        },
+      }
+    )
+  const cases: [string, () => unknown][] = [
+    ["a revoked proxy at the root", revoked],
+    ["a revoked proxy nested", () => doc(revoked())],
+    ["a throwing type getter at the root", throwingType],
+    ["a throwing type getter nested", () => doc(throwingType())],
+    ["a throwing getPrototypeOf trap at the root", throwingPrototype],
+    ["a throwing getPrototypeOf trap nested", () => doc(throwingPrototype())],
+  ]
+
+  it.each(cases)("checkRichText refuses %s", (_, build) => {
+    expect(checkRichText(build())).toEqual({ ok: false, at: [], rule: "shape" })
+  })
+
+  // `Array.isArray` кидає лише на відкликаному проксі, `Object.values` — на
+  // геттері; пастка прототипа обходу глибини не зачіпає.
+  it.each([cases[0]!, cases[1]!, cases[2]!, cases[3]!])(
+    "richTextDepthOk refuses %s",
+    (_, build) => {
+      expect(richTextDepthOk(build())).toBe(false)
+    }
+  )
+})
+
 describe("richTextDepthOk", () => {
   it("accepts the deepest valid document", () => {
     expect(richTextDepthOk(nested(64))).toBe(true)
