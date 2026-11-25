@@ -821,11 +821,16 @@ async function run(
   // який виконується синхронно в `close()`, інакше вікна немає.
   let inClose = false
   let inside: unknown
+  let fired = false
+  let validAtFire: boolean | undefined
   if (condition === "closing") {
     core
       .view({ kind: "keys", object: ORG, keys: [key(9100)] })
       .subscribe(() => {
-        if (inClose && inside === undefined) inside = fire()
+        if (!inClose || fired) return
+        fired = true
+        validAtFire = core.token().valid
+        inside = fire()
       })
     await settle()
   }
@@ -845,6 +850,9 @@ async function run(
     inClose = true
     core.close("disposed")
     await inside
+    // Без цього клітинки вікна проходили б, навіть якби слухач не спрацював.
+    expect(fired, `${code} fired in the purge listener`).toBe(true)
+    expect(validAtFire, `${code} token inside the listener`).toBe(false)
   } else {
     if (condition !== undefined) APPLY[condition](core, recipe.object ?? TASK)
     await fire()
@@ -871,7 +879,14 @@ async function run(
  * Кожну пару запущено. `unreached` — клітинка, де `request: false` не є
  * рішенням шляху чи шлюзу щодо умови: шлях до рішення не дійшов. Причину
  * названо й перевірено мутацією на копії (її вимкнення дає запит); решта
- * `request: false` — наслідок перевірки умови самим шляхом.
+ * `request: false` — наслідок перевірки умови самим шляхом. Для `closed` це
+ * не так у R1–R4, R8, R9, K1, K2: `close()` знімає таймери й приймач, тож шлях
+ * не досягнуто (`unreached`; це читання коду, а не мутація).
+ * `closing` у M1, M2, M3 і S3 вимірює закриту перевірку `core.view`
+ * (`closedHandle`), а не рішення самого шляху; `attempted` для S3 не
+ * вимірюється: S3 — частина, яку ядро додає всередині `dispatch`, а не політ
+ * `read`. Причини `unreachable` у вікні закриття (M4, R10, K3, K4) — теж
+ * читання коду: вимкнення відповідних перевірок тест не червонить.
  */
 const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
   M1: {
@@ -999,7 +1014,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   R1: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
       request: false,
@@ -1019,7 +1039,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   R2: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
       request: false,
@@ -1039,7 +1064,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   R3: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
       request: false,
@@ -1059,7 +1089,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   R4: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
       request: false,
@@ -1103,7 +1138,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     closing: { request: false, then: "purged", attempted: false },
   },
   R8: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
       request: false,
@@ -1118,7 +1158,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   R9: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
       request: false,
@@ -1245,7 +1290,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   K1: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
       request: false,
@@ -1260,7 +1310,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
   },
   K2: {
-    closed: { request: false, then: "purged" },
+    closed: {
+      request: false,
+      then: "purged",
+      unreached:
+        "core onClose clears scheduled/wave and stops the scheduler and the receiver, so the path is never reached (code reading: guard-off of scheduler.stop() or of the scheduler `closed` option stays green because scheduled.clear() is a third layer)",
+    },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": {
       request: false,
@@ -1289,7 +1344,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "ready" },
     "tab-hidden": { request: true, then: "ready" },
-    closing: { request: false, then: "purged", attempted: false },
+    closing: {
+      unreachable:
+        "the update is refused on an invalid token before any write answer (overlay returns closedMutation), so the reread decision of K4 is never reached; the cell would only measure the refused mutation",
+    },
   },
   S1: {
     closed: { request: false, then: "purged" },
@@ -1310,14 +1368,23 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     "stale-object": { request: true, then: "error:command.stale-client+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
-    closing: { request: false, then: "purged", attempted: false },
+    closing: { request: false, then: "purged" },
   },
 }
 
 describe("the paths of Appendix Б on main: request and consequence per condition", () => {
   it.each(SITE_CODES)("%s", async (code) => {
     // Контроль: без умови шлях запит дає. Інакше «запиту немає» нічого не доводить.
-    expect((await run(code, undefined)).request, `${code} control`).toBe(true)
+    const control = await run(code, undefined)
+    expect(control.request, `${code} control`).toBe(true)
+    // Контроль `attempted`: шлях, чию спробу міряє клітина, у контролі її робить.
+    if (
+      CONDITIONS.some((c) => {
+        const cell = TABLE[code][c]
+        return "attempted" in cell && cell.attempted !== undefined
+      })
+    )
+      expect(control.attempted, `${code} control attempted`).toBe(true)
     for (const condition of CONDITIONS) {
       const cell = TABLE[code][condition]
       // Недосяжна пара: причина структурна, прогону немає.
