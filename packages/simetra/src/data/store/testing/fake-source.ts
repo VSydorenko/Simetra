@@ -37,7 +37,7 @@ import type {
   ServerPort,
   StoreSource,
 } from "../source"
-import { createGate, type Flight } from "../sync/flight"
+import { createGate, issueTestFlight, type Flight } from "../sync/flight"
 import {
   TEST_SITE,
   type ReadCause,
@@ -895,7 +895,7 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
 }
 
 /** Шлюз прямих викликів у тестах: польоти не з ядра сесії. */
-export const testGate = createGate()
+const testGate = createGate()
 
 /**
  * Політ прямого виклику джерела в тесті: код `TEST_SITE` поза інвентарем
@@ -905,7 +905,7 @@ export const testFlight = (
   cause: ReadCause = { reason: "user" },
   target: ReadTarget = { kind: "keys", object: "test" },
   site: SiteCode | TestSite = TEST_SITE
-): Flight => testGate.admitTest(cause, target, site)
+): Flight => issueTestFlight(cause, target, site)
 
 export const TEST_FLIGHT: Flight = testFlight()
 

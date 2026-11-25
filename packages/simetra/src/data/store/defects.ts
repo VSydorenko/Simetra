@@ -122,6 +122,8 @@ export type DefectFlag =
   | "sync-pause-no-cause"
   /** The rejoin wave neither reads nor sets requirements. */
   | "rejoin-wave-no-read"
+  /** The gate check of `read` is off, and the tail re-read (K3) sends a forged flight. */
+  | "read-bypasses-gate"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

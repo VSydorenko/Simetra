@@ -46,7 +46,11 @@ const records = new WeakMap<Flight, ReadRecord>()
 export const recordOf = (flight: Flight): ReadRecord | undefined =>
   records.get(flight)
 
-/** Допуск читання. SK-1 (частина А) допускає все; таблицю умов додає задача 3. */
+/**
+ * Допуск читання. SK-1 (частина А) допускає все; таблицю умов додає задача 3.
+ * `issued` — реєстр шлюзу цієї сесії: політ, якого він не видавав (літерал,
+ * політ іншої сесії чи тестового входу), читання ядра відмовляє (Р-SK1-2).
+ */
 export interface Gate {
   admit(
     cause: ReadCause,
@@ -54,31 +58,63 @@ export interface Gate {
     site: SiteCode,
     extras?: FlightExtras
   ): Flight
-  /** Вхід тестів: ті самі польоти, але з кодом `TEST_SITE`. */
-  admitTest(
-    cause: ReadCause,
-    target: ReadTarget,
-    site: SiteCode | TestSite,
-    extras?: FlightExtras
-  ): Flight
+  issued(flight: Flight): boolean
+}
+
+function issue(
+  cause: ReadCause,
+  target: ReadTarget,
+  site: SiteCode | TestSite,
+  extras: FlightExtras
+): Flight {
+  const { attempt, caller, lease } = extras
+  const record: ReadRecord = {
+    ...cause,
+    target,
+    site,
+    ...(attempt === undefined ? {} : { attempt }),
+  }
+  const flight = {
+    ...record,
+    ...(caller === undefined ? {} : { caller }),
+    ...(lease === undefined ? {} : { lease }),
+  } as Flight
+  records.set(flight, record)
+  return flight
 }
 
 export function createGate(): Gate {
-  const issue: Gate["admitTest"] = (cause, target, site, extras = {}) => {
-    const { attempt, caller, lease } = extras
-    const record: ReadRecord = {
-      ...cause,
-      target,
-      site,
-      ...(attempt === undefined ? {} : { attempt }),
-    }
-    const flight = {
-      ...record,
-      ...(caller === undefined ? {} : { caller }),
-      ...(lease === undefined ? {} : { lease }),
-    } as Flight
-    records.set(flight, record)
-    return flight
+  const own = new WeakSet<Flight>()
+  return {
+    admit(cause, target, site, extras = {}) {
+      const flight = issue(cause, target, site, extras)
+      own.add(flight)
+      return flight
+    },
+    issued: (flight) => own.has(flight),
   }
-  return { admit: issue, admitTest: issue }
 }
+
+/**
+ * Вхід тестів (`testing/`): політ прямого виклику джерела, кодом `TEST_SITE`
+ * чи будь-яким кодом інвентаря. Його не видавав шлюз жодної сесії, тож `read`
+ * ядра такий політ відмовляє; джерело ж подію за ним дає.
+ */
+export const issueTestFlight = (
+  cause: ReadCause,
+  target: ReadTarget,
+  site: SiteCode | TestSite,
+  extras: FlightExtras = {}
+): Flight => issue(cause, target, site, extras)
+
+/**
+ * Політ без запису шлюзу: літерал з правдивими причиною, ціллю й кодом.
+ * Лише для мутації самотесту «читання повз шлюз» (`defects.ts`): подія
+ * `watchReads` такого польоту не бачить.
+ */
+export const forgeFlight = (
+  cause: ReadCause,
+  target: ReadTarget,
+  site: SiteCode,
+  extras: FlightExtras = {}
+): Flight => ({ ...cause, target, site, ...extras }) as Flight

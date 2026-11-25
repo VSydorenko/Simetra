@@ -38,7 +38,7 @@ import {
   type ReadEvent,
   type StoreSource,
 } from "./source"
-import { createGate, type Flight } from "./sync/flight"
+import { createGate, forgeFlight, type Flight } from "./sync/flight"
 import type {
   AdmissionCondition,
   DueCause,
@@ -545,6 +545,8 @@ export interface CoreInternals {
   readonly registry: SubsetRegistry
   /** Write leases on rows of the object not yet settled (§8.4, rule 2). */
   readonly pendingWrites: (object: ObjectName) => number
+  /** The source of the core with its gate: tests call `read` with a flight of their own. */
+  readonly source: StoreSource
 }
 
 export function createCore(options: {
@@ -695,6 +697,10 @@ export function createCore(options: {
     },
     admit: gate.admit,
     read: (parts, flight) => {
+      // Політ, якого не видав шлюз цієї сесії, на дріт не йде (Р-SK1-2);
+      // мутація самотесту вимикає перевірку.
+      if (!gate.issued(flight) && !defects.has("read-bypasses-gate"))
+        return Promise.reject(new Error("a read without a flight of the gate"))
       const plan = writesOf(parts)
       if (plan.size > 0) {
         // Шлях, що пише рядки без оренди, — дефект: запис каналу забувся б.
@@ -1357,14 +1363,17 @@ export function createCore(options: {
     const token = session.childToken(() => tail.gen === gen)
     const readEpoch = session.epochs.now()
     const lease = source.lease()
+    const tailCause = {
+      reason: "requirement",
+      requirement: "row-unfinished",
+    } as const
+    const tailTarget = { kind: "keys", object: o.name } as const
     const read = tracked(
       source,
-      source.admit(
-        { reason: "requirement", requirement: "row-unfinished" },
-        { kind: "keys", object: o.name },
-        "K3",
-        { lease }
-      )
+      // Мутація самотесту: політ підроблено, шлюз його не видавав.
+      defects.has("read-bypasses-gate")
+        ? forgeFlight(tailCause, tailTarget, "K3", { lease })
+        : source.admit(tailCause, tailTarget, "K3", { lease })
     )
     readKeys(read.source, o.entry, keys, {
       keysPerRequest: limits.keysPerRequest,
@@ -2663,6 +2672,7 @@ export function createCore(options: {
     registry,
     epochs: session.epochs,
     pendingWrites: writerContext.pendingWrites,
+    source,
   })
 
   inspections.set(core, {
