@@ -36,6 +36,8 @@ export interface O2Input {
   readonly rowAlive?: (object: string, key: string) => boolean
   /** Скільки кроків `suspend` зробила модель (лічильник, не мить). */
   readonly suspends?: number
+  /** Мить моделі останнього кроку `suspend`. */
+  readonly hiddenSince?: number
   /** Вкладка прихована на мить кроку. */
   readonly tabHidden?: boolean
   /** Мить, коли модель востаннє показала вкладку (`resume`). */
@@ -674,7 +676,11 @@ export function createO2(): O2 {
         input.tabHidden === true &&
         input.suspends !== undefined &&
         promise.suspends !== undefined &&
-        input.suspends > promise.suspends
+        input.suspends > promise.suspends &&
+        // `suspend` мусив бути до строку: пропущений на видимій вкладці строк
+        // прихована вкладка потім не прощає.
+        input.hiddenSince !== undefined &&
+        input.hiddenSince <= promise.due
       ) {
         obligations.delete(key)
         followUps.set(key, {
@@ -685,8 +691,11 @@ export function createO2(): O2 {
         })
         continue
       }
+      // Виняток відлічує межу від строку лише тоді, коли строк уже настав.
       const heldByException =
-        state.due === undefined && excusedWithBound(state, input, promise.due)
+        state.due === undefined &&
+        now >= promise.due &&
+        excusedWithBound(state, input, promise.due)
       if (
         promise.kind === "due" &&
         state.due === undefined &&

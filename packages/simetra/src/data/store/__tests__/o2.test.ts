@@ -295,6 +295,8 @@ describe("O2 self-check", () => {
           states: [withdrawn, state(view(3))],
           // Прихована вкладка — видимого тримача нема (названий стан рядка).
           holderVisible: () => over.tabHidden !== true,
+          // `suspend` був до строку (1000), якщо тест не каже інакше.
+          hiddenSince: 500,
           ...common,
           ...over,
         })
@@ -323,6 +325,13 @@ describe("O2 self-check", () => {
     expect(
       at(unread, 50_300, { suspends: 1, tabHidden: false, shownAt: 50_000 })
     ).toMatch(/no read of the row or its holder within the interval/)
+    // Строк минув на видимій вкладці, `suspend` — після строку: прихована
+    // вкладка його вже не прощає (послідовність issue #413).
+    const late = createO2()
+    start(late)
+    expect(
+      at(late, 2_000, { suspends: 1, tabHidden: true, hiddenSince: 1_500 })
+    ).toMatch(/no read by its deadline|no promise and no condition/)
     // (б) Без кроку `suspend` (вкладка видима, таймер нічого не зробив) —
     // пропущений строк червоний.
     const visible = createO2()
@@ -336,6 +345,33 @@ describe("O2 self-check", () => {
     expect(at(noStep, 2_000, { suspends: 0, tabHidden: true })).toMatch(
       /no read by its deadline|no promise and no condition/
     )
+  })
+
+  it("a deadline withdrawn before its time does not stretch the exception to deadline plus bound", () => {
+    const row: SyncTarget = { kind: "row", object: OBJECT, key: "k" }
+    const withDue = state(row, {
+      requirements: [{ kind: "value-hidden" }],
+      due: 1_000,
+    })
+    const withdrawn = state(row, { requirements: [{ kind: "value-hidden" }] })
+    const common = {
+      revalidateMs: 100,
+      holderVisible: () => true,
+      rowAlive: () => true,
+    }
+    const o2 = createO2()
+    o2.step(input({ now: 0, states: [withDue, state(view(3))], ...common }))
+    // Знято на 100, до строку: межа винятку (200) лічиться від 100, не від 1000.
+    expect(
+      o2.step(
+        input({ now: 100, states: [withdrawn, state(view(3))], ...common })
+      )
+    ).toBeUndefined()
+    expect(
+      o2.step(
+        input({ now: 900, states: [withdrawn, state(view(3))], ...common })
+      )
+    ).toMatch(/no promise and no condition/)
   })
 
   it("keeps a queue: the queued read starts, or red", () => {
