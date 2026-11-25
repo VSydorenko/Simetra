@@ -57,7 +57,12 @@ export interface O2Input {
   readonly purgedView?: (target: SyncTarget) => boolean
   /** Чи тримає ціль будь-яке утримання (підписник чи `preload`): без нього вона йде зі звільненням. */
   readonly targetHeld?: (target: SyncTarget) => boolean
-  /** Чи тримає вигляд підписник чи `preload` (видимість не питаємо). */
+  /**
+   * Чи тримає вигляд підписник (видимість не питаємо). `preload` без підписника
+   * тримачем не є: перевірку шапки після `commit` ядро ставить лише виглядам зі
+   * слухачами (`subsets.ts::afterCommit`), тож картка під одним `preload` не
+   * перечитується (рядок 17 §5.14).
+   */
   readonly holderPresent?: (target: SyncTarget) => boolean
   /** Інтервал збіжності й межа паузи збоїв моделі: строк винятків 3 і 5 — їх сума. */
   readonly revalidateMs?: number
