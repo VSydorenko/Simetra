@@ -794,33 +794,63 @@ describe("O2 self-check", () => {
         )
       })
 
-      it("goes with the header of its owner once an applied read left the store without it", () => {
-        const applied = [...loaded, ...settled(8, 2, "reread")]
-        const run = (gone: boolean, attempts: AttemptEvent[]) => {
+      it("goes with its header only after an applied read that asked for the header and got no row", () => {
+        const keysView = (id: number, key: string): SyncTarget => ({
+          kind: "view",
+          object: OBJECT,
+          spec: { kind: "keys", object: OBJECT, keys: [key] },
+          id,
+        })
+        const withHeader = keysView(2, "o")
+        const withoutHeader = keysView(3, "x")
+        const states = [...bare, state(withHeader), state(withoutHeader)]
+        const run = (
+          gone: boolean,
+          readOf: SyncTarget | undefined,
+          outcome: "applied" | "failed" = "applied"
+        ) => {
           const o2 = createO2()
           start(o2)
+          const id = readOf?.kind === "view" ? readOf.id : 0
+          const attempts: AttemptEvent[] = [
+            ...loaded,
+            ...(readOf === undefined
+              ? []
+              : [
+                  ...settled(8, id, "reread").slice(0, 1),
+                  {
+                    phase: "settled",
+                    attempt: 8,
+                    kind: "reread",
+                    target: { kind: "view", object: OBJECT, id },
+                    outcome,
+                  } as AttemptEvent,
+                ]),
+          ]
           return o2.step(
             input({
               ...model,
               now: 10,
-              states: bare,
+              states,
               attempts,
-              events: [],
+              events: readOf === undefined ? [] : [read(id, 0, 8)],
               headerGone: () => gone,
               holderPresent: () => true,
               holderVisible: () => true,
             })
           )
         }
-        // Шапки в сховищі нема й читання осіло: вимога пішла разом із нею.
-        expect(run(true, applied)).toBeUndefined()
-        // Шапка жива: вимога не може зникнути без читання свого вигляду.
-        expect(run(false, applied)).toMatch(
-          /no read of the target within|disappeared/
-        )
-        // Шапки нема, але жодне читання не осіло: це не доказ.
-        expect(run(true, loaded)).toMatch(
-          /no read of the target within|disappeared/
+        // Читання з шапкою в цілі осіло без її рядка, усі тримачі показують
+        // `removed`: вимога пішла разом із шапкою.
+        expect(run(true, withHeader)).toBeUndefined()
+        // Мутація: читання, ціль якого шапки не містить, — не доказ.
+        expect(run(true, withoutHeader)).toMatch(/disappeared with no proof/)
+        // Шапка жива (не всі тримачі показують її `removed`): не доказ.
+        expect(run(false, withHeader)).toMatch(/disappeared with no proof/)
+        // Жодного читання не було, чи воно не осіло застосованим: не доказ.
+        expect(run(true, undefined)).toMatch(/disappeared with no proof/)
+        expect(run(true, withHeader, "failed")).toMatch(
+          /disappeared with no proof/
         )
       })
 

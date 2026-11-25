@@ -34,8 +34,9 @@ export interface O2Input {
    */
   readonly rowAlive?: (object: string, key: string) => boolean
   /**
-   * Шапки власника в сховищі нема для жодного тримача: ключа не показує жоден
-   * вигляд чи кожен показує його рядок як `removed` (читання не знайшло рядка).
+   * Шапка власника в сховищі `removed` для кожного тримача: є вигляд, що її
+   * показує, і кожен показує її рядок як `removed` (читання не знайшло рядка).
+   * Без жодного тримача це не доказ (звільнення тримача — рядок 20 §5.14).
    */
   readonly headerGone?: (object: string, key: string) => boolean
   /**
@@ -890,20 +891,31 @@ export function createO2(): O2 {
             requirement.kind === "target-behind-header" &&
             was.target.kind === "view"
           ) {
-            // Шапка власника зникла зі сховища (її прибрало читання, що не знайшло
-            // рядка): похідна вимога «ціль відстала від шапки» втратила опору й
-            // іде разом із нею, як вимога рядка, якого більше нема. Доказ — застосоване
-            // читання у вікні й шапка, якої не тримає жоден вигляд.
+            // Шапку власника зробило `removed` читання, яке просило її й не
+            // дістало рядка: похідна вимога «ціль відстала від шапки» втратила
+            // опору й іде з нею. Доказ — лише застосоване не-сторінкове читання
+            // у вікні, ціль якого містить ключ шапки, а відповіді — рядка шапки
+            // немає, і всі тримачі показують її `removed`. Будь-яке інше читання
+            // доказом не є; звільнення тримача — прогалина рядка 20.
             const header = ownerKeys(was.target)[0]
+            const ownerObject = was.target.object
             if (
               header !== undefined &&
-              input.headerGone?.(was.target.object, header) === true &&
-              windowOf().attempts.some(
-                (a) =>
-                  a.phase === "settled" &&
-                  a.outcome === "applied" &&
-                  a.kind !== "page"
-              )
+              input.headerGone?.(ownerObject, header) === true &&
+              windowOf().events.some((e) => {
+                if (e.target.kind !== "view" || e.attempt === undefined)
+                  return false
+                if (outcomes.get(e.attempt) !== "applied") return false
+                const id = e.target.id
+                const read = states.find(
+                  (st) => st.target.kind === "view" && st.target.id === id
+                )
+                return (
+                  read !== undefined &&
+                  ownerKeys(read.target).includes(header) &&
+                  !windowOf().rows.has(`${ownerObject}\u0000${header}`)
+                )
+              })
             )
               continue
             const settledAs = (outcome: string) =>

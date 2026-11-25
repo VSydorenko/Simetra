@@ -4467,7 +4467,7 @@ async function runModelOn(
                 ? []
                 : handle.getSnapshot().rows.filter((r) => r.key === k)
             )
-            return shown.every((r) => r.state === "removed")
+            return shown.length > 0 && shown.every((r) => r.state === "removed")
           },
           rowLife: (object, k) =>
             purgeCount.get(id(object as ObjectName, k as Key)) ?? 0,
