@@ -170,3 +170,97 @@ export function signalsConfig(): SignalsConfig | undefined {
   }
   return { url, keys: parseKeys(keys) }
 }
+
+/** Ключі сервера авторизації агентів (спека П4-F §5.4, §6). */
+export interface AgentOauthKeys {
+  /** Перший підписує cookie, решта лише перевіряють (ротація). */
+  cookieKeys: string[]
+  signingKey: { kty: "OKP"; crv: "Ed25519"; x: string; d: string }
+}
+
+const COOKIE_KEYS_VARIABLE = "SIMETRA_AGENT_OAUTH_COOKIE_KEYS"
+const SIGNING_KEY_VARIABLE = "SIMETRA_AGENT_OAUTH_SIGNING_KEY"
+// Ключ cookie коротший за 32 символи легко перебрати
+const COOKIE_KEY_MIN_LENGTH = 32
+
+function parseCookieKeys(raw: string): string[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error(`${COOKIE_KEYS_VARIABLE} is not valid JSON`)
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length === 0 ||
+    !parsed.every(
+      (k): k is string =>
+        typeof k === "string" && k.length >= COOKIE_KEY_MIN_LENGTH
+    )
+  ) {
+    throw new Error(
+      `${COOKIE_KEYS_VARIABLE} must be a non-empty JSON array of strings of at least ${COOKIE_KEY_MIN_LENGTH} characters`
+    )
+  }
+  return parsed
+}
+
+function parseSigningKey(raw: string): AgentOauthKeys["signingKey"] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error(`${SIGNING_KEY_VARIABLE} is not valid JSON`)
+  }
+  const jwk = (
+    typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? parsed
+      : {}
+  ) as Record<string, unknown>
+  if (
+    jwk.kty !== "OKP" ||
+    jwk.crv !== "Ed25519" ||
+    typeof jwk.x !== "string" ||
+    typeof jwk.d !== "string"
+  ) {
+    throw new Error(
+      `${SIGNING_KEY_VARIABLE} must be a private Ed25519 JWK (kty OKP, crv Ed25519, x and d)`
+    )
+  }
+  if (!keyPairMatches(jwk.x, jwk.d)) {
+    throw new Error(
+      `${SIGNING_KEY_VARIABLE} is not an Ed25519 key pair (x must match d)`
+    )
+  }
+  return { kty: "OKP", crv: "Ed25519", x: jwk.x, d: jwk.d }
+}
+
+/**
+ * Ключі сервера авторизації агентів (Р-F4-1): обидві змінні або жодної. Одна
+ * без іншої чи хибне значення зупиняють старт будь-де; без обох production не
+ * стартує, а розробка дістає `undefined` — ефемерні ключі процесу бере вже
+ * модуль сервера авторизації, щоб легкий конфіг їх не генерував на імпорті.
+ */
+export function agentOauthKeys(): AgentOauthKeys | undefined {
+  const cookie = process.env[COOKIE_KEYS_VARIABLE]
+  const signing = process.env[SIGNING_KEY_VARIABLE]
+  const hasCookie = cookie !== undefined && cookie !== ""
+  const hasSigning = signing !== undefined && signing !== ""
+  if (!hasCookie && !hasSigning) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        `${COOKIE_KEYS_VARIABLE} and ${SIGNING_KEY_VARIABLE} are required in production`
+      )
+    }
+    return undefined
+  }
+  if (!hasCookie || !hasSigning) {
+    throw new Error(
+      `${COOKIE_KEYS_VARIABLE} and ${SIGNING_KEY_VARIABLE} must be set together or not at all`
+    )
+  }
+  return {
+    cookieKeys: parseCookieKeys(cookie),
+    signingKey: parseSigningKey(signing),
+  }
+}

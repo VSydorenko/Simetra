@@ -4,7 +4,12 @@ import {
   defaultStreamHandler,
 } from "@tanstack/react-start/server"
 import { LIMIT_REASONS, PAYLOAD_MAX_BYTES } from "simetra/model"
-import { appOrigin, authSecret, signalsConfig } from "./server/config"
+import {
+  agentOauthKeys,
+  appOrigin,
+  authSecret,
+  signalsConfig,
+} from "./server/config"
 import { BodyTooLarge, bodyExceeded, limitBody } from "./server/body-limit"
 import { serverHash } from "./server/runtime"
 // Server Function потрапляє в маніфест збірки лише через граф модулів. Явний
@@ -17,6 +22,7 @@ import "./server/data-fn"
 // а не першим запитом
 appOrigin()
 authSecret()
+agentOauthKeys()
 // Форма й пара ключів (`x` до `d`) перевіряються синхронно, як решта конфігу
 signalsConfig()
 

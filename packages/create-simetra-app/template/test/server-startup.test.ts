@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { stubAgentOauthKeys } from "./agent-oauth-keys"
 import { generateKey, mismatchedKey } from "./signal-keys"
 
 vi.mock("@tanstack/react-start/server", () => ({
@@ -8,8 +9,9 @@ vi.mock("@tanstack/react-start/server", () => ({
 }))
 vi.mock("../src/server/runtime", () => ({ serverHash: "hash" }))
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules()
+  await stubAgentOauthKeys()
   vi.stubEnv("SIMETRA_APP_ORIGIN", "https://app.test")
   vi.stubEnv("BETTER_AUTH_SECRET", "s3cret")
   vi.stubEnv("NODE_ENV", "production")
@@ -34,6 +36,23 @@ describe("server entry startup (spec 4.1)", () => {
   it("refuses to start in production without BETTER_AUTH_SECRET", async () => {
     vi.stubEnv("BETTER_AUTH_SECRET", undefined)
     await expect(import("../src/server")).rejects.toThrow(/BETTER_AUTH_SECRET/)
+  })
+
+  // Р-F4-1: без ключів сервера авторизації production не стартує, навіть коли
+  // решта оточення правильна
+  it("refuses to start in production without the agent authorization server keys", async () => {
+    vi.stubEnv("SIMETRA_AGENT_OAUTH_COOKIE_KEYS", undefined)
+    vi.stubEnv("SIMETRA_AGENT_OAUTH_SIGNING_KEY", undefined)
+    await expect(import("../src/server")).rejects.toThrow(
+      /SIMETRA_AGENT_OAUTH_COOKIE_KEYS and SIMETRA_AGENT_OAUTH_SIGNING_KEY are required in production/
+    )
+  })
+
+  it("refuses to start with an invalid agent signing key", async () => {
+    vi.stubEnv("SIMETRA_AGENT_OAUTH_SIGNING_KEY", "{}")
+    await expect(import("../src/server")).rejects.toThrow(
+      /SIMETRA_AGENT_OAUTH_SIGNING_KEY/
+    )
   })
 
   it("refuses to start with the signals url but without the keys", async () => {
