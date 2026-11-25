@@ -807,7 +807,8 @@ describe("O2 self-check", () => {
         const run = (
           gone: boolean,
           readOf: SyncTarget | undefined,
-          outcome: "applied" | "failed" = "applied"
+          outcome: "applied" | "failed" = "applied",
+          all = states
         ) => {
           const o2 = createO2()
           start(o2)
@@ -831,7 +832,7 @@ describe("O2 self-check", () => {
             input({
               ...model,
               now: 10,
-              states,
+              states: all,
               attempts,
               events: readOf === undefined ? [] : [read(id, 0, 8)],
               headerGone: () => gone,
@@ -840,6 +841,11 @@ describe("O2 self-check", () => {
             })
           )
         }
+        // Читання секції власника шапку не читає: доказом не є.
+        const sectionRead: SyncTarget = { ...section, id: 4 }
+        expect(
+          run(true, sectionRead, "applied", [...states, state(sectionRead)])
+        ).toMatch(/disappeared with no proof/)
         // Читання з шапкою в цілі осіло без її рядка, усі тримачі показують
         // `removed`: вимога пішла разом із шапкою.
         expect(run(true, withHeader)).toBeUndefined()

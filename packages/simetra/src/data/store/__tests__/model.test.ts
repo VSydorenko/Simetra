@@ -69,7 +69,7 @@ import {
 } from "./core-support"
 import { collectCore, type ReadCollector, type StampedEvent } from "./oracles"
 import type { AttemptEvent } from "../attempts"
-import { assertEvaluated, createO2 } from "./o2"
+import { assertEvaluated, createO2, readsHeader } from "./o2"
 import {
   assertEvaluated as assertO3Evaluated,
   checkpoints as o3Checkpoints,
@@ -4686,10 +4686,7 @@ async function runModelOn(
             if (
               subs[w] === undefined ||
               other.object !== spec.object ||
-              !(
-                (other.kind === "keys" && other.keys.includes(spec.owner)) ||
-                (other.kind === "card" && other.key === spec.owner)
-              )
+              !readsHeader(other, spec.owner)
             )
               return false
             const held = internals.registry.find(other)

@@ -1,6 +1,7 @@
 import { readResultFromWire, type ReadQuery } from "simetra/model"
 import type { AttemptEvent } from "../attempts"
 import type { SyncState, SyncTarget } from "../core"
+import type { ViewSpec } from "../types"
 import type { RequirementKind } from "../sync/vocabulary"
 import type { FakeReadLog, FakeSource } from "../testing/fake-source"
 import type { StampedEvent } from "./oracles"
@@ -351,6 +352,15 @@ export const PROOFS: Readonly<
 }
 
 /** Ключі рядків, які вигляд читає за власником: власник ТЧ, ключ картки, ключі `keys`. */
+/**
+ * Вигляд читає шапку власника `owner`: вигляд ключів, що містить власника, чи
+ * картка власника. Секція шапки не читає (вона перечитує рядки ТЧ), тож не є ні
+ * доказом зникнення шапки в О2, ні її тримачем в О3.
+ */
+export const readsHeader = (spec: ViewSpec, owner: string): boolean =>
+  (spec.kind === "keys" && spec.keys.includes(owner)) ||
+  (spec.kind === "card" && spec.key === owner)
+
 function ownerKeys(target: SyncTarget): readonly string[] {
   if (target.kind !== "view") return []
   const spec = target.spec
@@ -912,7 +922,8 @@ export function createO2(): O2 {
                 )
                 return (
                   read !== undefined &&
-                  ownerKeys(read.target).includes(header) &&
+                  read.target.kind === "view" &&
+                  readsHeader(read.target.spec, header) &&
                   !windowOf().rows.has(`${ownerObject}\u0000${header}`)
                 )
               })
