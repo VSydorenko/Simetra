@@ -5,6 +5,7 @@
 // сторожа однакова.
 import { randomBytes } from "node:crypto"
 import net from "node:net"
+import { currentStack } from "../../../../scripts/db-stack.mjs"
 import {
   postgresLockPath,
   loginSecrets,
@@ -103,6 +104,22 @@ export function demoStack(
   return { maintenanceUrl, dsns }
 }
 
+/**
+ * Позначка стека в повідомленнях: порожня для стека 1 (тексти без змін),
+ * інакше змінна, якою обирають той самий стек для `demo` і `demo:drop`.
+ */
+export function stackNote(index: number): string {
+  return index === 1 ? "" : ` (SIMETRA_STACK=${index})`
+}
+
+export function busyMessage(index: number, detail: string): string {
+  return `DB run in progress on the postgres stack${stackNote(index)}, retry when it ends (${detail})`
+}
+
+export function noDemoMessage(index: number): string {
+  return `demo: no ${DEMO_DATABASE} database${stackNote(index)}; nothing to drop`
+}
+
 async function readState(maintenanceUrl: string): Promise<DemoState> {
   const rows = await withClient(maintenanceUrl, async (client) => {
     const result = await client.query<{ comment: string | null }>(
@@ -132,9 +149,7 @@ async function underLock(fn: () => Promise<void>): Promise<void> {
       error instanceof Error &&
       / stack is in use by PID /.test(error.message)
     )
-      throw new Error(
-        `DB run in progress on the postgres stack, retry when it ends (${error.message})`
-      )
+      throw new Error(busyMessage(currentStack().index, error.message))
     throw error
   }
 }
@@ -328,7 +343,7 @@ export async function demoDrop(): Promise<void> {
   await underLock(async () => {
     const step = demoStep("drop", await readState(stack.maintenanceUrl))
     if (step === "nothing") {
-      console.log(`demo: no ${DEMO_DATABASE} database; nothing to drop`)
+      console.log(noDemoMessage(currentStack().index))
       return
     }
     await dropDemo(stack.maintenanceUrl)
