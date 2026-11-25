@@ -112,6 +112,8 @@ export type DefectFlag =
   | "receiver-ignores-horizon"
   /** A page settle drops the requirement "composition not confirmed" of its view. */
   | "page-drops-requirement"
+  /** The rejoin wave neither reads nor sets requirements. */
+  | "rejoin-wave-no-read"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

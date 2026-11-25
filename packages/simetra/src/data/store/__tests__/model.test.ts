@@ -40,7 +40,7 @@ import { createCoreSource, createReadLimiter, type ServerPort } from "../source"
 import { EPOCH_UNAVAILABLE, type Subset } from "../subsets"
 import type { FakeRead, FakeReadLog, FakeSource } from "../testing/fake-source"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
-import { MIN_VERSION_RETRIES } from "../receiver"
+import { MIN_VERSION_RETRIES, REJOIN_JITTER_MS } from "../receiver"
 import {
   DEFAULT_CORE_LIMITS,
   type CloseReason,
@@ -70,6 +70,18 @@ import {
 import { collectCore, type ReadCollector, type StampedEvent } from "./oracles"
 import type { AttemptEvent } from "../attempts"
 import { assertEvaluated, createO2 } from "./o2"
+import {
+  assertEvaluated as assertO3Evaluated,
+  checkpoints as o3Checkpoints,
+  createO3,
+  judgeRows,
+  judgeSection,
+  lastBound as o3LastBound,
+  type O3Change,
+  type O3Join,
+  type O3State,
+  type O3View,
+} from "./o3"
 import { trackViews } from "./view-facts"
 
 /*
@@ -98,6 +110,10 @@ const TITLES = ["a", "m", "t", "z"]
 
 // Розкид перечитування після перемикання епохи — у межах кроків `time`.
 const REVALIDATE_MS = 2_000
+// Інтервал перевірки свіжості поточного прогону: за замовчуванням `REVALIDATE_MS`;
+// прогін самотесту «хвиля приєднання не читає» бере інтервал, набагато більший за
+// джитер приєднання, щоб такт не підміняв хвилю (план SK-0, Р-SK0-9).
+let runInterval = REVALIDATE_MS
 // Межа свіжості `resume()` — менша за кроки `time`: частина виглядів старша
 // за неї, частина молодша.
 const RESUME_MIN_MS = 500
@@ -114,7 +130,9 @@ const LIMITS = {
   fullPageSize: 3,
   // Сторінка вікна у два рядки: п'ять задач дають кілька сторінок.
   windowPage: 2,
-  revalidateIntervalMs: REVALIDATE_MS,
+  get revalidateIntervalMs() {
+    return runInterval
+  },
   resumeMinIntervalMs: RESUME_MIN_MS,
 }
 const RELEASE_MS = 1_000
@@ -735,6 +753,20 @@ interface Delivery {
 
 class ModelFailure extends Error {}
 
+/**
+ * Кроки, що не змінюють ні правди сервера, ні віри клієнта (О3 не рахує їх
+ * зміною): плин часу, життєвий цикл вкладки й події каналу, які самі лише
+ * вказують читанню час.
+ */
+const QUIET_STEPS: ReadonlySet<Step["t"]> = new Set([
+  "time",
+  "due",
+  "join",
+  "transport",
+  "suspend",
+  "resume",
+])
+
 /** One attempt of a mutation as the model tracks it. */
 interface ModelAttempt {
   id: string
@@ -827,7 +859,7 @@ const id = (object: ObjectName, k: Key) => `${object}\u0000${k}`
  * від старту невдалої спроби.
  */
 const pauseAfter = (failures: number) =>
-  Math.min(REVALIDATE_MS, 0.1 * REVALIDATE_MS * 2 ** (failures - 1))
+  Math.min(runInterval, 0.1 * runInterval * 2 ** (failures - 1))
 
 /**
  * Строк вигляду очима моделі: після збоїв — кінець паузи, інакше мить
@@ -840,7 +872,7 @@ interface DueFacts {
   readonly refreshedAt: number | undefined
 }
 
-const modelDue = (sub: DueFacts, ageMs: number = REVALIDATE_MS) =>
+const modelDue = (sub: DueFacts, ageMs: number = runInterval) =>
   sub.failures > 0 && sub.failedAt !== undefined
     ? sub.failedAt + pauseAfter(sub.failures)
     : sub.refreshedAt === undefined
@@ -856,6 +888,23 @@ let idleChecks = 0
 /** Станів спокою з вимогою, які О2 оцінив за прогони: без них О2 порожній. */
 let o2Checks = 0
 
+/** Що О3 бачив у прогоні, який він зачервонив: самотест мутації «хвиля приєднання не читає». */
+let o3Report:
+  | {
+      readonly objects: readonly ObjectName[]
+      readonly bound: number
+      readonly joins: readonly O3Join[]
+      readonly server: readonly O3Change[]
+      readonly reads: readonly { at: number; object: ObjectName | undefined }[]
+    }
+  | undefined
+
+/** Інтервал самотесту хвилі: набагато більший за джитер приєднання, такт хвилю не підміняє. */
+const LONG_INTERVAL_MS = 600_000
+
+/** Виглядів, які О3 порівняв із сервером за прогони: без них О3 порожній. */
+let o3Checks = 0
+
 /**
  * Прогін моделі. Ядро закривається наприкінці (і після збою): модель
  * перевіряє, що після закриття таймерів немає, і наступний прогін не бачить
@@ -868,9 +917,11 @@ async function runModel(
   defects: readonly DefectFlag[] = [],
   schedulerChecks = true,
   rights = false,
-  signals = false
+  signals = false,
+  intervalMs = REVALIDATE_MS
 ) {
   const held: { core?: CoreSession; reads?: ReadCollector } = {}
+  runInterval = intervalMs
   try {
     await runModelOn(
       steps,
@@ -893,6 +944,7 @@ async function runModel(
     // Прогін, що впав раніше, не лишає збирача на перевірку тесту.
     held.reads?.stop()
     held.core?.close("disposed")
+    runInterval = REVALIDATE_MS
   }
   const timers = vi.getTimerCount()
   if (timers !== 0) fail("end", `${timers} timers after close`)
@@ -3192,6 +3244,74 @@ async function runModelOn(
     return purgedKeys
   }
 
+  // ── О3: правда сервера очима клієнта й зміни, за якими модель веде межі ──
+  /**
+   * Рядок, який сервер віддав би клієнтові: його видимість (RLS моделі) і
+   * права користувача входять у правду, а не лише наявність рядка.
+   */
+  const truthRow = (object: ObjectName, k: Key) => {
+    const row = fake.row(object, k)
+    if (row === undefined) return undefined
+    const scope =
+      object === ORG
+        ? k
+        : ((row.values.org as string | null | undefined) ?? null)
+    if (
+      scope !== null &&
+      visibility !== undefined &&
+      !visibility.includes(scope)
+    )
+      return undefined
+    if (grantDenies(serverGrant, object, scope)) return undefined
+    return row
+  }
+  const serverDigest = () =>
+    [TASK, ORG].map((object) =>
+      (object === TASK ? KEYS : ORG_KEYS)
+        .map((k) => truthRow(object, k)?.version ?? "-")
+        .join()
+    )
+  let digest = serverDigest()
+  /**
+   * Приєднання каналу, яке тримає приймач: його об'єкт іде в хвилю (О3 бере від
+   * нього межу зміни, про яку клієнт дізнається цією подією).
+   */
+  const joined = (channel: string, recovered: boolean) => {
+    const at = CHANNELS.indexOf(channel)
+    const object = at < 2 ? TASK : ORG
+    if (
+      closed === undefined &&
+      !sessionChanged &&
+      transport.subscribed().has(channel) &&
+      !staled.has(object)
+    )
+      o3Joins.push({ object, at: clock, after: ownEvents().length })
+    transport.join(channel, recovered)
+  }
+  const o3Changes: O3Change[] = []
+  const o3Joins: O3Join[] = []
+  const o3Server: O3Change[] = []
+  /** Фіксує зміну правди сервера: час моделі — кінець кроку, у якому її побачено. */
+  /**
+   * Збій читання (відмова чи недоступність сервера): правда не змінилась, але
+   * показ вигляду міг стати помилкою до наступного читання, а його не викликає
+   * подія каналу.
+   */
+  const noteFault = (object: ObjectName | undefined) => {
+    for (const o of object === undefined ? [TASK, ORG] : [object])
+      o3Changes.push({ object: o, at: clock })
+  }
+  const noteServerChanges = () => {
+    const next = serverDigest()
+    ;[TASK, ORG].forEach((object, i) => {
+      if (next[i] !== digest[i]) {
+        o3Changes.push({ object, at: clock })
+        o3Server.push({ object, at: clock })
+      }
+    })
+    digest = next
+  }
+
   for (const [n, raw] of plan.entries()) {
     const s = onMutation(raw)
     const label = `step ${n} ${JSON.stringify(s)}`
@@ -3333,10 +3453,12 @@ async function runModelOn(
           fake.pending.length - 1 - (s.pick % fake.pending.length)
         )
         if (s.how === "forbidden") {
+          noteFault(read.object)
           read.fail("command.forbidden")
           break
         }
         if (s.how === "unavailable") {
+          noteFault(read.object)
           read.fail("command.unavailable")
           break
         }
@@ -3360,6 +3482,10 @@ async function runModelOn(
                       : ORG_KEYS
           const gone = asked.filter((k) => live(object, k))
           const victim = gone[s.at % Math.max(gone.length, 1)]
+          // Правда сервера на мить змінилась (рядок зник чи скоуп сховано), і
+          // клієнт міг це прочитати, хоч до кінця кроку рядок повертається: це
+          // зміна без події каналу для О3.
+          if (victim !== undefined) o3Changes.push({ object, at: clock })
           if (victim === undefined) read.answer()
           else if (s.at % 3 === 0) {
             fake.remove(object, victim)
@@ -3567,7 +3693,7 @@ async function runModelOn(
         // З приймачем розрив і приєднання йдуть лише через транспорт: пряма
         // позначка розійшлася б із каналами, які він тримає.
         if (signals) {
-          if (s.join && ch !== undefined) transport.join(ch, false)
+          if (s.join && ch !== undefined) joined(ch, false)
           else transport.fail({ kind: "transport", channel: ch })
           break
         }
@@ -3745,7 +3871,7 @@ async function runModelOn(
             ([name, due]) => due <= at && !staled.has(name)
           )
         const byTick = (sub: Subset) =>
-          overdue && !young(sub, at, 0.9 * REVALIDATE_MS)
+          overdue && !young(sub, at, 0.9 * runInterval)
         // Читання не бере вигляд, чий строк не настав (молодша за межу відмітка,
         // пауза після збою чи вигляд, що ще не читався), вигляд у польоті й
         // вигляд, що вичерпав межу відкинутих (спека П4-B §6.7).
@@ -3860,7 +3986,7 @@ async function runModelOn(
         const seven = internals.registry.find(SPECS[7]!)
         if (seven !== undefined) visibleBy.set(seven.targetId, true)
         await flush()
-        advance(2 * REVALIDATE_MS)
+        advance(2 * runInterval)
         await flush()
         for (const [sub, rereads] of before)
           if (
@@ -3906,7 +4032,7 @@ async function runModelOn(
             ([name, due]) => due <= at && !staled.has(name)
           )
         const byTick = (sub: Subset) =>
-          overdue && !young(sub, at, 0.9 * REVALIDATE_MS)
+          overdue && !young(sub, at, 0.9 * runInterval)
         // Вимога сильніша за вік (§8.4, п. 7): вигляд, чия вимога «склад не
         // підтверджено» стояла на старті кроку поза паузою збою, `resume()`
         // читає й молодшим за межу. Лише такий: молодий вигляд без вимоги
@@ -4177,7 +4303,7 @@ async function runModelOn(
       case "join":
         // Мітка О2: читання, що знімає вимогу приєднання, стартує після неї.
         joinMark = ownEvents().length
-        if (signals) transport.join(CHANNELS[s.ch]!, s.recovered)
+        if (signals) joined(CHANNELS[s.ch]!, s.recovered)
         break
       case "transport":
         if (signals)
@@ -4255,8 +4381,10 @@ async function runModelOn(
       if (closed === undefined) {
         for (const read of fake.pending.filter(
           (r) => fake.log.indexOf(r.log) >= stepStart
-        ))
+        )) {
+          noteFault(read.object)
           fake.take((r) => r === read).fail("command.unavailable")
+        }
         await flush()
       }
       outage--
@@ -4282,7 +4410,7 @@ async function runModelOn(
           events: ownEvents(),
           attempts: ownAttempts,
           fake,
-          revalidateMs: REVALIDATE_MS,
+          revalidateMs: runInterval,
           releaseDelayMs: DEFAULT_CORE_LIMITS.releaseDelayMs,
           lastJoin: () => joinMark,
           // Тримач — слухач вигляду з кроків моделі, видимий на видимій вкладці.
@@ -4385,6 +4513,12 @@ async function runModelOn(
     if (purgedKeys !== undefined) checkPurged(label, purgedKeys)
     noteGens(userViews.size > 0)
     stability(label, before, purgeStep, rightsPurgeable)
+    noteServerChanges()
+    // Шаг, що міг змінити віру клієнта без події каналу (`purge`, `hide`,
+    // відповідь-репліка, права, перегідратація), — зміна для О3 в обох
+    // об'єктах: клієнт виправляє її лише читанням за інтервалом.
+    if (!QUIET_STEPS.has(s.t))
+      for (const object of [TASK, ORG]) o3Changes.push({ object, at: clock })
   }
 
   // Утримана відповідь `rights` доходить до злиття: інакше її запит не осяде.
@@ -4433,6 +4567,7 @@ async function runModelOn(
     const before = lists()
     const slow = late.shift()
     const read = slow ?? fake.take()
+    noteFault(read.object)
     read.answer(slow !== undefined || i % 2 === 0 ? read.issuedAt : fake.clock)
     record(read)
     await flush()
@@ -4441,7 +4576,177 @@ async function runModelOn(
     stability(`drain ${i}`, before, false, rightsPurgeable)
   }
 
+  if (closed === undefined) await o3Phase()
   if (closed === undefined) await converge()
+
+  /**
+   * О3 (спека §5.13, план SK-0 Р-SK0-9): вкладка видима, без `refresh()` і
+   * `revalidate`, іде час моделі; кожен видимий вигляд, чия межа минула, мусить
+   * показувати правду сервера. Межу кожної зміни рахує оракул за причиною.
+   */
+  async function o3Phase() {
+    // База відповідає епохою, за якою йде сесія: інакше кожне читання відкидає
+    // не оракул, а модель (так само, як у збіжності).
+    fake.epoch = inspect.versionEpochs().current
+    noteServerChanges()
+    if (!core.visible) core.resume()
+    const phaseStart = clock
+    const o3 = createO3()
+    const views = (): O3View[] =>
+      SPECS.flatMap((spec, v): O3View[] => {
+        const sub = internals.registry.find(spec)
+        if (
+          subs[v] === undefined ||
+          sub === undefined ||
+          !core.visible ||
+          !(visibleBy.get(sub.targetId) ?? true)
+        )
+          return []
+        const snap = handles[v]!.getSnapshot()
+        const objects = [
+          sub.form.object.name,
+          ...sub.form.include.map((step) => step.target),
+        ]
+        let state: O3State = "live"
+        if (snap.status === "purged") state = "purged"
+        else if (inspect.versionEpochs().unavailable) state = "discard-bound"
+        else if (objects.some((o) => staled.has(o))) state = "stale-object"
+        else if (
+          snap.status === "error" &&
+          !sub.loaded &&
+          tracker.failures(sub.targetId) === 0
+        )
+          state = "first-load-error"
+        else if (
+          spec.kind === "section" &&
+          snap.section?.ownerState === "removed"
+        )
+          state = "section-owner-removed"
+        else if (
+          (spec.kind === "card" || spec.kind === "section") &&
+          sub.loaded
+        ) {
+          const duty = syncedViews().get(sub.targetId)
+          if (
+            duty !== undefined &&
+            duty.requirements.length === 0 &&
+            duty.flights.length === 0 &&
+            duty.queued.length === 0 &&
+            duty.due === undefined
+          )
+            state = "card-without-duty"
+        }
+        return [
+          {
+            id: sub.targetId,
+            objects,
+            state,
+            truth: () => o3Truth(v),
+          },
+        ]
+      })
+    const input = () => ({
+      now: clock,
+      phaseStart,
+      intervalMs: runInterval,
+      changes: o3Changes,
+      joins: o3Joins,
+      views: views(),
+    })
+    const settle = async (label: string) => {
+      for (let i = 0; ; i++) {
+        await flush()
+        if (fake.pending.length === 0) return
+        if (i > 200) fail(label, "reads never end")
+        const stepStart = fake.log.length
+        logAt = log.length
+        restoredInStep.clear()
+        while (fake.pending.length > 0) {
+          const read = fake.take()
+          read.answer()
+          record(read)
+        }
+        await flush()
+        check(label, stepStart)
+      }
+    }
+    const judge = () => {
+      const problem = o3.step(input())
+      if (problem === undefined) return
+      const failure = o3.failure()!
+      o3Report = {
+        ...failure,
+        joins: [...o3Joins],
+        server: [...o3Server],
+        reads: ownEvents().map((e) => ({
+          at: e.at,
+          object:
+            e.target.kind === "service"
+              ? undefined
+              : (e.target.object as ObjectName),
+        })),
+      }
+      fail("o3", problem)
+    }
+    await settle("o3 start")
+    if (closed !== undefined) return
+    judge()
+    const end = o3LastBound(input())
+    for (const at of o3Checkpoints(input())) {
+      // Вікно приєднання проходимо дрібно, щоб хвиля читала в свій час; далі —
+      // стрибком до межі такту.
+      while (clock < at) {
+        advance(
+          clock < phaseStart + 2_500 ? Math.min(at - clock, 500) : at - clock
+        )
+        await settle(`o3 ${clock}`)
+        if (closed !== undefined) return
+      }
+      judge()
+    }
+    if (clock < end) fail("o3", "the model did not reach the last bound")
+    o3Checks += o3.evaluated()
+  }
+
+  /** Розбіжність показу вигляду з правдою сервера; `undefined` — збігається. */
+  function o3Truth(v: number): string | undefined {
+    const spec = SPECS[v]!
+    const snap = handles[v]!.getSnapshot()
+    const where = `o3 view ${v}`
+    const rowMismatch = (row: RowView) => {
+      try {
+        sameAsServer(where, spec.object, row)
+        return undefined
+      } catch (error) {
+        if (error instanceof ModelFailure) return error.message
+        throw error
+      }
+    }
+    if (snap.status !== "ready") return `${where}: status ${snap.status}`
+    // Склад вигляду системне перечитування не змінює (нові рядки чекають дії
+    // користувача, `hasNewRows`): О3 судить показані рядки, а не склад.
+    const rows = judgeRows(
+      snap.rows.map((row) => ({
+        state: row.state,
+        mismatch: () => rowMismatch(row),
+      }))
+    )
+    if (rows !== undefined) return rows
+    if (spec.kind !== "section" || snap.section === undefined) return undefined
+    const owner = truthRow(TASK, spec.owner)
+    const problem = judgeSection(
+      {
+        ownerVersion: owner?.version,
+        lines: owner === undefined ? [] : linesHistory.at(-1)!.qty,
+      },
+      {
+        ownerState: snap.section.ownerState,
+        ownerVersion: snap.section.ownerVersion,
+        lines: snap.section.lines.map((l) => l.values.qty),
+      }
+    )
+    return problem === undefined ? undefined : `${where}: ${problem}`
+  }
 
   /**
    * Збіжність до сервера: відновлюємо видимість, перечитуємо кожен
@@ -4634,7 +4939,7 @@ async function runModelOn(
   function sameAsServer(where: string, object: ObjectName, row: RowView) {
     const at = `${where} ${object}/${row.key}`
     if (staled.has(object)) return
-    const server = fake.row(object, row.key)
+    const server = truthRow(object, row.key)
     if (row.state === "removed") {
       if (server !== undefined)
         fail(where, `${at}: removed, the server has the row`)
@@ -4657,7 +4962,7 @@ async function runModelOn(
         // `null` — лише для цілі, якої сервер не показує; наявна ціль
         // не може лишитись порожньою (гонка власності `include`).
         const target = row.values[field]
-        if (typeof target === "string" && fake.row(ORG, target) !== undefined)
+        if (typeof target === "string" && truthRow(ORG, target) !== undefined)
           fail(where, `${at}.${field}: ref is null, the server has the target`)
       }
     }
@@ -4681,7 +4986,8 @@ const property = (
   defects: readonly DefectFlag[] = [],
   schedulerChecks = true,
   rights = false,
-  signals = false
+  signals = false,
+  intervalMs = REVALIDATE_MS
 ) =>
   fc.asyncProperty(
     fc.array(signals ? SIGNAL_STEP : rights ? RIGHTS_STEP : STEP, {
@@ -4700,7 +5006,8 @@ const property = (
           defects,
           schedulerChecks,
           rights,
-          signals
+          signals,
+          intervalMs
         )
       )
   )
@@ -4726,6 +5033,7 @@ describe("core model", () => {
       tickReads = 0
       idleChecks = 0
       o2Checks = 0
+      o3Checks = 0
       await fc.assert(property(), {
         numRuns: RUNS,
         ...interruptWithin(BUDGET_MS),
@@ -4734,6 +5042,7 @@ describe("core model", () => {
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
       expect(idleChecks, "no step in an idle window").toBeGreaterThan(0)
       assertEvaluated(o2Checks, "the plain property")
+      assertO3Evaluated(o3Checks, "the plain property")
     },
     BUDGET_MS
   )
@@ -4747,12 +5056,14 @@ describe("core model", () => {
     async () => {
       tickReads = 0
       o2Checks = 0
+      o3Checks = 0
       await fc.assert(property([], true, true), {
         numRuns: RUNS,
         ...interruptWithin(RIGHTS_BUDGET_MS),
       })
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
       assertEvaluated(o2Checks, "the rights property")
+      assertO3Evaluated(o3Checks, "the rights property")
     },
     RIGHTS_BUDGET_MS
   )
@@ -4766,12 +5077,14 @@ describe("core model", () => {
     async () => {
       tickReads = 0
       o2Checks = 0
+      o3Checks = 0
       await fc.assert(property([], true, true, true), {
         numRuns: RUNS,
         ...interruptWithin(RIGHTS_BUDGET_MS),
       })
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
       assertEvaluated(o2Checks, "the signals property")
+      assertO3Evaluated(o3Checks, "the signals property")
     },
     RIGHTS_BUDGET_MS
   )
@@ -4969,6 +5282,18 @@ describe("core model regressions", () => {
       seed: -1229539262,
       path: "837:9:6:10:11:11:13:18:19:19:19:22:25:37:38:39:39:39:47:40:38:42:42:42:27:25:25:25:25:28:25:25:26:27:27:26:27:32:26:26:26:31:28:29:26:27:27",
     },
+    // О3: картка без власної вимоги й строку над рядком, якого сервер не має.
+    {
+      issue: "O3 card without duty",
+      seed: 0,
+      path: "467",
+    },
+    // О3: ТЧ, чий власник `removed`, і шапку читає лише перечитування шапки.
+    {
+      issue: "O3 section over a removed owner",
+      seed: -1579167006,
+      path: "37:2:3:5:13:13:21:30:23:22:22:24:29:29:39:38:42:45:43:44:46:48:27:25:25:25:25:25:9:12:2:13:4:7:11:11:11:12:12:12:12:14:13:13:13:12:12:12:12:12",
+    },
     {
       issue: "O2 purged row returns",
       o2: true,
@@ -4995,6 +5320,7 @@ describe("core model regressions", () => {
     "replays the counterexample of #$issue (seed $seed)",
     async ({ seed, path, rights = false, signals = false, o2 = false }) => {
       o2Checks = 0
+      o3Checks = 0
       await fc.assert(property([], true, rights, signals), {
         seed,
         path,
@@ -5276,7 +5602,7 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // генератора (крок епохи) знаходить ТЧ.
   "purge-keeps-views": /(card|section) of purged/,
   "purge-marks-unrelated-views": /purged without a purge of its key/,
-  "absent-row-ignored": /^converge/,
+  "absent-row-ignored": /^o3: view \d+ past its bound/,
   "unbounded-seen": /seen \d+ > \d+/,
   "system-reread-via-load": /composition/,
   "hide-lifted-by-older-read": /after hide without a later read/,
@@ -5301,7 +5627,7 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Повернення: межа свіжості виглядів.
   "min-age-ignored": /a view younger than the limit (got a read|was re-read)/,
   "min-age-ignored-sections": /a view younger than the limit was re-read/,
-  "min-age-all-young": /a view older than the limit was not re-read/,
+  "min-age-all-young": /^o3: view \d+ past its bound/,
   // Пізня підписка гідрованого вигляду (§6.6): рядок знімка без читання.
   "late-hydrated-not-reread": /after hydrate: view \d+ .*(server|hidden)/,
   // Довіра — факт рядка: картка над рядком непідписаного гідрованого списку.
@@ -5337,6 +5663,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "receiver-ignores-horizon": /a signal read without a signal/,
   // О2, половина (б): сторінка знімає вимогу, якої доводить лише читання всього вигляду.
   "page-drops-requirement": /composition-unconfirmed disappeared with no proof/,
+  // О3: без читання хвилі вигляд лишається зі старим рядком до межі приєднання.
+  "rejoin-wave-no-read": /^o3: view \d+ past its bound/,
 }
 
 // Насіння самотесту, коли насіння 1 не знаходить дефекту за 10 000 прогонів.
@@ -5350,11 +5678,6 @@ const SELF_CHECK_SEEDS: Partial<Record<DefectFlag, number>> = {
   // Вікно спокою О4 відкрите (вкладка прихована, нічого в польоті) раніше, ніж
   // наявна перевірка планувальника бачить такт.
   "scheduler-fires-hidden": 4,
-}
-
-// Насіння прогонів з сигналами, коли ним самотест не збігається з простим.
-const SIGNAL_SELF_CHECK_SEEDS: Partial<Record<DefectFlag, number>> = {
-  "scheduler-fires-hidden": 17,
 }
 
 // Явний контрприклад самотесту: мутацію знаходить лише вузька послідовність, яку
@@ -5380,6 +5703,11 @@ const SELF_CHECK_EXAMPLES: Partial<
   ],
 }
 
+// Насіння прогонів з сигналами, коли ним самотест не збігається з простим.
+const SIGNAL_SELF_CHECK_SEEDS: Partial<Record<DefectFlag, number>> = {
+  "scheduler-fires-hidden": 17,
+}
+
 // Дефекти правила втрати доступу (B5b-2): їх ловлять прогони зі знімком прав.
 const RIGHTS_DEFECTS: readonly DefectFlag[] = [
   "rights-no-barrier",
@@ -5401,9 +5729,11 @@ describe("core model self-check", () => {
   // вимог, тож лічильник судить усі прогони дефектів разом.
   beforeAll(() => {
     o2Checks = 0
+    o3Checks = 0
   })
   afterAll(() => {
     assertEvaluated(o2Checks, "the defect self-check runs")
+    assertO3Evaluated(o3Checks, "the defect self-check runs")
   })
 
   it.each(DEFECTS)(
@@ -5455,6 +5785,115 @@ describe("core model self-check", () => {
       const [steps, preloaded, profile] = result.counterexample!
       await modelRun(runModel(steps, preloaded, profile, [], true, true))
       expect((result.errorInstance as Error).message).toMatch(CAUGHT_BY[flag]!)
+    },
+    RIGHTS_BUDGET_MS
+  )
+
+  // О3 (Р-SK0-9): хвиля приєднання не читає. Профіль з інтервалом набагато
+  // більшим за джитер: такт не підміняє хвилю, тож лише хвиля виправляє рядок,
+  // який сервер змінив до приєднання.
+  it(
+    "turns red with the defect rejoin-wave-no-read (a long interval)",
+    async () => {
+      const flag = "rejoin-wave-no-read"
+      // Контрприклад доводить саме хвилю: приєднання прийнято, сервер змінив
+      // рядок до нього, і жодне інше читання об'єкта не стартувало між
+      // приєднанням і межею О3. Інакше О3 червоний з іншої причини, і пошук іде далі.
+      const provesWave = (): boolean => {
+        const report = o3Report
+        if (report === undefined) return false
+        const join = report.joins.find(
+          (j) =>
+            report.objects.includes(j.object) &&
+            j.at + REJOIN_JITTER_MS === report.bound
+        )
+        return (
+          join !== undefined &&
+          report.server.some(
+            (c) => report.objects.includes(c.object) && c.at <= join.at
+          ) &&
+          !report.reads.some(
+            (r, n) =>
+              n >= join.after! &&
+              r.at <= report.bound &&
+              r.object !== undefined &&
+              report.objects.includes(r.object)
+          )
+        )
+      }
+      const run = (defects: readonly DefectFlag[]) =>
+        fc.asyncProperty(
+          fc.array(SIGNAL_STEP, { minLength: 10, maxLength: 80, size: "max" }),
+          fc.boolean(),
+          fc.constantFrom<Profile>("full", "scroll", "burial"),
+          async (steps, preloaded, profile) => {
+            o3Report = undefined
+            try {
+              await modelRun(
+                runModel(
+                  steps,
+                  preloaded,
+                  profile,
+                  defects,
+                  true,
+                  true,
+                  true,
+                  LONG_INTERVAL_MS
+                )
+              )
+            } catch (error) {
+              if (
+                error instanceof ModelFailure &&
+                CAUGHT_BY[flag]!.test(error.message) &&
+                !provesWave()
+              )
+                return
+              throw error
+            }
+          }
+        )
+      const result = await fc.check(run([flag]), {
+        numRuns: 10_000,
+        seed: SELF_CHECK_SEEDS[flag] ?? 1,
+        endOnFailure: true,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
+      })
+      expect(result.failed, `${flag} not caught`).toBe(true)
+      expect(result.errorInstance).toBeInstanceOf(ModelFailure)
+      expect((result.errorInstance as Error).message).toMatch(CAUGHT_BY[flag]!)
+      // Контроль: той самий прогін без дефекту зелений.
+      const [steps, preloaded, profile] = result.counterexample!
+      await modelRun(
+        runModel(
+          steps,
+          preloaded,
+          profile,
+          [],
+          true,
+          true,
+          true,
+          LONG_INTERVAL_MS
+        )
+      )
+      // З дефектом він червоний саме хвилею.
+      o3Report = undefined
+      await expect(
+        modelRun(
+          runModel(
+            steps,
+            preloaded,
+            profile,
+            [flag],
+            true,
+            true,
+            true,
+            LONG_INTERVAL_MS
+          )
+        )
+      ).rejects.toBeInstanceOf(ModelFailure)
+      expect(provesWave(), "the counterexample does not prove the wave").toBe(
+        true
+      )
     },
     RIGHTS_BUDGET_MS
   )

@@ -1551,6 +1551,8 @@ export function createCore(options: {
   let lastWaveAt: number | undefined
   function joinWave(object: ObjectName) {
     if (!session.token().valid || staleObjects.has(object)) return
+    // Мутація самотесту: хвилі немає — ні читання, ні вимоги, ні строку.
+    if (defects.has("rejoin-wave-no-read")) return
     if (wave === undefined) {
       const at = Math.floor(Math.random() * REJOIN_JITTER_MS) + now()
       wave = {
