@@ -8,6 +8,7 @@
 // обробником, що й сторож. `FAKE_DEAD` — індекси не живих стеків.
 import { existsSync } from "node:fs"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { installInterruptCleanup } from "../interrupt"
 import { takeStack } from "../stack-guard"
 
@@ -45,10 +46,14 @@ try {
     `picked ${taken.index} ${Date.now()} env=${process.env.SIMETRA_STACK}\n`
   )
   if (mode === "interrupt") {
-    installInterruptCleanup({ tag: "abc123", release: taken.release })
+    installInterruptCleanup({
+      tag: "abc123",
+      release: taken.release,
+      sweep: fileURLToPath(new URL("./noop-sweep.ts", import.meta.url)),
+    })
     setTimeout(() => process.exit(3), 120_000)
   } else {
-    // Несколько кругів поспіль: одна спроба рідко потрапляє у вікно гонки
+    // Кілька кругів поспіль: одна спроба рідко потрапляє у вікно гонки
     let current = taken
     for (let round = 1; ; round++) {
       await new Promise((resolve) => setTimeout(resolve, Number(holdMs)))

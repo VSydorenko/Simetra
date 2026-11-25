@@ -361,7 +361,9 @@ export async function acquireStack(o: PickOptions): Promise<TakenStack> {
           `DB run PID ${holder.pid} (${holder.cwd}, since ${holder.since})`
       )
       .join(", ")
-    const single = o.candidates.length === 1
+    // Один живий кандидат (решта не живі): текст стека без пулу, для стека 1
+    // такий самий, як до пулу
+    const single = busy.length === 1
     const first = busy[0]!
     if (Date.now() > deadline)
       throw new Error(

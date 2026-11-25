@@ -724,7 +724,7 @@ describe("the bucket snapshot on the supabase stack", () => {
   })
 })
 
-describe("acquireLock", () => {
+describe("acquireStack", () => {
   // Два DB-проєкти в одному процесі ділять env прогону, а свого замка процес
   // не дочекався б — замість 45 хвилин очікування одразу відмова
   it("refuses a lock this process already holds", async () => {
@@ -789,9 +789,13 @@ describe("the pool pick", () => {
     children: ChildProcess[]
     exited: Promise<unknown>[]
     output: string[][]
+    /** Стандартний потік помилок кожного конкурента: у лог тесту він не йде. */
+    errors: string[]
+    wait: (done: () => boolean) => Promise<void>
   }> {
     const goFile = join(dir, "go")
     const output: string[][] = Array.from({ length: count }, () => [])
+    const errors: string[] = Array.from({ length: count }, () => "")
     const childEnv = { ...process.env }
     delete childEnv.SIMETRA_STACK
     delete childEnv.SIMETRA_STACK_POOL
@@ -803,12 +807,14 @@ describe("the pool pick", () => {
           env: {
             ...childEnv,
             ...env,
-            SIMETRA_TEST_DATABASE_URL: "postgresql://x:x@127.0.0.1:1/postgres",
-            SIMETRA_TEST_SUPERUSER_URL: "postgresql://x:x@127.0.0.1:1/postgres",
           },
-          stdio: ["ignore", "pipe", "inherit"],
+          stdio: ["ignore", "pipe", "pipe"],
         }
       )
+      child.stderr!.setEncoding("utf8")
+      child.stderr!.on("data", (chunk: string) => {
+        errors[i] += chunk
+      })
       child.stdout!.setEncoding("utf8")
       child.stdout!.on("data", (chunk: string) =>
         output[i]!.push(...chunk.split("\n").filter(Boolean))
@@ -827,19 +833,20 @@ describe("the pool pick", () => {
     return {
       children,
       exited,
-      output: Object.assign(output, {
-        wait: until,
-      }) as unknown as string[][],
+      output,
+      errors,
+      wait: until,
     }
   }
 
   // Інваріант 2: вибір і замок — одна дія. Конкуренти в окремих процесах, що
   // стартують разом, ніколи не тримають один замок одночасно
   it("never lets two processes hold the same stack at once", async () => {
-    const { exited, output } = await compete(6, "1,2", ["hold", "3", "40"])
-    const wait = (
-      output as unknown as { wait: (f: () => boolean) => Promise<void> }
-    ).wait
+    const { exited, output, wait } = await compete(6, "1,2", [
+      "hold",
+      "3",
+      "40",
+    ])
     await wait(() =>
       output.every(
         (lines) => lines.filter((l) => l.startsWith("released")).length >= 40
@@ -870,12 +877,9 @@ describe("the pool pick", () => {
   }, 60_000)
 
   it("skips a stack that is not live and frees its lock", async () => {
-    const { exited, output } = await compete(1, "1,2", ["hold", "50"], {
+    const { exited, output, wait } = await compete(1, "1,2", ["hold", "50"], {
       FAKE_DEAD: "1",
     })
-    const wait = (
-      output as unknown as { wait: (f: () => boolean) => Promise<void> }
-    ).wait
     await wait(() => output[0]!.some((l) => l.startsWith("released")))
     await exited[0]
     expect(output[0]!.find((l) => l.startsWith("picked"))).toMatch(
@@ -967,22 +971,49 @@ describe("the pool pick", () => {
     taken.release()
   })
 
+  // Живість підставна й рахує виклики: з пулом перебрались би 2 і 3, без пулу
+  // лишається стек 1; жодного з'єднання з реальним стеком тест не робить
   it("a SIMETRA_TEST_*_URL override turns the pool off: stack 1 without SIMETRA_STACK", async () => {
     vi.stubEnv("SIMETRA_TEST_SUPERUSER_URL", "postgresql://x:x@127.0.0.1:1/y")
-    const taken = await takeStack("postgres", { lockOf })
+    vi.stubEnv("SIMETRA_STACK_POOL", "2,3")
+    const probed: number[] = []
+    const taken = await takeStack("postgres", {
+      lockOf,
+      live: async (index) => {
+        probed.push(index)
+        return true
+      },
+    })
     expect(taken.index).toBe(1)
+    expect(probed.every((index) => index === 1)).toBe(true)
     expect(process.env.SIMETRA_STACK).toBe("1")
-    expect(existsSync(lockOf(2))).toBe(false)
+    expect([2, 3].some((i) => existsSync(lockOf(i)))).toBe(false)
     taken.release()
+  })
+
+  it("one live stack of the default pool, busy: the single-stack text of stack 1", async () => {
+    writeFileSync(lockOf(1), foreignLock())
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true)
+    await expect(
+      acquireStack({
+        ...base,
+        candidates: [1, 2, 3],
+        live: async (index) => index === 1,
+        waitMs: 20,
+        pollMs: 50,
+      })
+    ).rejects.toThrow(/^The local postgres stack is still busy after /)
+    expect(String(err.mock.calls[0]![0])).toMatch(
+      /^The local postgres stack is busy: DB run PID /
+    )
   })
 
   // Прибиральник на сигналі й `release` звільняють замок обраного N, а не 1
   it("on a signal the run frees the lock of the chosen stack only", async () => {
     writeFileSync(lockOf(1), foreignLock())
-    const { children, exited, output } = await compete(1, "1,2", ["interrupt"])
-    const wait = (
-      output as unknown as { wait: (f: () => boolean) => Promise<void> }
-    ).wait
+    const { children, exited, output, errors, wait } = await compete(1, "1,2", [
+      "interrupt",
+    ])
     await wait(() => output[0]!.some((l) => l.startsWith("picked")))
     expect(output[0]!.find((l) => l.startsWith("picked"))).toMatch(/ env=2$/)
     expect(existsSync(lockOf(2))).toBe(true)
@@ -990,6 +1021,9 @@ describe("the pool pick", () => {
     await exited[0]
     expect(existsSync(lockOf(2))).toBe(false)
     expect(readFileSync(lockOf(1), "utf8")).toBe(foreignLock())
+    // Прибиральник порожній: на сигнал нічого не торкається стека чи Docker
+    expect(errors[0]).toContain("SIGTERM: stopping DB run abc123")
+    expect(errors[0]).not.toContain("did not finish cleanly")
   }, 90_000)
 
   it("release leaves a lock another run took over", async () => {
