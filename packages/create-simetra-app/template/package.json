@@ -26,10 +26,12 @@
     "@tanstack/react-virtual": "3.14.26",
     "better-auth": "1.7.12",
     "centrifuge": "5.8.0",
+    "oidc-provider": "9.12.2",
     "pg": "8.23.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "simetra": "workspace:*"
+    "simetra": "workspace:*",
+    "srvx": "1.0.8"
   },
   "devDependencies": {
     "@simetrajs/designer": "workspace:*",
