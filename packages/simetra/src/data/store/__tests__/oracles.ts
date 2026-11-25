@@ -35,7 +35,15 @@ export interface ReadSource {
 export type StampedEvent = ReadEvent & {
   readonly at: number
   readonly journal: number
+  /**
+   * Рядки (`<об'єкт>\u0000<ключ>`), які вигляд цілі тримав на мить старту
+   * читання; лише коли тест задав `setHolds`. Обов'язок читання рядка закриває
+   * читання вигляду, що саме цей рядок тримає на старті.
+   */
+  readonly held?: readonly string[]
 }
+
+const holdsOf = new WeakMap<object, (event: ReadEvent) => readonly string[]>()
 
 const codes: ReadonlySet<string> = new Set(SITE_CODES)
 const reasons: ReadonlySet<string> = new Set(READ_REASONS)
@@ -354,6 +362,8 @@ export interface ReadCollectorOptions {
 }
 
 export interface ReadCollector {
+  /** Що вигляд цілі тримає на мить старту читання (див. `StampedEvent.held`). */
+  setHolds(holds: (event: ReadEvent) => readonly string[]): void
   readonly events: StampedEvent[]
   /** Події спроб читання вигляду (`watchAttempts`). */
   readonly attempts: AttemptEvent[]
@@ -416,9 +426,15 @@ export function collectReads(
   const clock = options.clock ?? Date.now
   const events: StampedEvent[] = shared?.events ?? []
   const attempts: AttemptEvent[] = shared?.attempts ?? []
-  const unsubscribe = inspect.watchReads((event) =>
-    events.push({ ...event, at: clock(), journal: fake.requests.length })
-  )
+  const unsubscribe = inspect.watchReads((event) => {
+    const holds = holdsOf.get(fake)
+    events.push({
+      ...event,
+      at: clock(),
+      journal: fake.requests.length,
+      ...(holds === undefined ? {} : { held: holds(event) }),
+    })
+  })
   const unsubscribeAttempts = inspect.watchAttempts?.((event) =>
     attempts.push(event)
   )
@@ -462,6 +478,7 @@ export function collectReads(
   const collector: ReadCollector = {
     events,
     attempts,
+    setHolds: (holds) => holdsOf.set(fake, holds),
     retain: (entries) => retained.push(...entries),
     evaluated: () => windowSteps,
     violations: () => [

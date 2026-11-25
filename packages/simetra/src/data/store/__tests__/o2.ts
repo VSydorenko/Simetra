@@ -233,9 +233,13 @@ export function eventNames(event: StampedEvent, target: SyncTarget): boolean {
     )
   if (target.kind === "service")
     return named.kind === "service" && named.service === target.service
-  // Рядок читає читання ключів його об'єкта чи системне перечитування
-  // вигляду-тримача того ж об'єкта.
-  return named.kind !== "service" && named.object === target.object
+  // Рядок читає читання ключів його об'єкта чи читання вигляду, що на старті
+  // тримає саме цей рядок; вигляд того ж об'єкта, що рядка не тримає, — ні.
+  return (
+    (named.kind === "keys" && named.object === target.object) ||
+    (named.kind === "view" &&
+      event.held?.includes(`${target.object}\u0000${target.key}`) === true)
+  )
 }
 
 const objectName = (query: ReadQuery) =>

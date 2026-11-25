@@ -173,6 +173,30 @@ describe("O2 self-check", () => {
     ).toMatch(/no read by its deadline/)
   })
 
+  it("a row's deadline is closed by the read of a view that held exactly that row at its start", () => {
+    const row: SyncTarget = { kind: "row", object: OBJECT, key: "k" }
+    const states = [
+      state(row, { requirements: [{ kind: "value-hidden" }], due: 1_000 }),
+    ]
+    const run = (held: string[] | undefined) => {
+      const o2 = createO2()
+      o2.step(input({ now: 0, states }))
+      return o2.step(
+        input({
+          now: 1_000,
+          states,
+          events: [{ ...read(2, 0), ...(held === undefined ? {} : { held }) }],
+        })
+      )
+    }
+    // Вигляд, що на старті тримав саме цей рядок, читає його: борг закрито.
+    expect(run([`${OBJECT}\u0000k`])).toBeUndefined()
+    // Мутація: читання вигляду того самого об'єкта, що рядка не тримає, — не
+    // виконання строку рядка.
+    expect(run([`${OBJECT}\u0000other`])).toMatch(/no read by its deadline/)
+    expect(run(undefined)).toMatch(/no read by its deadline/)
+  })
+
   it("a deadline that left sync() is handed to an exception or judged by the idle rule, never forgiven", () => {
     const row: SyncTarget = { kind: "row", object: OBJECT, key: "k" }
     const withDue = state(row, {

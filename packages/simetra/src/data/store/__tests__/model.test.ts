@@ -1119,6 +1119,19 @@ async function runModelOn(
   for (const flag of defects) inspect.defects.add(flag)
   opened(core, reads)
   const internals = coreInternals(core)
+  // Рядки, які вигляд цілі тримає на мить старту читання: обов'язок читання
+  // рядка закриває читання вигляду, що саме його тримає.
+  reads.setHolds((event) => {
+    if (event.target.kind !== "view") return []
+    const id = event.target.id
+    return SPECS.flatMap((spec, v) =>
+      internals.registry.find(spec)?.targetId === id
+        ? handles[v]!.getSnapshot().rows.map(
+            (row) => `${spec.object}\u0000${row.key}`
+          )
+        : []
+    )
+  })
   const o2 = createO2()
   // Спроби лише цього ядра: друге ядро (перегідратація) нумерує цілі з нуля, і
   // його спроби не підтверджують вимог першого.
