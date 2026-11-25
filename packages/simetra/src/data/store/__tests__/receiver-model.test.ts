@@ -304,6 +304,8 @@ async function runOn(
     scopeOfKey.set(key(n), scope)
   }
   const o2 = createO2()
+  const shown = () =>
+    new Set(handles.flatMap((v) => v.getSnapshot().rows.map((r) => r.key)))
   // Спроби лише цього ядра: друге ядро нумерує цілі з нуля.
   const ownAttempts: AttemptEvent[] = []
   const ownNumbers = new Set<number>()
@@ -787,15 +789,9 @@ async function runOn(
         const v = specs.indexOf(target.spec)
         return h.core.visible && offs[v] !== undefined && visible[v] === true
       },
-      storeEmpty: ![TASK, ORG].some(
-        (name) =>
-          coreInternals(h.core).objects.get(name)!.rows.keys().next().done !==
-          true
-      ),
-      rowAlive: (object, k) =>
-        coreInternals(h.core)
-          .objects.get(object as typeof TASK)!
-          .rows.get(k) !== undefined,
+      // Сховище очима моделі: рядки, які показують знімки її виглядів.
+      storeEmpty: shown().size === 0,
+      rowAlive: (_object, k) => shown().has(k),
     })
     o2Checks += o2.evaluated() - before
     if (problem !== undefined) failWith(`step ${i}`, `O2: ${problem}`, trace)

@@ -1,5 +1,14 @@
 import fc from "fast-check"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest"
 import {
   ORGANIZATION_ID,
   OBJECT_ID,
@@ -1073,9 +1082,13 @@ async function runModelOn(
   }
   /** Завантаження вигляду в польоті (`flight` ядра) — з `sync()`. */
   const loadFlying = (sub: Subset) =>
-    syncedViews()
+    (syncedViews()
       .get(sub.targetId)
-      ?.flights.some((f) => f.kind === "load") ?? false
+      ?.flights.some((f) => f.kind === "load") ??
+      false) ||
+    // Пауза повтору відкинутого завантаження: `sync()` показує строк, але
+    // політ завантаження для моделі ще триває.
+    tracker.retrying(sub.targetId)
   /** Вимога вигляду за видом — з `sync()`. */
   const requires = (sub: Subset, kind: string) =>
     syncedViews()
@@ -1341,6 +1354,13 @@ async function runModelOn(
   // Цілі, які `purge` справді прибрав: `purged` картки чи ТЧ допустимий лише
   // для них (інакше `purge` хибно позначив би чужі вигляди; П12).
   const purgedTargets = new Set<string>()
+  // Рядки, які сховище тримає очима моделі: їх дає відповідь читання, їх
+  // забирає purge; ключ, вилучений й не прочитаний знову, — власник «відсутній».
+  const heldRows = new Set<string>()
+  const markPurged = (at: string) => {
+    purgedTargets.add(at)
+    heldRows.delete(at)
+  }
   // `slot` — запис сховища: слот, що зник і з'явився знову між двома
   // перевірками, — вже інший слот, і його не порівнюємо з тим, що був.
   const wasRemoved = new Map<string, { divergent: boolean; slot: object }>()
@@ -1395,6 +1415,7 @@ async function runModelOn(
       }
       rows.set(row.ref as Key, row.version as number)
     }
+    for (const k of rows.keys()) heldRows.add(id(object, k))
     for (const [k, version] of rows) {
       const list = deliveries.get(id(object, k)) ?? []
       list.push({ index, object, rows: new Map([[k, version]]) })
@@ -1406,6 +1427,7 @@ async function runModelOn(
     for (const [name, targets] of Object.entries(result.included ?? {})) {
       for (const row of targets) {
         const k = row.ref as Key
+        heldRows.add(id(name, k))
         const list = deliveries.get(id(name, k)) ?? []
         list.push({
           index,
@@ -1442,6 +1464,9 @@ async function runModelOn(
   }
 
   /** `preload` вигляду; відмова — лише за межею без вільного утримання (П16). */
+  // Мить останньої відписки вигляду: рядки вигляду лишаються в сховищі до кінця
+  // затримки звільнення, далі їх тримає лише інший вигляд.
+  const unsubAt = new Map<number, number>()
   // Утримання `preload` очима моделі: до кінця його строку вигляд тримає ціль.
   const preloadUntil = new Map<number, number>()
   const preload = (v: number, short: boolean, label: string) => {
@@ -1460,11 +1485,32 @@ async function runModelOn(
     }
     promise?.catch((error: unknown) => errors.push(error))
     if (promise !== undefined)
+      // Утримання `preload` складаються: довше не скорочується коротшим.
       preloadUntil.set(
         v,
-        clock + (short ? 500 : DEFAULT_CORE_LIMITS.preloadTtlMs)
+        Math.max(
+          preloadUntil.get(v) ?? -1,
+          clock + (short ? 500 : DEFAULT_CORE_LIMITS.preloadTtlMs)
+        )
       )
     if (promise !== undefined && v === 4) preloadedSection = true
+  }
+
+  /**
+   * Ключі рядків, які сховище тримає очима моделі: рядки в публічних знімках
+   * виглядів, яких ще тримає підписник, `preload` чи затримка звільнення.
+   */
+  const heldKeys = () => {
+    const keys = new Set<string>()
+    for (const [v, handle] of handles.entries()) {
+      const held =
+        subs[v] !== undefined ||
+        (preloadUntil.get(v) ?? -1) > clock ||
+        (unsubAt.has(v) && clock < unsubAt.get(v)! + RELEASE_MS)
+      if (!held) continue
+      for (const row of handle.getSnapshot().rows) keys.add(row.key)
+    }
+    return keys
   }
 
   /** Склад видимих списків і номери їхніх завантажень. */
@@ -1611,14 +1657,14 @@ async function runModelOn(
         )
       if (grantDenies(g, object, scope)) {
         rightsPurgeable.add(key)
-        purgedTargets.add(key)
+        markPurged(key)
       }
     }
     if (
       capturedLines === "unknown" ||
       (capturedLines !== undefined && grantDenies(g, TASK, capturedLines))
     )
-      purgedTargets.add(id(TASK, K1))
+      markPurged(id(TASK, K1))
     // Що лишилось у сховищі після проходу.
     const how = first ? "first snapshot" : "replacement"
     keptRows = new Map()
@@ -2933,9 +2979,11 @@ async function runModelOn(
     (sub.form.spec.kind !== "section" || listenersOf(sub) > 0)
   /** Завантаження чи системне перечитування вигляду в польоті (сторінка — окремо). */
   const inFlight = (sub: Subset) =>
-    syncedViews()
+    (syncedViews()
       .get(sub.targetId)
-      ?.flights.some((f) => f.kind !== "page") ?? false
+      ?.flights.some((f) => f.kind !== "page") ??
+      false) ||
+    tracker.retrying(sub.targetId)
   const exhausted = (sub: Subset) =>
     sub.status === "error" && sub.error === EPOCH_UNAVAILABLE
   // Після межі відкинутих планувальник не читає жодного вигляду до нової
@@ -3122,7 +3170,7 @@ async function runModelOn(
         if (at === undefined || at === scope) entry.erased = true
       }
     }
-    for (const k of purgedKeys.keys) purgedTargets.add(id(object, k))
+    for (const k of purgedKeys.keys) markPurged(id(object, k))
     // Власник без шапки в сховищі, чиї рядки ТЧ прибрано, — прибраний;
     // з шапкою (в іншому скоупі) доступ не втрачено.
     if (
@@ -3130,7 +3178,7 @@ async function runModelOn(
       objectOf(TASK).sections.get(K1, "lines") === undefined &&
       objectOf(TASK).rows.get(K1) === undefined
     )
-      purgedTargets.add(id(TASK, K1))
+      markPurged(id(TASK, K1))
     // П12: ключ, якого після purge у сховищі немає, повертає лише
     // читання, що почалось після нього.
     for (const k of object === TASK ? KEYS : ORG_KEYS) {
@@ -3204,6 +3252,7 @@ async function runModelOn(
       case "unsub":
         subs[s.v]?.()
         subs[s.v] = undefined
+        unsubAt.set(s.v, clock)
         if (s.release) advance(RELEASE_MS)
         break
       case "churn": {
@@ -3232,6 +3281,7 @@ async function runModelOn(
           // `subscribe` записав відписку: `at` не звужений перевіркою вище.
           subs.at(v)?.()
           subs[v] = undefined
+          unsubAt.set(v, clock)
           advance(RELEASE_MS)
         }
         break
@@ -3394,7 +3444,7 @@ async function runModelOn(
         }
         purgedKeys = { object, keys: [target] }
         dropOwedKey(object, target)
-        purgedTargets.add(id(object, target))
+        markPurged(id(object, target))
         purgeBarrier.set(id(object, target), stepStart)
         if (object === TASK) barrierSections(stepStart)
         break
@@ -3435,6 +3485,7 @@ async function runModelOn(
           if (subs[4] !== undefined) {
             subs[4]()
             subs[4] = undefined
+            unsubAt.set(4, clock)
           } else {
             preload(4, false, label)
             preloadedSection = false
@@ -4232,8 +4283,10 @@ async function runModelOn(
           releaseDelayMs: DEFAULT_CORE_LIMITS.releaseDelayMs,
           lastJoin: () => joinMark,
           // Тримач — слухач вигляду з кроків моделі, видимий на видимій вкладці.
+          // Власник «відсутній», доки його не прочитано знову після purge.
           ownerPurged: (object, k) =>
-            purgedTargets.has(id(object as ObjectName, k)),
+            purgedTargets.has(id(object as ObjectName, k)) &&
+            !heldRows.has(id(object as ObjectName, k)),
           holderPresent: (target) =>
             target.kind === "view" &&
             subs[SPECS.indexOf(target.spec)] !== undefined,
@@ -4254,11 +4307,8 @@ async function runModelOn(
               (visibleBy.get(target.id) ?? true)
             )
           },
-          storeEmpty: ![ORG, TASK].some(
-            (name) => objectOf(name).rows.keys().next().done !== true
-          ),
-          rowAlive: (object, k) =>
-            objectOf(object as ObjectName).rows.get(k) !== undefined,
+          storeEmpty: !heldKeys().size,
+          rowAlive: (_object, k) => heldKeys().has(k),
         })
     o2Checks += o2.evaluated() - o2Before
     if (o2Problem !== undefined) fail(label, `O2: ${o2Problem}`)
@@ -4876,13 +4926,29 @@ describe("core model regressions", () => {
     // «purged»), і збій першого завантаження — стан, а не дефект.
     {
       issue: "O2 purged view",
+      o2: true,
       rights: true,
       signals: true,
       seed: -93404445,
       path: "997:7:3:15:5:11:17:27:16:10:20:10:18:17:21:11:63:11:16:17:36:17:45:56:33:25:30:35:61:47:55:47:46:53:69:53:52:51:53:32:31:47:30:37:21:20:20:22:21:20:20:20:20:20:20:20:20:20:20:20:20:26:20:22:20:21:20:20",
     },
     {
+      issue: "O2 min-version row",
+      o2: true,
+      seed: 2025024491,
+      path: "2007:4:2:11:14:18:20:20:20:26:26:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:11",
+    },
+    {
+      issue: "O2 purged owner release",
+      o2: true,
+      rights: true,
+      signals: true,
+      seed: 1329672921,
+      path: "9819:8:13:17:16:22:24:33:33:41:44:45:48:48:48:48:52:52:52:56:58:53:29:54:52:55:54:55:55:44:44:44:44:44:44:44:44:44:44:44:44:44:44:44:44:44",
+    },
+    {
       issue: "O2 purge and unsub",
+      o2: true,
       rights: true,
       signals: true,
       seed: 1825111737,
@@ -4898,13 +4964,16 @@ describe("core model regressions", () => {
     },
   ])(
     "replays the counterexample of #$issue (seed $seed)",
-    async ({ seed, path, rights = false, signals = false }) => {
+    async ({ seed, path, rights = false, signals = false, o2 = false }) => {
+      o2Checks = 0
       await fc.assert(property([], true, rights, signals), {
         seed,
         path,
         endOnFailure: true,
         ...interruptWithin(BUDGET_MS),
       })
+      // Прогін із вимогами: без оціненого стану спокою О2 порожній.
+      if (o2) assertEvaluated(o2Checks, `replay of seed ${seed}`)
     },
     BUDGET_MS
   )
@@ -5263,6 +5332,15 @@ const SIGNAL_DEFECTS: readonly DefectFlag[] = [
 ]
 
 describe("core model self-check", () => {
+  // О2 не порожній на прогонах самотестів: окремий короткий прогін може не мати
+  // вимог, тож лічильник судить усі прогони дефектів разом.
+  beforeAll(() => {
+    o2Checks = 0
+  })
+  afterAll(() => {
+    assertEvaluated(o2Checks, "the defect self-check runs")
+  })
+
   it.each(DEFECTS)(
     "turns red with the defect %s",
     async (flag) => {
