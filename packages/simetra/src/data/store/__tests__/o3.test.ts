@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { REJOIN_JITTER_MS } from "../receiver"
+import type { RowState } from "../types"
 import {
   assertEvaluated,
   changeBound,
@@ -164,12 +165,12 @@ describe("O3 self-check", () => {
   })
 
   describe("an own unfinished mutation is a boundary of the display, not an exception", () => {
-    const rows = (state: string) => [
+    const rows = (state: RowState) => [
       { state, mismatch: () => "row differs from the server" as const },
     ]
 
     it("is green while the own change is pending, failed, conflicting or unknown", () => {
-      for (const state of ["pending", "failed", "conflict", "unknown"])
+      for (const state of ["pending", "failed", "conflict", "unknown"] as const)
         expect(judgeRows(rows(state))).toBeUndefined()
     })
 
@@ -180,7 +181,7 @@ describe("O3 self-check", () => {
         changes: [{ object: OBJECT, at: 3_000 }],
       })
       const o3 = createO3()
-      const display = (state: string) =>
+      const display = (state: RowState) =>
         view({
           truth: () => judgeRows(rows(state)),
         })
@@ -201,7 +202,7 @@ describe("O3 self-check", () => {
 
   describe("the section over a hidden owner is judged by the data", () => {
     const shown = (over: Partial<Parameters<typeof judgeSection>[1]> = {}) => ({
-      ownerState: "synced",
+      ownerState: "synced" as RowState,
       ownerVersion: undefined,
       lines: [] as unknown[],
       ...over,

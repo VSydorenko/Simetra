@@ -1,4 +1,4 @@
-import type { ObjectName } from "../types"
+import type { MutationState, ObjectName, RowState } from "../types"
 import { REJOIN_JITTER_MS } from "../receiver"
 
 /*
@@ -128,17 +128,13 @@ export function checkpoints(input: O3Input): number[] {
  * виходить із цих станів (підтверджена чи скасована), рядок судиться знову — від
  * тієї миті, з межею від неї (модель записує це зміною).
  */
-export const OWN_MUTATION_STATES: ReadonlySet<string> = new Set([
-  "pending",
-  "failed",
-  "conflict",
-  "unknown",
-])
+export const OWN_MUTATION_STATES: ReadonlySet<RowState> =
+  new Set<MutationState>(["pending", "failed", "conflict", "unknown"])
 
 /** Перший рядок показу, що розійшовся з сервером; рядки з власною мутацією пропущено. */
 export function judgeRows(
   rows: readonly {
-    readonly state: string
+    readonly state: RowState
     mismatch(): string | undefined
   }[]
 ): string | undefined {
@@ -161,7 +157,7 @@ export function judgeSection(
     readonly lines: readonly unknown[]
   },
   shown: {
-    readonly ownerState: string
+    readonly ownerState: RowState
     readonly ownerVersion: number | undefined
     readonly lines: readonly unknown[]
   }
