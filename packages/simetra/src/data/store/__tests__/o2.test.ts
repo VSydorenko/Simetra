@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest"
 import type { AttemptEvent } from "../attempts"
 import type { SyncState, SyncTarget } from "../core"
 import { createFakeSource } from "../testing/fake-source"
-import { OBJECTS } from "./core-support"
+import { readPartToWire } from "simetra/model"
+import { OBJECTS, key, taskValues } from "./core-support"
 import { assertEvaluated, createO2, O2_EXCEPTIONS, type O2Input } from "./o2"
 import type { StampedEvent } from "./oracles"
 
@@ -139,42 +140,6 @@ describe("O2 self-check", () => {
         })
       )
     ).toMatch(/flight with no unanswered request/)
-  })
-
-  describe("a load flight in the pause after a discarded answer", () => {
-    // Політ завантаження живе й у паузі повтору (M8): запиту немає, подія
-    // «осіло: відкинуто за епохою» остання.
-    const discarded = (): AttemptEvent[] => [
-      ...settled(7, 1, "load").slice(0, 1),
-      {
-        phase: "settled",
-        attempt: 7,
-        kind: "load",
-        target: { kind: "view", object: OBJECT, id: 1 },
-        outcome: "discarded-by-epoch",
-      },
-    ]
-    const flying = [state(view(1), { flights: [{ kind: "load" }] })]
-
-    it("is green inside the pause and red when the pause is overstayed", () => {
-      const o2 = createO2()
-      const attempts = discarded()
-      expect(o2.step(input({ states: flying, attempts }))).toBeUndefined()
-      expect(
-        o2.step(input({ now: 1_000, states: flying, attempts }))
-      ).toBeUndefined()
-      expect(
-        o2.step(input({ now: 600_000, states: flying, attempts }))
-      ).toMatch(/stays after a discarded answer/)
-    })
-
-    it("is red when the last attempt was applied, not discarded", () => {
-      expect(
-        createO2().step(
-          input({ states: flying, attempts: settled(7, 1, "load") })
-        )
-      ).toMatch(/no unanswered request/)
-    })
   })
 
   it("is red when the counter of evaluated states is zero", () => {
@@ -453,14 +418,22 @@ describe("O2 self-check", () => {
       })
 
       it("must be read after the restore, within the bound", () => {
-        const run = (events: StampedEvent[]) => {
+        const run = (events: StampedEvent[], attempts: AttemptEvent[]) => {
           const o2 = createO2()
           o2.step(input({ states, purgedView: () => true }))
           o2.step(input({ ...holder, states: bare, now: 10 }))
-          return o2.step(input({ ...holder, states: bare, now: 300, events }))
+          return o2.step(
+            input({
+              ...holder,
+              states: bare,
+              now: 300,
+              events,
+              attempts: [...loaded, ...attempts],
+            })
+          )
         }
-        expect(run([])).toMatch(/no read of the target within/)
-        expect(run([read(1, 0)])).toBeUndefined()
+        expect(run([], [])).toMatch(/no read of the target within/)
+        expect(run([read(1, 0, 77)], settled(77, 1, "reread"))).toBeUndefined()
       })
 
       it("may leave sync() instead", () => {
@@ -471,8 +444,14 @@ describe("O2 self-check", () => {
     })
 
     it("excuses target-behind-header by the holder of the target (row 17)", () => {
+      const card: SyncTarget = {
+        kind: "view",
+        object: OBJECT,
+        spec: { kind: "card", object: OBJECT, key: key(1) },
+        id: 1,
+      }
       const states = [
-        state(view(1), { requirements: [{ kind: "target-behind-header" }] }),
+        state(card, { requirements: [{ kind: "target-behind-header" }] }),
       ]
       expect(
         createO2().step(
@@ -552,7 +531,7 @@ describe("O2 self-check", () => {
             outcome: "failed",
           } as AttemptEvent,
         ]
-        const run = (events: StampedEvent[]) => {
+        const run = (events: StampedEvent[], extra: AttemptEvent[] = []) => {
           const o2 = createO2()
           start(o2)
           const at = (now: number, seen: StampedEvent[]) =>
@@ -561,7 +540,7 @@ describe("O2 self-check", () => {
                 ...model,
                 now,
                 states: bare,
-                attempts: failed,
+                attempts: [...failed, ...(seen.length > 0 ? extra : [])],
                 events: seen,
                 holderPresent: () => true,
                 holderVisible: () => true,
@@ -571,7 +550,9 @@ describe("O2 self-check", () => {
           return at(300, events)
         }
         expect(run([])).toMatch(/no read of the target within/)
-        expect(run([read(1, 0)])).toBeUndefined()
+        // Збійне читання вигляду боргу не закриває.
+        expect(run([read(1, 0, 8)])).toMatch(/no read of the target within/)
+        expect(run([read(1, 0, 77)], settled(77, 1, "reread"))).toBeUndefined()
       })
 
       it("after the holder is released: a read once a holder appears", () => {
@@ -625,7 +606,7 @@ describe("O2 self-check", () => {
 
       it("must be read after it leaves a refusal", () => {
         const refused = [...alive, state(section, { refusal: "discard-bound" })]
-        const run = (events: StampedEvent[]) => {
+        const run = (events: StampedEvent[], attempts: AttemptEvent[]) => {
           const o2 = createO2()
           start(o2)
           expect(
@@ -635,14 +616,15 @@ describe("O2 self-check", () => {
             ...model,
             states: bare,
             events,
+            attempts: [...loaded, ...attempts],
             holderPresent: () => true,
             holderVisible: () => true,
           }
           expect(o2.step(input({ ...out, now: 20 }))).toBeUndefined()
           return o2.step(input({ ...out, now: 300 }))
         }
-        expect(run([])).toMatch(/no read of the target within/)
-        expect(run([read(1, 0)])).toBeUndefined()
+        expect(run([], [])).toMatch(/no read of the target within/)
+        expect(run([read(1, 0, 77)], settled(77, 1, "reread"))).toBeUndefined()
       })
     })
 
@@ -703,6 +685,395 @@ describe("O2 self-check", () => {
             [2, 3, 4, 5, 6, 12, 17, 18, 19].includes(n)
           )
         ).toBe(true)
+    })
+  })
+
+  describe("fix round: deadline, proof table, replacements", () => {
+    it("F1: a deadline moved after it has passed is not forgiven", () => {
+      const at = (due: number) => [
+        state(view(1), { requirements: [composition], due }),
+      ]
+      const late = createO2()
+      late.step(input({ now: 0, states: at(1_000) }))
+      expect(late.step(input({ now: 1_200, states: at(5_000) }))).toMatch(
+        /no read by its deadline/
+      )
+      const early = createO2()
+      early.step(input({ now: 0, states: at(1_000) }))
+      expect(early.step(input({ now: 500, states: at(5_000) }))).toBeUndefined()
+    })
+
+    it("F8: a page of the view does not keep a deadline", () => {
+      const states = [state(view(1), { requirements: [composition], due: 5 })]
+      const page = {
+        ...read(1, 0, 7),
+        target: { kind: "page", object: OBJECT, id: 1 },
+      } as StampedEvent
+      const o2 = createO2()
+      o2.step(input({ now: 0, states }))
+      expect(o2.step(input({ now: 5, states, events: [page] }))).toMatch(
+        /no read by its deadline/
+      )
+    })
+
+    const section: SyncTarget = {
+      kind: "view",
+      object: OBJECT,
+      spec: {
+        kind: "section",
+        object: OBJECT,
+        owner: key(1),
+        section: "lines",
+      },
+      id: 1,
+    }
+    const hidden = (k: string): SyncTarget => ({
+      kind: "row",
+      object: OBJECT,
+      key: k,
+    })
+
+    it("F8: a failed read does not settle the follow-up of a refusal exit", () => {
+      const refused = [...alive, state(section, { refusal: "discard-bound" })]
+      const standing = [
+        state(section, { requirements: [{ kind: "target-behind-header" }] }),
+      ]
+      const bare = [...alive, state(section)]
+      const run = (outcome: "failed" | "applied") => {
+        const o2 = createO2()
+        o2.step(input({ states: standing, revalidateMs: 100 }))
+        o2.step(input({ states: refused, now: 10, revalidateMs: 100 }))
+        const attempts: AttemptEvent[] = [
+          ...loaded,
+          {
+            phase: "started",
+            attempt: 40,
+            kind: "reread",
+            target: { kind: "view", object: OBJECT, id: 1 },
+            reason: "interval",
+            site: "R2",
+          } as AttemptEvent,
+          {
+            phase: "settled",
+            attempt: 40,
+            kind: "reread",
+            target: { kind: "view", object: OBJECT, id: 1 },
+            outcome,
+          },
+        ]
+        const out = {
+          states: bare,
+          attempts,
+          events: [read(1, 0, 40)],
+          holderVisible: () => true,
+          revalidateMs: 100,
+        }
+        o2.step(input({ ...out, now: 20 }))
+        return o2.step(input({ ...out, now: 300 }))
+      }
+      expect(run("failed")).toMatch(/no read of the target within/)
+      expect(run("applied")).toBeUndefined()
+    })
+
+    it("F3: other requirement kinds of a purged owner need proof", () => {
+      const before = [
+        state(section, { requirements: [{ kind: "access-narrowed" }] }),
+      ]
+      const o2 = createO2()
+      o2.step(input({ states: before, holderPresent: () => true }))
+      expect(
+        o2.step(
+          input({
+            now: 5,
+            states: [...alive, state(section)],
+            ownerPurged: () => true,
+            holderPresent: () => false,
+          })
+        )
+      ).toMatch(/access-narrowed disappeared with no proof/)
+    })
+
+    it("F5: row 17 does not cover a list view", () => {
+      const list = view(3)
+      const states = [
+        state(list, { requirements: [{ kind: "target-behind-header" }] }),
+      ]
+      expect(
+        createO2().step(input({ states, holderPresent: () => false }))
+      ).toMatch(/no promise/)
+    })
+
+    describe("F4: «значення сховано» replaces the requirement only on the owner key", () => {
+      const standing = [
+        state(section, { requirements: [{ kind: "target-behind-header" }] }),
+      ]
+      const run = (row: SyncTarget, before: boolean) => {
+        const o2 = createO2()
+        const hiddenState = state(row, {
+          requirements: [{ kind: "value-hidden" }],
+          due: 99,
+        })
+        o2.step(
+          input({
+            states: before ? [...standing, hiddenState] : standing,
+            holderPresent: () => true,
+          })
+        )
+        return o2.step(
+          input({
+            now: 5,
+            states: [...alive, state(section), hiddenState],
+            holderPresent: () => true,
+          })
+        )
+      }
+      it("green: the owner key, new", () => {
+        expect(run(hidden(key(1)), false)).toBeUndefined()
+      })
+      it("red: another key of the object", () => {
+        expect(run(hidden(key(2)), false)).toMatch(/disappeared with no proof/)
+      })
+      it("red: the owner key, already hidden before", () => {
+        expect(run(hidden(key(1)), true)).toMatch(/disappeared with no proof/)
+      })
+    })
+
+    describe("proof table, one pair per row", () => {
+      const row = hidden(key(1))
+      const answered = async (version = 5) => {
+        const f = createFakeSource({ objects: OBJECTS })
+        void version
+        f.insert(OBJECT, taskValues(1))
+        const part = readPartToWire(f.index, {
+          type: "query",
+          query: {
+            object: { kind: "Catalog", name: "Task" },
+            where: { attribute: "ref", op: "in", value: [key(1)] },
+            limit: 10,
+          } as never,
+        })
+        if (!part.ok) throw new Error("wire")
+        const reading = f.adapter.read([part.value])
+        for (let i = 0; i < 50; i++) await Promise.resolve()
+        f.deliverAll()
+        await reading
+        return f
+      }
+      const vanish = (
+        kind: "min-version" | "value-hidden" | "row-unfinished",
+        f: Awaited<ReturnType<typeof answered>> | undefined,
+        version?: number
+      ) => {
+        const o2 = createO2()
+        o2.step(
+          input({
+            states: [
+              state(row, {
+                requirements: [{ kind, ...(version ? { version } : {}) }],
+                due: 5,
+              }),
+            ],
+          })
+        )
+        return o2.step(
+          input({
+            now: 5,
+            states: alive,
+            rowAlive: () => true,
+            fake: f ?? fake,
+          })
+        )
+      }
+
+      it("value-hidden and row-unfinished: red with no answer, green with one", async () => {
+        const f = await answered()
+        for (const kind of ["value-hidden", "row-unfinished"] as const) {
+          expect(vanish(kind, undefined)).toMatch(/disappeared/)
+          expect(vanish(kind, f)).toBeUndefined()
+        }
+      })
+
+      it("min-version: the answer must carry a version not below v", async () => {
+        const f = await answered()
+        expect(vanish("min-version", f, 1)).toBeUndefined()
+        expect(vanish("min-version", f, 10_000_000)).toMatch(/disappeared/)
+      })
+
+      it("min-version → version-epoch-switched is a replacement", () => {
+        const o2 = createO2()
+        o2.step(
+          input({
+            states: [
+              state(row, { requirements: [{ kind: "min-version" }], due: 5 }),
+            ],
+          })
+        )
+        expect(
+          o2.step(
+            input({
+              now: 4,
+              states: [
+                state(row, {
+                  requirements: [{ kind: "version-epoch-switched" }],
+                  due: 9,
+                }),
+              ],
+            })
+          )
+        ).toBeUndefined()
+      })
+
+      it("rights- and version-unconfirmed: need an answered service part", () => {
+        for (const service of ["rights", "version"] as const) {
+          const target: SyncTarget = { kind: "service", service }
+          const kind =
+            service === "rights" ? "rights-unconfirmed" : "version-unconfirmed"
+          const run = (answeredPart: boolean, rightsReplied = true) => {
+            const o2 = createO2()
+            o2.step(
+              input({
+                states: [state(target, { requirements: [{ kind }], due: 5 })],
+                storeEmpty: false,
+              })
+            )
+            const event = {
+              reason: "requirement",
+              requirement: kind,
+              target,
+              site: "S1",
+              at: 0,
+              journal: 0,
+              request: 1,
+            } as StampedEvent
+            return o2.step(
+              input({
+                now: 5,
+                states: [...alive, state(target)],
+                events: answeredPart ? [event] : [],
+                fake: {
+                  log: [],
+                  pending: [],
+                  inFlight: 0,
+                  index: fake.index,
+                  rightsLog: [
+                    {
+                      request: 0,
+                      known: undefined,
+                      response: rightsReplied ? {} : undefined,
+                    },
+                  ],
+                },
+              })
+            )
+          }
+          expect(run(false)).toMatch(/disappeared/)
+          expect(run(true)).toBeUndefined()
+          // Частина прав без відповіді підтвердженням не є.
+          if (service === "rights")
+            expect(run(true, false)).toMatch(/disappeared/)
+        }
+      })
+
+      it("access-narrowed and hydration-trust: an applied read of the view", () => {
+        for (const kind of ["access-narrowed", "hydration-trust"] as const) {
+          const run = (attempts: AttemptEvent[]) => {
+            const o2 = createO2()
+            o2.step(
+              input({
+                states: [state(view(1), { requirements: [{ kind }], due: 5 })],
+              })
+            )
+            return o2.step(
+              input({
+                now: 5,
+                states: [...alive, state(view(1))],
+                attempts: [...loaded, ...attempts],
+                events: [read(1, 0, 7)],
+              })
+            )
+          }
+          expect(run([])).toMatch(/disappeared/)
+          expect(run(settled(7, 1, "reread"))).toBeUndefined()
+        }
+      })
+
+      it("hydration-trust → value-hidden of an owner key is a replacement", () => {
+        const keysView: SyncTarget = {
+          kind: "view",
+          object: OBJECT,
+          spec: { kind: "keys", object: OBJECT, keys: [key(1)] },
+          id: 4,
+        }
+        const o2 = createO2()
+        o2.step(
+          input({
+            states: [
+              state(keysView, {
+                requirements: [{ kind: "hydration-trust" }],
+                due: 5,
+              }),
+            ],
+          })
+        )
+        expect(
+          o2.step(
+            input({
+              now: 5,
+              states: [
+                ...alive,
+                state(keysView),
+                state(row, {
+                  requirements: [{ kind: "value-hidden" }],
+                  due: 9,
+                }),
+              ],
+            })
+          )
+        ).toBeUndefined()
+      })
+
+      it("a session beyond the discard limit drops row requirements with its views", () => {
+        const refused = [...alive, state(view(1), { refusal: "discard-bound" })]
+        const run = (states: SyncState[]) => {
+          const o2 = createO2()
+          o2.step(
+            input({
+              states: [
+                state(row, { requirements: [{ kind: "min-version" }], due: 5 }),
+              ],
+            })
+          )
+          return o2.step(input({ now: 5, states, rowAlive: () => true }))
+        }
+        expect(run(refused)).toBeUndefined()
+        expect(run(alive)).toMatch(/disappeared/)
+      })
+
+      it("a closed core drops all requirements with no proof", () => {
+        const o2 = createO2()
+        o2.step(
+          input({
+            states: [state(view(1), { requirements: [composition], due: 5 })],
+          })
+        )
+        expect(
+          o2.step(
+            input({
+              now: 5,
+              states: [state(view(1), { refusal: "closed" })],
+            })
+          )
+        ).toBeUndefined()
+        const live = createO2()
+        live.step(
+          input({
+            states: [state(view(1), { requirements: [composition], due: 5 })],
+          })
+        )
+        expect(
+          live.step(input({ now: 5, states: [...alive, state(view(1))] }))
+        ).toMatch(/disappeared/)
+      })
     })
   })
 })

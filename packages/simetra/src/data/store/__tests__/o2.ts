@@ -1,6 +1,5 @@
 import { readResultFromWire, type ReadQuery } from "simetra/model"
 import type { AttemptEvent } from "../attempts"
-import { DISCARDS_MAX, DISCARD_PAUSE_MS } from "../session"
 import type { SyncState, SyncTarget } from "../core"
 import type { RequirementKind } from "../sync/vocabulary"
 import type { FakeReadLog, FakeSource } from "../testing/fake-source"
@@ -148,7 +147,10 @@ export const O2_EXCEPTIONS: readonly O2Exception[] = [
       "composition-unconfirmed",
     ],
     holds: (state, input) =>
-      state.target.kind !== "view" || input.holderPresent === undefined
+      state.target.kind !== "view" ||
+      input.holderPresent === undefined ||
+      (state.target.spec.kind !== "card" &&
+        state.target.spec.kind !== "section")
         ? false
         : input.holderPresent(state.target)
           ? "bounded"
@@ -336,6 +338,43 @@ export const PROOFS: Readonly<
  * версію» вимогою свого виду (`object-store.ts`, `onSwitch`); `hide` власника
  * замінює похідну вимогу на «значення сховано» рядків об'єкта.
  */
+/** Ключі рядків, які вигляд читає за власником: власник ТЧ, ключ картки, ключі `keys`. */
+function ownerKeys(target: SyncTarget): readonly string[] {
+  if (target.kind !== "view") return []
+  const spec = target.spec
+  return spec.kind === "section"
+    ? [spec.owner]
+    : spec.kind === "card"
+      ? [spec.key]
+      : spec.kind === "keys"
+        ? spec.keys
+        : []
+}
+
+/**
+ * `hide` власника замінює вимогу вигляду на «значення сховано» його рядка: нова
+ * вимога стоїть на ключі власника й у попередньому знімку її не було.
+ */
+function hiddenOwner(
+  target: SyncTarget,
+  states: readonly SyncState[],
+  previous: Snapshot | undefined
+): boolean {
+  if (target.kind !== "view") return false
+  const keys = ownerKeys(target)
+  return states.some((s) => {
+    if (
+      s.target.kind !== "row" ||
+      s.target.object !== target.object ||
+      !keys.includes(s.target.key) ||
+      !s.requirements.some((r) => r.kind === "value-hidden")
+    )
+      return false
+    const was = previous?.targets.get(targetKey(s.target))
+    return !was?.requirements.some((r) => r.kind === "value-hidden")
+  })
+}
+
 const REPLACED_BY: Partial<Record<RequirementKind, RequirementKind[]>> = {
   "min-version": ["version-epoch-switched"],
   "target-behind-header": ["value-hidden"],
@@ -368,10 +407,6 @@ export interface O2 {
   evaluated(): number
 }
 
-// Пауза між відкинутою відповіддю завантаження й повтором (M8) подвоюється до
-// межі відкинутих проходів: політ у цю паузу триматиме не довше.
-const RETRY_PAUSE_MAX_MS = DISCARD_PAUSE_MS * 2 ** (DISCARDS_MAX - 1)
-
 /**
  * Що ядро ще винне цілі, вимога якої зникла без доказу за винятком таблиці:
  * `leave` — ціль мусить піти з `sync()` до кінця затримки звільнення; `read` —
@@ -392,10 +427,6 @@ export function createO2(): O2 {
   let count = 0
   let previous: Snapshot | undefined
   const obligations = new Map<string, Obligation>()
-
-  // Вигляд → остання спроба завантаження, що осіла «відкинуто за епохою», і час
-  // першого спокою над нею: політ завантаження у паузі повтору.
-  const pausedLoads = new Map<number, { attempt: number; since: number }>()
 
   /** Політ без запиту без відповіді, чия подія називає ціль. */
   const flightProblems = (input: O2Input): string[] => {
@@ -423,28 +454,6 @@ export function createO2(): O2 {
         const behindLimit = fake.inFlight > 0 || fake.pending.length > 0
         let carried: boolean
         if (target.kind === "view") {
-          // Завантаження у паузі після відкинутої відповіді: запиту немає, поки
-          // не спливе пауза; політ тримається не довше її межі.
-          const last = [...input.attempts]
-            .reverse()
-            .find((a) => a.target.id === target.id && a.kind === "load")
-          if (
-            flight.kind === "load" &&
-            last?.phase === "settled" &&
-            last.outcome === "discarded-by-epoch"
-          ) {
-            const was = pausedLoads.get(target.id)
-            if (was === undefined || was.attempt !== last.attempt)
-              pausedLoads.set(target.id, {
-                attempt: last.attempt,
-                since: input.now,
-              })
-            else if (input.now - was.since > RETRY_PAUSE_MAX_MS)
-              problems.push(
-                `${describe(target)}: a load flight stays after a discarded answer past the retry pause`
-              )
-            continue
-          }
           carried = unsettled.some((a) => {
             if (a.target.id !== target.id || a.kind !== flight.kind)
               return false
@@ -491,6 +500,9 @@ export function createO2(): O2 {
     return false
   }
 
+  // Наслідок кожної осілої спроби: читання, що закриває борг цілі, мусить осісти
+  // не збоєм (сторінка підтверджує лише себе).
+  const outcomes = new Map<number, string>()
   const applied = new Set<number>()
   const firstLoadFailed = new Set<number>()
   // Знищені `purge` вигляди, що їх О2 бачив: після відновлення пари вигляд
@@ -498,10 +510,22 @@ export function createO2(): O2 {
   const purgedSeen = new Set<string>()
   let attemptsSeen = 0
 
+  /** Читання цілі стартувало: сторінка вигляду не рахується (вона підтверджує лише себе). */
+  const startedRead = (e: StampedEvent, target: SyncTarget) =>
+    eventNames(e, target) && e.target.kind !== "page"
+  /** Читання цілі й осіло, не збоєм: для вигляду — спроба завантаження чи перечитування. */
+  const settledRead = (e: StampedEvent, target: SyncTarget) =>
+    startedRead(e, target) &&
+    (target.kind !== "view" ||
+      (e.attempt !== undefined &&
+        outcomes.has(e.attempt) &&
+        outcomes.get(e.attempt) !== "failed"))
+
   const step = (raw: O2Input): string | undefined => {
     // Вигляди, що застосували читання: набір ведеться по новій частині подій.
     for (; attemptsSeen < raw.attempts.length; attemptsSeen++) {
       const a = raw.attempts[attemptsSeen]!
+      if (a.phase === "settled") outcomes.set(a.attempt, a.outcome)
       if (a.phase === "settled" && a.outcome === "applied")
         applied.add(a.target.id)
       if (a.kind === "load") {
@@ -558,7 +582,7 @@ export function createO2(): O2 {
         continue
       }
       if (
-        events.slice(promise.since).some((e) => eventNames(e, state.target))
+        events.slice(promise.since).some((e) => startedRead(e, state.target))
       ) {
         obligations.delete(key)
         continue
@@ -569,10 +593,11 @@ export function createO2(): O2 {
         )
         obligations.delete(key)
       } else if (
+        now < promise.due &&
         state.due !== undefined &&
-        state.due > promise.due &&
-        state.due > now
+        state.due > promise.due
       ) {
+        // Строк відсунуто вчасно; після строку відсунути його вже не можна.
         promise.due = state.due
       } else if (now >= promise.due) {
         problems.push(
@@ -615,7 +640,7 @@ export function createO2(): O2 {
         f.holderSince = undefined
         continue
       }
-      if (events.slice(f.sinceEvent).some((e) => eventNames(e, target))) {
+      if (events.slice(f.sinceEvent).some((e) => settledRead(e, target))) {
         followUps.delete(key)
         continue
       }
@@ -711,10 +736,13 @@ export function createO2(): O2 {
           input.ownerPurged?.(spec!.object, ownerKey) === true
         if (state === undefined) {
           const t = was.target
+          // Сесія за межею відкинутих (`discard-bound`) нічого не читає: рядки
+          // без власної цілі втрачають вимоги разом із нею — названа умова.
           if (
             t.kind !== "row" ||
             input.rowAlive === undefined ||
-            !input.rowAlive(t.object, t.key)
+            !input.rowAlive(t.object, t.key) ||
+            states.some((s) => s.refusal === "discard-bound")
           )
             continue
         }
@@ -790,19 +818,10 @@ export function createO2(): O2 {
               continue
             }
           }
-          // Власник вилучений: решту вимог картки чи ТЧ іде разом із ціллю.
-          if (purged) continue
+
           const replaced = REPLACED_BY[requirement.kind]?.some((kind) =>
             kind === "value-hidden"
-              ? states.some(
-                  (s) =>
-                    s.target.kind === "row" &&
-                    s.target.object ===
-                      (was.target.kind === "service"
-                        ? ""
-                        : was.target.object) &&
-                    s.requirements.some((r) => r.kind === kind)
-                )
+              ? hiddenOwner(was.target, states, previous)
               : have.has(kind)
           )
           if (replaced === true) continue
