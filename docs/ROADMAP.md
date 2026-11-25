@@ -16,6 +16,8 @@ flowchart LR
   M3 --> M4[М4 Realtime і права на клієнті]
   M4 --> M5[М5 Повні екрани довідника]
   M5 --> M5b[М5b Оптимістичний клієнт]
+  M4 --> M5c[М5c Мультимовні дані]
+  M5 --> M5c
   M4 --> M8[М8 Агенти в застосунку]
   M4 --> M6[М6 Документ із проведенням]
   M2 --> M7[М7 Конфігуратор і перша нова сутність]
@@ -24,7 +26,7 @@ flowchart LR
 ```
 
 М2 іде паралельно з М3: це робота в репо першого споживача, а не в платформі.
-М5 і М6 ідуть паралельно. М5b стартує після блоку запису М5 (створення й ТЧ у картці) і далі йде паралельно з ним.
+М5 і М6 ідуть паралельно. М5c (мультимовні дані) іде паралельно з М5: блоки схеми, запису й читання сервера від М4 не залежать, мова в сховищі T4 — після закриття М4, екрани — після блоку картки М5. М5b стартує після блоку запису М5 (створення й ТЧ у картці) і далі йде паралельно з ним.
 М4 містить ядро синхронізації клієнта: кеш прав клієнта й приймальний тест віхи стоять на ньому ([ADR-0101](adr/0101-sync-kernel-before-other-client-blocks.md)). Блок доказу позицією з тієї самої спеки — у М5b.
 
 ## Віхи
@@ -37,6 +39,7 @@ flowchart LR
 | М4. Realtime і права на клієнті | зміна в одній вкладці з'являється в іншій під RLS; відкликане право прибирає дані на клієнті | [П4-B](superpowers/specs/2026-11-05-p4-b-client-data-design.md) §8–§9, [ядро синхронізації](superpowers/specs/2026-11-23-t4-sync-kernel-design.md), [профіль `postgres`](superpowers/specs/2026-11-08-postgres-profile-design.md) | [milestone](https://github.com/VSydorenko/Simetra/milestone/4) |
 | М5. Повні екрани довідника | довідник повністю ведеться в UI: фільтри, створення, ТЧ, файли, тема візуальної мови, автозбереження без тихого перезапису | [П4-D](superpowers/specs/2026-11-08-p4-d-hosts-design.md), [візуальна мова](superpowers/specs/2026-10-23-visual-language-design.md), [профіль `postgres`](superpowers/specs/2026-11-08-postgres-profile-design.md) | [milestone](https://github.com/VSydorenko/Simetra/milestone/5) |
 | М5b. Оптимістичний клієнт | зміна з'являється на екрані без очікування сервера і переживає чужі зміни без відскоку; список тримає межу пам'яті; оракул, бюджети швидкодії й матриця браузерів зелені в CI | [П4-B](superpowers/specs/2026-11-05-p4-b-client-data-design.md) §6–§7, §12, [П4-D](superpowers/specs/2026-11-08-p4-d-hosts-design.md) §8 | [milestone](https://github.com/VSydorenko/Simetra/milestone/8) |
+| М5c. Мультимовні дані | реквізит оголошено мультимовним — його значення ведуться кількома мовами даних з довідника «Мови»: мову додають з адмінки без деплою; список і картка мовою з fallback на основну, сортування й пошук за видимим значенням, статус перекладу; тип `RichText` | [мультимовні дані](superpowers/specs/2026-11-24-multilingual-data-design.md) | [milestone](https://github.com/VSydorenko/Simetra/milestone/10) |
 | М6. Документ із проведенням | документ створюється з екрана, проводиться і робить рухи регістрів | [П4](superpowers/specs/2026-10-26-p4-runtime-design.md) (П4-C), [П2](superpowers/specs/2026-09-28-p2-metamodel-compiler-design.md) | [milestone](https://github.com/VSydorenko/Simetra/milestone/6) |
 | М7. Конфігуратор і перша нова сутність | сутність, створена в конфігураторі, доходить до продакшну без ручного коду | [П4](superpowers/specs/2026-10-26-p4-runtime-design.md) (П4-E), [платформна спека](superpowers/specs/2026-09-24-simetra-platform-design.md) §10 | [milestone](https://github.com/VSydorenko/Simetra/milestone/7) |
 | М8. Агенти в застосунку | ШІ-клієнт користувача (Claude, ChatGPT) підключається до застосунку як віддалений MCP-сервер, обирає тенант і читає й змінює дані під правами користувача; відкликання підключення діє на наступному виклику | [П4-F](superpowers/specs/2026-11-24-p4-f-agents-design.md), [права](superpowers/specs/2026-10-17-rights-design.md) Рх12, Рх22 | [milestone](https://github.com/VSydorenko/Simetra/milestone/9) |

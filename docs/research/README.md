@@ -20,6 +20,7 @@
 | `analogues/` | `open-source-analogues.md` | Які open-source проєкти є в ніші і чого їм бракує | 2026-03 |
 | `analogues/` | `frappe-doctype.md` | Як влаштовано DocType у Frappe, що взяти й чого уникнути | 2026-03 |
 | `analogues/` | `patterns-and-antipatterns-2026-09.md` | Патерни й антипатерни аналогів, розширення | 2026-09 |
+| `analogues/` | `multilingual-data-2026-11.md` | Як зберігати мультимовні дані в універсальній платформі: форми A–E, прецеденти (Odoo, Business Central, SAP, 1С), механізми Simetra проти форм, сортування мовою з fallback під RLS | 2026-11 |
 | `analogues/` | `postgres-ledgers-2026-10.md` | Регістри й облікові журнали нативно в Postgres: `pg_accumulator`, `pgledger`, Modern Treasury — що брати за форму, що відкинути, ліцензії | 2026-10 |
 | `schema-engine/` | `introspection-and-ddl.md` | Читання схеми PostgreSQL, diff станів, генерація DDL | 2026-03 |
 | `schema-engine/` | `postgrest.md` | Чи годиться PostgREST як перший шар доступу до даних | 2026-04 |
