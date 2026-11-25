@@ -43,11 +43,7 @@ export type AttemptEvent = { readonly attempt: number } & (
 /** What the readers of views report: the start and the settle of an attempt. */
 export interface Attempts {
   /** Registers the start and returns the number the reads of the attempt carry. */
-  start(
-    kind: AttemptKind,
-    target: AttemptTarget,
-    why: ReadWhy
-  ): number
+  start(kind: AttemptKind, target: AttemptTarget, why: ReadWhy): number
   settle(
     attempt: number,
     kind: AttemptKind,
