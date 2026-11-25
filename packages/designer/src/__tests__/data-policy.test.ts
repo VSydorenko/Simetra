@@ -4,7 +4,6 @@ import {
   type CompiledModel,
 } from "simetra/compiler"
 import type { Batch, Operation } from "simetra/model"
-import { agentWriteRefusal } from "simetra/server"
 import { beforeAll, describe, expect, it } from "vitest"
 import {
   acceptDebt,
@@ -17,7 +16,7 @@ import {
   tenantOperator,
   tenantSelfService,
 } from "../../../simetra/test/support"
-import { dataModuleRefusal } from "../tools/data-policy"
+import { dataPolicyRefusal } from "../tools/data-policy"
 import { withObjectModule } from "./helpers/object-module"
 
 const ID = "00000000-0000-4000-8000-00000000d001"
@@ -61,6 +60,7 @@ const models: Record<
   | "plain"
   | "module"
   | "rootCreator"
+  | "rootCreatorModule"
   | "tenant"
   | "tenantMemberModule"
   | "tenantOtherModule",
@@ -79,6 +79,14 @@ beforeAll(async () => {
       [ROLE_FILE("OrgAdmin")]: { rootCreator: true },
     })
   )
+  models.rootCreatorModule = await modelOf(
+    withObjectModule(
+      policyDomain(runtimeValuesLayer(), {
+        [ROLE_FILE("OrgAdmin")]: { rootCreator: true },
+      }),
+      GAUGE_LOG_FILE
+    )
+  )
   // Модель А створення тенанта: `Organization` з творцем і довідником
   // членства `OrgMember`, `Branch` оператора без творця
   const tenant = policyDomain(
@@ -93,16 +101,6 @@ beforeAll(async () => {
     withObjectModule(tenant, COMMENT_FILE)
   )
 }, 60_000)
-
-// Склейка порядку інструмента: відмова модуля — першою на весь пакет, далі
-// запобіжник прав каталогу T3
-function refusal(model: CompiledModel, batch: Batch, rightsWrite: boolean) {
-  const catalog = buildRuntimeCatalog(model)
-  const error = dataModuleRefusal(model, catalog, batch)
-  if (error !== undefined) return { kind: "command", error }
-  const rights = agentWriteRefusal(catalog, batch, { rightsWrite })
-  return rights === undefined ? undefined : { kind: "rights", ...rights }
-}
 
 describe("data command refusal", () => {
   it.each<{
@@ -152,6 +150,34 @@ describe("data command refusal", () => {
       model: "module",
       batch: [update(LOG)],
       allowRightsWrite: true,
+      expected: {
+        kind: "command",
+        error: {
+          code: "command.invalid",
+          reason: "object-module",
+          object: LOG,
+        },
+      },
+    },
+    {
+      name: "a rights catalog op before a module object op, without the flag",
+      model: "module",
+      batch: [create(ASSIGNMENTS), update(LOG)],
+      allowRightsWrite: false,
+      expected: {
+        kind: "command",
+        error: {
+          code: "command.invalid",
+          reason: "object-module",
+          object: LOG,
+        },
+      },
+    },
+    {
+      name: "a root with a creator before a module object op, without the flag",
+      model: "rootCreatorModule",
+      batch: [create(ORGANIZATION), update(LOG)],
+      allowRightsWrite: false,
       expected: {
         kind: "command",
         error: {
@@ -281,6 +307,11 @@ describe("data command refusal", () => {
       expected: undefined,
     },
   ])("$name", ({ model, batch, allowRightsWrite, expected }) => {
-    expect(refusal(models[model], batch, allowRightsWrite)).toEqual(expected)
+    const m = models[model]
+    expect(
+      dataPolicyRefusal(m, buildRuntimeCatalog(m), batch, {
+        rightsWrite: allowRightsWrite,
+      })
+    ).toEqual(expected)
   })
 })

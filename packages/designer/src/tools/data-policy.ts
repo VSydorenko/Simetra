@@ -1,4 +1,5 @@
 import type { CompiledModel, SourceObject } from "simetra/compiler"
+import { agentWriteRefusal } from "simetra/server"
 import {
   type Batch,
   type CommandError,
@@ -48,4 +49,30 @@ export function dataModuleRefusal(
       return moduleRefusal({ kind: membership.kind, name: membership.name })
   }
   return undefined
+}
+
+/**
+ * Відмова політики даних для пакета: `command` — чиста відмова модуля
+ * (`data.error`), `rights` — відмова запобіжника прав T3 (відмова інструмента).
+ */
+export type DataPolicyRefusal =
+  | { kind: "command"; error: CommandError }
+  | ({ kind: "rights" } & NonNullable<ReturnType<typeof agentWriteRefusal>>)
+
+/**
+ * Єдина склейка порядку політики (Р-F3-13): відмова модуля на весь пакет —
+ * першою, далі запобіжник запису прав каталогу T3. Порядок видно споживачеві:
+ * пакет, який порушує обидва правила, дістає відмову модуля, бо прапорець
+ * прав її не знімає.
+ */
+export function dataPolicyRefusal(
+  model: CompiledModel,
+  catalog: RuntimeCatalog,
+  batch: Batch,
+  options: { rightsWrite: boolean }
+): DataPolicyRefusal | undefined {
+  const error = dataModuleRefusal(model, catalog, batch)
+  if (error !== undefined) return { kind: "command", error }
+  const rights = agentWriteRefusal(catalog, batch, options)
+  return rights === undefined ? undefined : { kind: "rights", ...rights }
 }

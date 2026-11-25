@@ -16,7 +16,6 @@ import {
   CommandFailure,
 } from "simetra/model"
 import {
-  agentWriteRefusal,
   createAgentCore,
   createCommandRuntime,
   toJson,
@@ -26,7 +25,7 @@ import {
 import { z } from "zod"
 import { DataFailure, withData } from "../io/data"
 import { readMetadataDir } from "../io/metadata-dir"
-import { dataModuleRefusal } from "./data-policy"
+import { dataPolicyRefusal } from "./data-policy"
 import {
   defineTool,
   type DataResource,
@@ -248,18 +247,19 @@ export const dataCommandTool = defineTool({
       input.operations.map((op) => op.object)
     )
     const catalog = buildRuntimeCatalog(model)
-    // Політика — до з'єднання: база не бачить пакета, якому відмовлено.
-    // Відмова модуля — першою на весь пакет, далі запобіжник прав T3
-    const moduleError = dataModuleRefusal(model, catalog, input.operations)
-    if (moduleError !== undefined)
+    // Політика — до з'єднання: база не бачить пакета, якому відмовлено
+    const rightsWrite = ctx.allowRightsWrite === true
+    const refusal = dataPolicyRefusal(model, catalog, input.operations, {
+      rightsWrite,
+    })
+    if (refusal?.kind === "command")
       return {
         ok: false,
         changes: [],
         diagnostics: [],
-        data: { error: moduleError },
+        data: { error: refusal.error },
       }
-    const rightsWrite = ctx.allowRightsWrite === true
-    if (agentWriteRefusal(catalog, input.operations, { rightsWrite }))
+    if (refusal !== undefined)
       return {
         ok: false,
         changes: [],
