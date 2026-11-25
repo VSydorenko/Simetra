@@ -663,11 +663,40 @@ export function createO2(): O2 {
         continue
       }
       if (f.kind === "retry") {
-        if (events.slice(f.sinceEvent).some((e) => startedRead(e, target))) {
+        const started = events
+          .slice(f.sinceEvent)
+          .filter((e) => startedRead(e, target))
+        // Читання, що осіло не збоєм, закриває борг; збійний чи відкинутий
+        // повтор лишає борг із давньою межею «читання» (інтервал плюс пауза).
+        if (started.some((e) => settledRead(e, target))) {
           followUps.delete(key)
           continue
         }
-        if (state.dueCause === "retry" && state.due !== undefined)
+        if (
+          started.some(
+            (e) =>
+              e.attempt !== undefined &&
+              (outcomes.get(e.attempt) === "failed" ||
+                outcomes.get(e.attempt) === "discarded-by-epoch")
+          )
+        ) {
+          followUps.set(key, {
+            kind: "read",
+            sinceEvent: events.length,
+            sinceTime: now,
+            holderSince:
+              input.holderVisible?.(target) === true ? now : undefined,
+          })
+          continue
+        }
+        if (started.length > 0) continue
+        // Межа рухається лише вперед і лише до свого спливу: ядро, що вічно
+        // переставляє паузу й не читає, межу не відсуває.
+        if (
+          state.dueCause === "retry" &&
+          state.due !== undefined &&
+          (f.deadline === undefined || now <= f.deadline)
+        )
           f.deadline = state.due
         const slack =
           input.holderVisible?.(target) === false
@@ -858,10 +887,33 @@ export function createO2(): O2 {
             // Відкинута за епохою спроба знімає вимогу так само, як збійна, але
             // читання за нею йде повтором (M8): його строк ядро показує у `sync()`.
             const discarded = settledAs("discarded-by-epoch")
+            // Повтор (M8) мог стартувати й осісти в тому самому вікні кроків без
+            // спокою: його наслідок судить сам, а не пауза, якої вже немає.
+            const attempts = windowOf().attempts
+            const mine = (a: AttemptEvent) =>
+              a.kind !== "page" &&
+              a.target.id === (was.target as { id: number }).id
+            let lastDiscard = -1
+            attempts.forEach((a, n) => {
+              if (
+                a.phase === "settled" &&
+                a.outcome === "discarded-by-epoch" &&
+                mine(a)
+              )
+                lastDiscard = n
+            })
+            const after = attempts
+              .slice(lastDiscard + 1)
+              .filter((a) => lastDiscard >= 0 && mine(a))
+            const retried = after.some((a) => a.phase === "started")
+            const retriedOk = after.some(
+              (a) => a.phase === "settled" && a.outcome === "applied"
+            )
+            if (discarded && !failed && retriedOk) continue
             const held = input.holderPresent?.(was.target)
             const trigger = purged
               ? "leave"
-              : failed || held === false
+              : failed || held === false || (discarded && retried)
                 ? "read"
                 : discarded
                   ? "retry"
@@ -876,6 +928,12 @@ export function createO2(): O2 {
                   input.holderVisible?.(was.target) === true
                     ? now
                     : undefined,
+                // Пауза повтору, яку цей самий стан уже показує: межа від неї.
+                ...(trigger === "retry" &&
+                state?.dueCause === "retry" &&
+                state.due !== undefined
+                  ? { deadline: state.due }
+                  : {}),
               })
               continue
             }

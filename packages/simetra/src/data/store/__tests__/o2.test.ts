@@ -632,25 +632,27 @@ describe("O2 self-check", () => {
             now: number
             states: SyncState[]
             seen?: StampedEvent[]
+            attempts?: AttemptEvent[]
           }[],
           visible = true
         ) => {
           const o2 = createO2()
           start(o2)
-          let last: string | undefined
+          // Перша проблема прогону: борг після червоного кроку знято.
+          let first: string | undefined
           for (const step of steps)
-            last = o2.step(
+            first ??= o2.step(
               input({
                 ...model,
                 now: step.now,
                 states: step.states,
-                attempts: discarded,
+                attempts: step.attempts ?? discarded,
                 events: step.seen ?? [],
                 holderPresent: () => true,
                 holderVisible: () => visible,
               })
             )
-          return last
+          return first
         }
         const waiting = { now: 10, states: pause(110) }
         // До кінця паузи — зелений; у строк і після нього без читання — червоний.
@@ -661,6 +663,71 @@ describe("O2 self-check", () => {
         // Повтор стартував (подія читання цілі) — борг закрито.
         expect(
           run([waiting, { now: 200, states: bare, seen: [read(1, 0, 77)] }])
+        ).toBeUndefined()
+        // Ядро, що вічно переставляє паузу й не читає, межу не відсуває.
+        expect(run([waiting, { now: 150, states: pause(300) }])).toMatch(
+          /no read of the target by the end of its retry pause/
+        )
+        // Повтор, що осів збоєм чи відкинутий, боргу не закриває: далі діє давня
+        // межа читання (інтервал плюс пауза).
+        const retried = (outcome: "failed" | "discarded-by-epoch") => [
+          ...discarded,
+          ...settled(77, 1, "reread").slice(0, 1),
+          {
+            phase: "settled",
+            attempt: 77,
+            kind: "reread",
+            target: { kind: "view", object: OBJECT, id: 1 },
+            outcome,
+          } as AttemptEvent,
+        ]
+        for (const outcome of ["failed", "discarded-by-epoch"] as const)
+          expect(
+            run([
+              waiting,
+              {
+                now: 120,
+                states: bare,
+                seen: [read(1, 0, 77)],
+                attempts: retried(outcome),
+              },
+              { now: 500, states: bare, attempts: retried(outcome) },
+              { now: 5_000, states: bare, attempts: retried(outcome) },
+            ])
+          ).toMatch(/no read of the target within/)
+        // Той самий повтор, що осів застосованим, борг закриває.
+        expect(
+          run([
+            waiting,
+            {
+              now: 120,
+              states: bare,
+              seen: [read(1, 0, 77)],
+              attempts: [...discarded, ...settled(77, 1, "reread")],
+            },
+            {
+              now: 5_000,
+              states: bare,
+              attempts: [...discarded, ...settled(77, 1, "reread")],
+            },
+          ])
+        ).toBeUndefined()
+        // Відкинута спроба й застосований повтор у одному вікні кроків: повтор
+        // судить сам, пауза не потрібна.
+        expect(
+          run([
+            {
+              now: 10,
+              states: bare,
+              seen: [read(1, 0, 77)],
+              attempts: [...discarded, ...settled(77, 1, "reread")],
+            },
+            {
+              now: 500,
+              states: bare,
+              attempts: [...discarded, ...settled(77, 1, "reread")],
+            },
+          ])
         ).toBeUndefined()
         // Паузи в `sync()` немає й читання теж: ядро повтор не поставило.
         expect(
