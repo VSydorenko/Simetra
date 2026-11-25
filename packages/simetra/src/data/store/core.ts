@@ -36,14 +36,13 @@ import {
   type CoreReadResult,
   type CoreSource,
   type ReadEvent,
-  type ReadOrigin,
   type StoreSource,
 } from "./source"
+import { createGate, type Flight } from "./sync/flight"
 import type {
   AdmissionCondition,
   DueCause,
   ReadCause,
-  ReadIntent,
   ReadWhy,
   RequirementKind,
   ServicePart,
@@ -485,11 +484,6 @@ const HYDRATION_TRUST: ReadWhy = {
   requirement: "hydration-trust",
   site: "R5",
 }
-const INJECTED_RIGHTS: ReadIntent = {
-  ...RIGHTS_UNCONFIRMED,
-  target: { kind: "service", service: "rights" },
-  site: "S3",
-}
 
 const KEYS_PER_REQUEST_MAX = Math.min(READ_LIMIT_MAX, FILTER_IN_MAX)
 
@@ -671,6 +665,7 @@ export function createCore(options: {
   // читання в мить відправки — за частинами (план читання); знімає лише
   // `settle` польоту, що записав відповідь одним `commit` чи відкинув її.
   const pendingWrites = new Map<ObjectName, number>()
+  const gate = createGate()
   const source: StoreSource = {
     close: () => batcher.close(),
     refuse: (object) => batcher.refuse?.(object),
@@ -698,17 +693,18 @@ export function createCore(options: {
         },
       }
     },
-    read: (parts, origin) => {
+    admit: gate.admit,
+    read: (parts, flight) => {
       const plan = writesOf(parts)
       if (plan.size > 0) {
         // Шлях, що пише рядки без оренди, — дефект: запис каналу забувся б.
-        if (origin.lease === undefined)
+        if (flight.lease === undefined)
           return Promise.reject(
             new Error("a read of rows without a write lease")
           )
-        origin.lease.issue(plan)
+        flight.lease.issue(plan)
       }
-      return dispatch(parts, origin)
+      return dispatch(parts, flight)
     },
   }
   // Об'єкти, рядки яких можуть записати частини читання: об'єкт частини й
@@ -734,9 +730,9 @@ export function createCore(options: {
   }
   async function dispatch(
     parts: readonly CorePart[],
-    origin: ReadOrigin
+    flight: Flight
   ): Promise<CoreReadResult> {
-    const { caller } = origin
+    const { caller } = flight
     // Старт читання частин виклику: правило першого знімка (Р5а) порівнює
     // його з епохою застосування знімка.
     const startEpoch = session.epochs.now()
@@ -790,10 +786,16 @@ export function createCore(options: {
       !forward.some((part) => part.type === "rights")
     // Походження йде за слотом: частина, яку додало ядро, має свій рядок
     // інвентаря (S3), решта — походження виклику.
-    const origins: ReadIntent[] = forward.map(() => origin)
+    const origins: Flight[] = forward.map(() => flight)
     if (injected) {
       forward.unshift({ type: "rights" })
-      origins.unshift(INJECTED_RIGHTS)
+      origins.unshift(
+        gate.admit(
+          RIGHTS_UNCONFIRMED,
+          { kind: "service", service: "rights" },
+          "S3"
+        )
+      )
     }
     const rightsAt = forward.findIndex((part) => part.type === "rights")
     let answered: { items: CoreReadItem[] } = { items: [] }
@@ -1355,13 +1357,15 @@ export function createCore(options: {
     const token = session.childToken(() => tail.gen === gen)
     const readEpoch = session.epochs.now()
     const lease = source.lease()
-    const read = tracked(source, {
-      reason: "requirement",
-      requirement: "row-unfinished",
-      target: { kind: "keys", object: o.name },
-      site: "K3",
-      lease,
-    })
+    const read = tracked(
+      source,
+      source.admit(
+        { reason: "requirement", requirement: "row-unfinished" },
+        { kind: "keys", object: o.name },
+        "K3",
+        { lease }
+      )
+    )
     readKeys(read.source, o.entry, keys, {
       keysPerRequest: limits.keysPerRequest,
     })
@@ -2013,12 +2017,14 @@ export function createCore(options: {
     versionFlying = true
     const token = session.token()
     source
-      .read([{ type: "version" }], {
-        reason: "requirement",
-        requirement: "version-unconfirmed",
-        target: { kind: "service", service: "version" },
-        site: "S1",
-      })
+      .read(
+        [{ type: "version" }],
+        source.admit(
+          { reason: "requirement", requirement: "version-unconfirmed" },
+          { kind: "service", service: "version" },
+          "S1"
+        )
+      )
       .then(
         () => {
           // Значення застосував збирач синхронно з відповіддю (бар'єр Р3).
@@ -2041,11 +2047,10 @@ export function createCore(options: {
     if (!rightsFlying) {
       // Збій частини вже в журналі (`rights-failed`) — повтору немає (Р8).
       source
-        .read([{ type: "rights" }], {
-          ...cause,
-          target: { kind: "service", service: "rights" },
-          site: "S2",
-        })
+        .read(
+          [{ type: "rights" }],
+          source.admit(cause, { kind: "service", service: "rights" }, "S2")
+        )
         .catch(() => {})
     } else if (!batcher.hasQueuedRights()) rightsTail ??= cause
   }

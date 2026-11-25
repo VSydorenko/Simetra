@@ -547,13 +547,18 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       let detail: SettleDetail | undefined
       const lost = (): SettleOutcome =>
         !session.token().valid ? "closed" : !s.alive ? "evicted" : "after-purge"
-      return readForm(ctx, s, readEpoch, token, {
-        ...why,
-        target,
-        attempt: number,
-        caller: s,
-        lease,
-      }).then(
+      const { site, ...cause } = why
+      return readForm(
+        ctx,
+        s,
+        readEpoch,
+        token,
+        ctx.source.admit(cause, target, site, {
+          attempt: number,
+          caller: s,
+          lease,
+        })
+      ).then(
         (apply) => {
           settle(lease, () => {
             const ran = session.commit(
@@ -792,18 +797,17 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       let detail: SettleDetail | undefined
       const lost = (): SettleOutcome =>
         !session.token().valid ? "closed" : !s.alive ? "evicted" : "after-purge"
+      const { site, ...cause } = why
       return gated(
         ctx,
         readEpoch,
         (c) =>
           readWindowMore(c, s, readEpoch, token, direction, cursor, written),
-        {
-          ...why,
-          target,
+        ctx.source.admit(cause, target, site, {
           attempt: number,
           caller: s,
           lease,
-        }
+        })
       ).then(
         (apply) => {
           settle(lease, () => {

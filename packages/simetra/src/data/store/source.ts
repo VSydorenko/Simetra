@@ -34,8 +34,12 @@ import {
 } from "simetra/model"
 import { DataError } from "../errors"
 import { effectiveEpoch } from "./epoch"
-import type { Subset } from "./subsets"
-import type { ReadIntent } from "./sync/vocabulary"
+import {
+  recordOf,
+  type Flight,
+  type Gate,
+  type ReadRecord,
+} from "./sync/flight"
 import type { Key, KnownSnapshot, ObjectName, ServerRow } from "./types"
 
 // Причини `command.unavailable` частини, яку сервер не виконав (П4-B §4.5).
@@ -204,12 +208,12 @@ export interface ReadOptions {
    */
   readonly onRightsSent?: () => void
   /**
-   * The origin of each part by slot (the length of the `parts` of the call);
-   * `undefined` in a slot — a part without an origin, which gives no event.
-   * Origins follow the slot, not the identity of the part: the core copies
+   * The flight of each part by slot (the length of the `parts` of the call);
+   * `undefined` in a slot — a part without a flight, which gives no event.
+   * Flights follow the slot, not the identity of the part: the core copies
    * parts (`include` cut, `known` set) and the copy keeps its slot.
    */
-  readonly origins?: readonly (ReadIntent | undefined)[]
+  readonly origins?: readonly (Flight | undefined)[]
   /**
    * Called when a read request gets its number, once per live part of the
    * request, before the request goes out (the `watchReads` event).
@@ -223,42 +227,29 @@ export interface ReadOptions {
  * the answer of the part. Neither the `caller` nor the `lease` of the flight
  * goes into it: they are the core's, not a diagnostic.
  */
-export type ReadEvent = ReadIntent & { readonly request: number }
+export type ReadEvent = ReadRecord & { readonly request: number }
 
-const readEvent = (origin: ReadIntent, request: number): ReadEvent =>
-  origin.reason === "requirement"
+// Причину, ціль і код беремо із запису шлюзу за тотожністю польоту, а не з
+// його полів (Р-SK1-11): політ, якого шлюз не видавав, події не дає.
+const readEvent = (flight: Flight, request: number): ReadEvent | undefined => {
+  const record = recordOf(flight)
+  if (record === undefined) return undefined
+  return record.reason === "requirement"
     ? {
-        reason: origin.reason,
-        requirement: origin.requirement,
-        target: origin.target,
-        site: origin.site,
-        ...(origin.attempt === undefined ? {} : { attempt: origin.attempt }),
+        reason: record.reason,
+        requirement: record.requirement,
+        target: record.target,
+        site: record.site,
+        ...(record.attempt === undefined ? {} : { attempt: record.attempt }),
         request,
       }
     : {
-        reason: origin.reason,
-        target: origin.target,
-        site: origin.site,
-        ...(origin.attempt === undefined ? {} : { attempt: origin.attempt }),
+        reason: record.reason,
+        target: record.target,
+        site: record.site,
+        ...(record.attempt === undefined ? {} : { attempt: record.attempt }),
         request,
       }
-
-/**
- * Where a read comes from (spec of the sync kernel, §5.4 and Appendix Б):
- * the reason, the target and the code of the inventory row, plus the
- * `caller` and the write `lease` of the flight. `StoreSource.read` takes it
- * as a required argument, so a read of the core without an origin does not
- * compile; SK-1 turns it into a `Flight` without touching the call sites.
- * It never goes to the wire.
- *
- * `caller` — the view whose read this is, when a view reads (the core's
- * first-snapshot rule re-reads exactly that view, plan B5b-2 Р5а).
- * `lease` — the write lease of the flight: the read issues it for every
- * object whose rows its parts may write (§8.4, rule 2).
- */
-export type ReadOrigin = ReadIntent & {
-  readonly caller?: Subset
-  readonly lease?: WriteLease
 }
 
 /**
@@ -267,30 +258,32 @@ export type ReadOrigin = ReadIntent & {
  * them in one place).
  */
 export interface StoreSource extends Omit<CoreSource, "read"> {
-  read(parts: readonly CorePart[], origin: ReadOrigin): Promise<CoreReadResult>
+  read(parts: readonly CorePart[], flight: Flight): Promise<CoreReadResult>
+  /** The admission gate of the session: every flight of a read comes from it. */
+  readonly admit: Gate["admit"]
   /** A new write lease for one flight; only {@link settle} releases it. */
   lease(): WriteLease
 }
 
 /**
- * A {@link StoreSource} with the origin of one flight bound in: the readers
- * read through it (reads inside a flight continue the flight, so they take
- * the origin of the row that started it, Appendix Б «Спільне», п. 3). A
- * source without an origin is not a `BoundSource`, so a reader cannot be
- * handed one.
+ * A {@link StoreSource} with one flight bound in: the readers read through
+ * it (reads inside a flight continue the flight, so they take the flight of
+ * the row that started it, Appendix Б «Спільне», п. 3). A source without a
+ * flight is not a `BoundSource`, so a reader cannot be handed one.
  */
 export interface BoundSource extends Omit<StoreSource, "read"> {
   read(parts: readonly CorePart[]): Promise<CoreReadResult>
 }
 
-/** Binds `origin` into `source`: every read of the result carries it. */
-export function bound(source: StoreSource, origin: ReadOrigin): BoundSource {
+/** Binds `flight` into `source`: every read of the result carries it. */
+export function bound(source: StoreSource, flight: Flight): BoundSource {
   return {
     close: () => source.close(),
     refuse: source.refuse?.bind(source),
     run: (operation) => source.run(operation),
+    admit: source.admit,
     lease: () => source.lease(),
-    read: (parts) => source.read(parts, origin),
+    read: (parts) => source.read(parts, flight),
   }
 }
 
@@ -534,7 +527,7 @@ export function createCoreSource(
     adapter: SourceAdapter | null,
     queries: readonly CorePart[],
     wires: readonly WireReadPart[],
-    origins: readonly (ReadIntent | undefined)[],
+    origins: readonly (Flight | undefined)[],
     { onRightsSent, onRead }: ReadOptions
   ): Promise<CoreReadItem[]> => {
     let answer: WireReadParts | undefined
@@ -549,8 +542,10 @@ export function createCoreSource(
         // відмовлену без запиту (`stale-object`, закритий обмежувач), задача
         // сюди не доводить.
         for (const i of live) {
-          const origin = origins[i]
-          if (origin !== undefined) onRead?.(readEvent(origin, request))
+          const flight = origins[i]
+          const event =
+            flight === undefined ? undefined : readEvent(flight, request)
+          if (event !== undefined) onRead?.(event)
         }
         // Строк знімка — від справжньої відправки, а не від черги слотів:
         // інакше знімок після довгої черги приходив би вже простроченим.
@@ -783,17 +778,17 @@ export function createCoreSource(
  * A view of `source` that records the epoch of every answered part, in the
  * order of arrival: a read applies only after the session accepted every
  * epoch it carries (P4-B spec §6.2) — a key absent from an answer has no
- * row to carry it. Its reads carry `origin`.
+ * row to carry it. Its reads carry `flight`.
  */
 export function tracked(
   source: StoreSource,
-  origin: ReadOrigin
+  flight: Flight
 ): {
   source: BoundSource
   epochs: Set<string | null>
 } {
   const epochs = new Set<string | null>()
-  const inner = bound(source, origin)
+  const inner = bound(source, flight)
   return {
     epochs,
     source: {

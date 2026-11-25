@@ -46,7 +46,7 @@ import { DEFAULT_CORE_LIMITS } from "../types"
 import {
   createFakeSource,
   withSleep,
-  TEST_ORIGIN,
+  TEST_FLIGHT,
   type FakeReadLog,
   type FakeSource,
 } from "../testing/fake-source"
@@ -85,7 +85,7 @@ const key = (n: number) =>
 
 /** Джерело, як його бачать модулі сховища: `read` з типовим сном-таймером. */
 const boundSource = (...args: Parameters<typeof createCoreSource>) =>
-  bound(withSleep(createCoreSource(...args)), TEST_ORIGIN)
+  bound(withSleep(createCoreSource(...args)), TEST_FLIGHT)
 
 /** Ядро над фейковим сервером: одне джерело на всі об'єкти. */
 function setup(options: { parallel?: number; fake?: FakeSource } = {}): {
@@ -100,7 +100,7 @@ function setup(options: { parallel?: number; fake?: FakeSource } = {}): {
     createReadLimiter(options.parallel ?? 4),
     fake.server
   )
-  return { fake, source: bound(withSleep(source), TEST_ORIGIN), raw: source }
+  return { fake, source: bound(withSleep(source), TEST_FLIGHT), raw: source }
 }
 
 const seedTasks = (fake: FakeSource, count: number) => {
