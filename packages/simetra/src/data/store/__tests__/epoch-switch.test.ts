@@ -24,7 +24,7 @@ import {
   type CoreHarness,
 } from "./core-support"
 import { collectCore } from "./oracles"
-import { TEST_ORIGIN, withSleep } from "../testing/fake-source"
+import { TEST_FLIGHT, withSleep } from "../testing/fake-source"
 import { harness, K1, row, S, type Harness } from "./store-support"
 
 /*
@@ -193,7 +193,7 @@ describe("acceptEpochs: one answer of several epochs", () => {
     const h = harness()
     accept(h, EA)
     const start = h.now()
-    const read = tracked(withSleep(answering([EA, EB, EA])), TEST_ORIGIN)
+    const read = tracked(withSleep(answering([EA, EB, EA])), TEST_FLIGHT)
     for (let i = 0; i < 3; i++)
       await read.source.read([
         {

@@ -43,7 +43,6 @@ import {
   settle,
   tracked,
   type BoundSource,
-  type ReadOrigin,
 } from "./source"
 import {
   EPOCH_UNAVAILABLE,
@@ -54,6 +53,7 @@ import {
   type Subset,
   type SubsetRegistry,
 } from "./subsets"
+import type { Flight } from "./sync/flight"
 import type { ReadCause, ReadWhy, SettleOutcome } from "./sync/vocabulary"
 import type {
   ActiveView,
@@ -138,7 +138,7 @@ export interface WriterContext extends ReaderHost {
   }
 }
 
-/** The context a flight's readers get: its source carries the flight's origin. */
+/** The context a flight's readers get: its source carries the flight. */
 type BoundWriter = WithSource<WriterContext, BoundSource>
 
 /** The longest wait for a re-read the journal settles a mutation by (§7.2 step 4). */
@@ -919,13 +919,13 @@ function readAgain(
   s: Subset,
   startEpoch: number,
   token: GenerationToken,
-  origin: ReadOrigin
+  flight: Flight
 ): Promise<Apply> {
   return gated(
     ctx,
     startEpoch,
     (c) => writeAgain(c, s, startEpoch, token),
-    origin
+    flight
   )
 }
 
@@ -1363,18 +1363,23 @@ export async function revalidateViews(
   // Одна оренда на прохід: усі відповіді пише один `commit` нижче.
   const lease = ctx.source.lease()
   const results = await Promise.all(
-    reads.map(([s, why]) =>
-      readAgain(ctx, s, startEpoch, token, {
-        ...why,
-        target: attemptTarget(s),
-        attempt: numbers.get(s),
-        caller: s,
-        lease,
-      }).then(
+    reads.map(([s, why]) => {
+      const { site, ...cause } = why
+      return readAgain(
+        ctx,
+        s,
+        startEpoch,
+        token,
+        ctx.source.admit(cause, attemptTarget(s), site, {
+          attempt: numbers.get(s),
+          caller: s,
+          lease,
+        })
+      ).then(
         (apply) => ({ s, why, apply }) as const,
         (error: unknown) => ({ s, why, error }) as const
       )
-    )
+    })
   )
   for (const s of targets) {
     const at = s.rereadEpochs.indexOf(startEpoch)
@@ -1591,12 +1596,15 @@ export async function rereadKey(
     )
   })
   const lease = ctx.source.lease()
-  const read = tracked(ctx.source, {
-    reason: "write-confirm",
-    target: { kind: "keys", object },
-    site: "K4",
-    lease,
-  })
+  const read = tracked(
+    ctx.source,
+    ctx.source.admit(
+      { reason: "write-confirm" },
+      { kind: "keys", object },
+      "K4",
+      { lease }
+    )
+  )
   let rows: readonly ServerRow[] | undefined
   try {
     rows = await readKeys(

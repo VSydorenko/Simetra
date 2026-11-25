@@ -20,8 +20,13 @@ import {
   type ReadLimiter,
   type ReadOptions,
 } from "../source"
-import { SITE_CODES, type ReadIntent } from "../sync/vocabulary"
-import { createFakeSource, type FakeSource } from "../testing/fake-source"
+import type { Flight } from "../sync/flight"
+import { SITE_CODES } from "../sync/vocabulary"
+import {
+  createFakeSource,
+  testFlight,
+  type FakeSource,
+} from "../testing/fake-source"
 import type { ViewSpec } from "../types"
 import {
   ORG,
@@ -55,11 +60,12 @@ const SLEEP: ReadOptions["sleep"] = () => Promise.resolve()
 
 // Походження слота: код рядка — свій на кожен слот, ціль чергується між двома
 // об'єктами, тож будь-яка перестановка змінює пару «код — запит».
-const originAt = (slot: number): ReadIntent => ({
-  reason: "user",
-  target: { kind: "keys", object: slot % 2 === 0 ? TASK : ORG },
-  site: SITE_CODES[slot]!,
-})
+const originAt = (slot: number): Flight =>
+  testFlight(
+    { reason: "user" },
+    { kind: "keys", object: slot % 2 === 0 ? TASK : ORG },
+    SITE_CODES[slot]!
+  )
 
 const queryOf = (object: MetadataRef, n: number): CorePart => ({
   type: "query",
@@ -112,7 +118,7 @@ function twoAdapters(options: {
   const events: ReadEvent[] = []
   const read = (
     parts: readonly CorePart[],
-    origins: readonly (ReadIntent | undefined)[]
+    origins: readonly (Flight | undefined)[]
   ) =>
     source.read(parts, {
       sleep: SLEEP,
@@ -163,14 +169,14 @@ describe("watchReads at the source: one event per live part of a request", () =>
       queryOf(TASK_REF, 2),
       { type: "version" },
     ]
-    const origins: ReadIntent[] = [
+    const origins: Flight[] = [
       originAt(0),
       originAt(1),
-      {
-        reason: "interval",
-        target: { kind: "service", service: "version" },
-        site: "S1",
-      },
+      testFlight(
+        { reason: "interval" },
+        { kind: "service", service: "version" },
+        "S1"
+      ),
     ]
     const { items } = await read(parts, origins)
     expect(events).toHaveLength(3)
@@ -365,7 +371,7 @@ describe("watchReads at the source: re-sent rounds", () => {
 describe("watchReads at the batcher: origins follow the slots", () => {
   /** Джерело, що пам'ятає опції кожного виклику. */
   function recording() {
-    const seen: (readonly (ReadIntent | undefined)[] | undefined)[] = []
+    const seen: (readonly (Flight | undefined)[] | undefined)[] = []
     const source: CoreSource = {
       read: (parts, options) => {
         seen.push(options.origins)
@@ -420,7 +426,7 @@ describe("watchReads at the batcher: origins follow the slots", () => {
   })
 
   it("re-runs the calls one by one after a mapping refusal with the same origins", async () => {
-    const seen: (readonly (ReadIntent | undefined)[] | undefined)[] = []
+    const seen: (readonly (Flight | undefined)[] | undefined)[] = []
     const source: CoreSource = {
       read: (parts, options) => {
         seen.push(options.origins)

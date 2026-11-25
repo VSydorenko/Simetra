@@ -682,14 +682,17 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const retried =
       planned.length > 0 &&
       planned.every((key) => (signals.keys.get(key)?.attempt ?? 0) > 0)
-    const read = tracked(writer.source, {
-      ...(retried
-        ? { reason: "requirement", requirement: "min-version" }
-        : { reason: "signal" }),
-      target: { kind: "keys", object },
-      site: retried ? "K2" : "K1",
-      lease,
-    })
+    const read = tracked(
+      writer.source,
+      writer.source.admit(
+        retried
+          ? { reason: "requirement", requirement: "min-version" }
+          : { reason: "signal" },
+        { kind: "keys", object },
+        retried ? "K2" : "K1",
+        { lease }
+      )
+    )
     const owned = new Set(plan.stored)
     return {
       object,

@@ -113,7 +113,7 @@ ADR-0098, ADR-0099.
 `run-tests unit --changed` наприкінці задачі. Кожна задача — після
 попередньої.
 
-**Задача 1 (А). `Flight` і підпис читання.**
+### Задача 1 (А). `Flight` і підпис читання.
 Файли: `store/sync/` (новий файл польоту й шлюзу), `source.ts` (`ReadOrigin`,
 `StoreSource`, `bound`, `ReadOptions.origins`), `core.ts` (`source.read`,
 `dispatch`), `batcher.ts`, `testing/fake-source.ts` (`withSleep`),
@@ -125,7 +125,7 @@ ADR-0098, ADR-0099.
 Перевірка: `--filter …/watch-reads.test.ts`, `--filter …/source.test.ts`,
 `--filter …/batcher.test.ts`, `--changed`.
 
-**Задача 2 (А). Кожен шлях бере політ у шлюзу; рантайм-відмова; мутація; характеристика `main`.**
+### Задача 2 (А). Кожен шлях бере політ у шлюзу; рантайм-відмова; мутація; характеристика `main`.
 Файли: функції колонки «Файл :: функція» Додатка Б; `defects.ts`;
 `model.test.ts` (перелік самотесту: прапорець і `CAUGHT_BY` О1).
 Готово, коли: кожен код Додатка Б отримує політ з `admit` у мить рішення
@@ -138,7 +138,7 @@ ADR-0098, ADR-0099.
 звіряється з поведінкою `main`, а не сама з собою. Перевірка: `--filter …/model.test.ts`
 (самотест), `--filter …/watch-reads.test.ts`, `--changed`.
 
-**Задача 3 (Б). Таблиця допуску й `closed`.**
+### Задача 3 (Б). Таблиця допуску й `closed`.
 Файли: `sync/` (таблиця, перевизначення, `admit`), `subsets.ts` (`load`,
 `loadMore`, `queueCheck`, `isClosed` у рішеннях), `writer.ts`, `core.ts`,
 `receiver.ts` (перевірки токена перед читанням; `stopped` — стан зупинки приймача, `core.stopSignals()` зупиняє його при живій сесії, тож він лишається в приймачі й умовою `closed` не є).
@@ -149,7 +149,7 @@ ADR-0098, ADR-0099.
 `--filter …/views.test.ts`, `--filter …/read-batch-budgets.test.ts`,
 `--filter <характеристичний тест>`, `--changed`.
 
-**Задача 4 (Б). `stale-object`.**
+### Задача 4 (Б). `stale-object`.
 Файли: `core.ts` (`dispatch`, `markStale`, `readRequirement`,
 `readHydrated`, `reconcile`, `fireWave`, `onFlush`, `schedule`, `joinWave`),
 `receiver.ts` (`run`), `subsets.ts` (`refresh`, `showNew`), `batcher.ts`,
@@ -167,7 +167,7 @@ ADR-0098, ADR-0099.
 `--filter …/read-batch-budgets.test.ts`, `--filter <характеристичний тест>`,
 `--changed`.
 
-**Задача 5 (Б). `discard-bound`.**
+### Задача 5 (Б). `discard-bound`.
 Файли: `core.ts` (`tick`, `schedulerDue`, `runDue`,
 `dropDeferredWhenUnavailable`), `receiver.ts` (`halted`), `subsets.ts`
 (`holdWithoutTab`, `requirementHold`), `writer.ts` (лише місця, що читають
@@ -180,7 +180,7 @@ ADR-0098, ADR-0099.
 `--filter …/receiver-signals.test.ts`, `--filter …/read-batch-budgets.test.ts`,
 `--filter <характеристичний тест>`, `--changed`.
 
-**Задача 6 (Б). `tab-hidden`.**
+### Задача 6 (Б). `tab-hidden`.
 Файли: `core.ts` (`suspend`, `resume`, `rightsDueAt`, `timersRead`,
 контексти `tabVisible`), `scheduler.ts` (`visible`), `receiver.ts` (`run`),
 `subsets.ts` (`requirementHold`, `settleRequirement`, гілка `answerRejected`).
@@ -190,13 +190,13 @@ ADR-0098, ADR-0099.
 `--filter …/scheduler.test.ts`, `--filter …/read-batch-budgets.test.ts`,
 `--filter …/receiver-signals.test.ts`, `--filter …/model.test.ts`, `--changed`.
 
-**Задача 7 (В). Тест-страж.**
+### Задача 7 (В). Тест-страж.
 Файли: новий страж у `store/__tests__/`. Готово, коли: чотири правила Р-SK1-10
 зелені на коді й червоні на самотестах кожної форми; перелік дозволених місць
 має причину на кожен рядок і не містить функцій Додатка Б. Перевірка:
 `--filter <страж>`, `--changed`.
 
-**Задача 8 (В). Діагностика зі шлюзу й закриття.**
+### Задача 8 (В). Діагностика зі шлюзу й закриття.
 Файли: `core.ts` (`syncState`, `refusalOf`, `timersRead`, `timerDue`),
 `__tests__/sync-inspection.test.ts`.
 Готово, коли: Р-SK1-12 — `sync()` бере `refusal` і `deferral` чотирьох умов зі

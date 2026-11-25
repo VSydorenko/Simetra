@@ -153,11 +153,3 @@ export type ReadTarget =
 
 /** Причина й рядок інвентаря: усе походження, крім цілі. */
 export type ReadWhy = ReadCause & { readonly site: SiteCode }
-
-/** Походження читання без запитувача й оренди (їх додає `source.ts`). */
-export type ReadIntent = ReadCause & {
-  readonly target: ReadTarget
-  readonly site: SiteCode | TestSite
-  /** Номер спроби цілі «вигляд», з якої йде читання (подія `watchAttempts`). */
-  readonly attempt?: number
-}

@@ -8,23 +8,23 @@ import {
   type CoreSource,
   type ReadOptions,
 } from "./source"
-import type { ReadIntent } from "./sync/vocabulary"
+import type { Flight } from "./sync/flight"
 
 /**
  * The batcher: a source that also knows its queue. Its own type, not the
- * `StoreSource` one: the origin is optional here, so a part without one is a
+ * `StoreSource` one: the flight is optional here, so a part without one is a
  * finding of the O1 oracle, not a compile error in the batcher tests.
  */
 // Оренди запису видає джерело ядра над збирачем, не сам збирач (§8.4).
 export interface Batcher extends Omit<CoreSource, "read"> {
   /**
-   * `origins` — the origin of each part by slot (the length of `parts`): the
+   * `origins` — the flight of each part by slot (the length of `parts`): the
    * parts of one call may come from different rows of the inventory (the
    * `rights` part the core adds to the first request, Додаток Б, S3).
    */
   read(
     parts: readonly CorePart[],
-    origins?: readonly ReadIntent[]
+    origins?: readonly Flight[]
   ): Promise<CoreReadResult>
   /** Whether a `version` part waits in the queue, not sent yet. */
   hasQueuedVersion(): boolean
@@ -34,7 +34,7 @@ export interface Batcher extends Omit<CoreSource, "read"> {
 
 interface Call {
   readonly parts: readonly CorePart[]
-  readonly origins: readonly (ReadIntent | undefined)[]
+  readonly origins: readonly (Flight | undefined)[]
   readonly resolve: (items: CoreReadItem[]) => void
   readonly reject: (error: unknown) => void
 }
@@ -72,6 +72,7 @@ export function createBatcher(
     sleep: ReadOptions["sleep"]
     onRightsSent?: ReadOptions["onRightsSent"]
     onRead?: ReadOptions["onRead"]
+    ownFlight?: ReadOptions["ownFlight"]
     onVersion?: (version: VersionValue) => void
     onRights?: (item: CoreReadItem) => void
   }
@@ -103,6 +104,7 @@ export function createBatcher(
               sleep: options.sleep,
               onRightsSent: options.onRightsSent,
               onRead: options.onRead,
+              ownFlight: options.ownFlight,
               // Походження за слотом відправлених частин: злиття викликів і
               // відмова без запиту зсувають слоти, походження йде з ними.
               origins: sent.map(({ at, slot }) => calls[at]!.origins[slot]),

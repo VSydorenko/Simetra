@@ -21,7 +21,7 @@ import {
 import {
   createFakeSource,
   withSleep,
-  TEST_ORIGIN,
+  TEST_FLIGHT,
 } from "../src/data/store/testing/fake-source"
 import { fitParts } from "../src/server/response-budget"
 
@@ -117,7 +117,7 @@ function budgeted(sizes: ReadonlyMap<number, number>) {
     fake.server
   )
   return {
-    source: bound(withSleep(source), TEST_ORIGIN),
+    source: bound(withSleep(source), TEST_FLIGHT),
     fake,
     responses,
     values,
