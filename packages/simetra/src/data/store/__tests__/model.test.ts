@@ -5137,6 +5137,21 @@ describe("the time budget of a property", () => {
 // Фіксовані прогони знайдених контрприкладів: насіння й шлях fast-check
 // відтворюють той самий прогін на будь-якій машині.
 describe("core model regressions", () => {
+  // Явні кроки: усічені шляхи реплеїв нижче не доводять, що без виправлення
+  // прогін червоний. Завантаження вигляду відкинуто за епохою, далі його
+  // перечитує `return` — модель не мусить вважати вигляд «у польоті».
+  it("`return` rereads a view whose load was discarded and never retried", async () => {
+    const steps: Step[] = [
+      { t: "closeInFlight" },
+      { t: "race", group: 5, settle: "now" },
+      { t: "gap", k: 0, remove: false },
+      { t: "answer", pick: 0, how: "forbidden", at: 0 },
+      { t: "churn", v: 0, scroll: false },
+      { t: "return", minAge: 1000 },
+    ]
+    await modelRun(runModel(steps, false, "full", [], true, true, true))
+  })
+
   it.each([
     // #312: явний `revalidate` над виглядом у польоті після `unavailable`/`resume`.
     {
@@ -5293,6 +5308,25 @@ describe("core model regressions", () => {
       issue: "O3 section over a removed owner",
       seed: -1579167006,
       path: "37:2:3:5:13:13:21:30:23:22:22:24:29:29:39:38:42:45:43:44:46:48:27:25:25:25:25:25:9:12:2:13:4:7:11:11:11:12:12:12:12:14:13:13:13:12:12:12:12:12",
+    },
+    // Пауза повтору відкинутого завантаження кінчається будь-якою новою спробою
+    // вигляду, а не лише завантаженням: інакше модель вважала його «у польоті».
+    {
+      issue: "return rereads a view after a discarded load",
+      seed: -565918531,
+      path: "1556:2:3:5:15:16:14:13:13:14:14:14:18:18:12",
+    },
+    {
+      issue: "return rereads a view after a discarded load (rights)",
+      rights: true,
+      seed: -1716810821,
+      path: "4910:3:1:0:3:6:12:12:16:17:18:21:26:3:8:13:13:14:20:24:24:24:14",
+    },
+    {
+      issue: "return rereads a view after a discarded load (signals)",
+      signals: true,
+      seed: 681021836,
+      path: "6052:3:2:1:7:9:14:14:16:16:16:22:22:22:26:27:27:30:31:32:32:32:16",
     },
     {
       issue: "O2 purged row returns",

@@ -86,9 +86,11 @@ export function trackViews(
     const facts = of(event.target.id)
     if (event.phase === "started") {
       startedAt.set(event.attempt, now())
+      // Будь-яка нова спроба цього вигляду (перечитування теж) знімає паузу
+      // повтору: повтор завантаження ядро тоді вже не ставить.
+      facts.retrying = false
       if (event.kind === "reread") facts.rereads++
       if (event.kind === "load") {
-        facts.retrying = false
         if (!RETRY_SITES.has(event.site)) facts.loads++
         loadOf.set(event.attempt, facts.loads)
       }
