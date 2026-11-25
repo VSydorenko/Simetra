@@ -211,14 +211,6 @@ describe("submitConsent", () => {
     const foreign = await consent(flow, { csrf }, attacker)
     expect(foreign.status).toBe(404)
     expect(await liveGrants(attacker.userId!)).toEqual([])
-    // Токен CSRF — з ключа cookie, тож підробити його без ключа не можна;
-    // тут він правильний, і все одно відмова
-    expect(csrf).toBe(
-      createHmac("sha256", stand.keys.cookieKeys[0]!)
-        .update(`${flow.uid}.${flow.uid}`)
-        .digest("base64url")
-    )
-
     const missing = await postInteraction(flow, { action: "consent" })
     expect(missing.status).toBe(403)
     // Друга взаємодія в тому самому браузері: обидві cookie живуть за своїм шляхом
@@ -226,6 +218,13 @@ describe("submitConsent", () => {
     const crossed = await consent(flow2, { csrf })
     expect(crossed.status).toBe(403)
     expect(await liveGrants(victim.userId!)).toEqual([])
+    // Токен CSRF — HMAC ключем cookie від `uid` і `jti` (у бібліотеці це одне
+    // значення): без ключа його не підробити, а чужий браузер вище мав правильний
+    expect(csrf).toBe(
+      createHmac("sha256", stand.keys.cookieKeys[0]!)
+        .update(`${flow.uid}.${flow.uid}`)
+        .digest("base64url")
+    )
 
     // Контроль: власний токен кожної взаємодії дає грант (другий — повторна
     // авторизація трійки, тож живе лише він)
