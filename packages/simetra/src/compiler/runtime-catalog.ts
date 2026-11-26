@@ -19,7 +19,11 @@ import {
   type RuntimeSection,
   type ObjectTable,
 } from "simetra/model"
-import { isSignalObject, readBoundaries } from "./access-units"
+import {
+  isSignalObject,
+  publicReadRoleOf,
+  readBoundaries,
+} from "./access-units"
 import { canonicalize } from "./canonical"
 import { compareStrings } from "./diagnostics"
 import type {
@@ -152,10 +156,8 @@ function publicReadOf(
         a.table.schema === table.schema &&
         a.table.name === table.name
     )?.publicRead ?? []
-  if (purposes.length === 0) return {}
-  return {
-    publicRead: purposes.includes("anonymous") ? "anon" : "authenticated",
-  }
+  const publicRead = publicReadRoleOf(purposes)
+  return publicRead === undefined ? {} : { publicRead }
 }
 
 // Межа файлу — з метаданих об'єкта як є: окремого виводу немає.
