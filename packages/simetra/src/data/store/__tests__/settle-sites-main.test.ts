@@ -21,7 +21,19 @@ import {
 } from "./core-support"
 import { record, type Recorder } from "./settle-record"
 import { EXPECTED } from "./settle-sites-main.expected"
-import { SETTLE_OUTCOMES, type SettleOutcome } from "../sync/vocabulary"
+import {
+  FLIGHT_KIND_RULES,
+  KEYS_FAILURE,
+  SITE_OVERRIDES,
+  keysDiscarded,
+  keysFailureOf,
+  type FlightKind,
+} from "../sync/flight-kinds"
+import {
+  READ_REASONS,
+  SETTLE_OUTCOMES,
+  type SettleOutcome,
+} from "../sync/vocabulary"
 
 /*
  * Характеристика `main` (план SK-2, задача 2): для кожної точки осідання
@@ -478,6 +490,40 @@ const PAGE: Record<string, Scenario> = {
     },
 }
 
+const raiseBanners = (h: CoreHarness) =>
+  h.core.commit(
+    (w) => w.markViews(TASK, { hasNewRows: true, needsRefresh: true }),
+    h.core.token()
+  )
+
+/** Банери вигляду: хто їх знімає, а хто лишає (колонка «знімає банери»). */
+const BANNERS: Record<string, Scenario> = {
+  "load applied lifts the banners": async () => {
+    const { h, rec, view } = await loadedRig()
+    raiseBanners(h)
+    rec.mark()
+    view.refresh()
+    await settle()
+    return log(rec)
+  },
+  "page applied leaves the banners": async () => {
+    const { h, rec, view } = await loadedRig(WINDOW, 250)
+    raiseBanners(h)
+    rec.mark()
+    view.loadAfter()
+    await settle()
+    return log(rec)
+  },
+  "reread applied leaves the banners": async () => {
+    const { h, rec } = await loadedRig()
+    raiseBanners(h)
+    rec.mark()
+    await h.core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    return log(rec)
+  },
+}
+
 /** Системне перечитування (`writer.ts::revalidateViews`, R3/R16/R17/R18). */
 const REREAD: Record<string, Scenario> = {
   "reread applied": async () => {
@@ -887,6 +933,21 @@ const RECEIVER: Record<string, Scenario> = {
       await settle()
       return log(rec)
     },
+  "min-version retry read refused (K2 fails like K1)": async () => {
+    const { h, rec, transport } = await signalCore(KEYS12, 3)
+    const ahead = h.fake.row(TASK, key(1))!.version + 5
+    transport.emit(CHANNEL, change(key(1), ahead))
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    h.fake.hold = () => true
+    await vi.advanceTimersByTimeAsync(1_000)
+    await settle()
+    rec.mark()
+    h.fake.hold = undefined
+    h.fake.take().fail("command.unavailable")
+    await settle()
+    return log(rec)
+  },
   "signal read of a new row: the new-rows hint, nothing written": async () => {
     const { h, rec, transport } = await signalCore(FULL, 3)
     h.fake.insert(TASK, {
@@ -957,6 +1018,7 @@ const ALL: Record<string, Scenario> = {
   ...LOAD,
   ...PAGE,
   ...REREAD,
+  ...BANNERS,
   ...WRITE_CONFIRM,
   ...TAIL,
   ...RECEIVER,
@@ -983,8 +1045,6 @@ const MATRIX: Record<string, Record<SettleOutcome, string>> = {
     "discarded-by-epoch": "load discarded by epoch, pause, then M8",
     failed: "load failed: apply throws",
     evicted: "load evicted: the view was released in flight",
-    // `main` дає after-purge і для токена, недійсного через `gen++`: Р-SK2-5 (а)
-    // каже `evicted` — розбіжність, про яку звіт задачі.
     "after-purge":
       "load with the token invalidated by a purge while the view lives",
     closed: "load closed: the answer arrives after close",
@@ -1022,7 +1082,8 @@ const MATRIX: Record<string, Record<SettleOutcome, string>> = {
     applied: "tail read",
     "discarded-by-epoch": "tail discarded by epoch",
     failed: "tail failed: read refused (no retry)",
-    evicted: "tail with its generation invalidated by a purge",
+    evicted:
+      "unreachable: the tail has one generation token and no view that could be released; its invalidation is the after-purge cell",
     "after-purge": "tail with its generation invalidated by a purge",
     closed: "tail closed: the answer arrives after close",
   },
@@ -1054,5 +1115,224 @@ describe("settle points on main: the point × outcome table", () => {
           cell.startsWith("unreachable: ") || cell in ALL,
           `${point} × ${outcome}: ${cell}`
         ).toBe(true)
+  })
+
+  it("a cell of a point with attempt events records that very outcome", () => {
+    for (const point of ["load", "page", "reread"])
+      for (const [outcome, cell] of Object.entries(MATRIX[point]!))
+        expect(
+          EXPECTED[cell]!.some((line) =>
+            line.startsWith(`attempt.settled ${point} ${outcome}`)
+          ),
+          `${point} × ${outcome}`
+        ).toBe(true)
+  })
+})
+
+/*
+ * Таблиця видів польоту (§5.5, Р-SK2-4) проти записаної поведінки `main`:
+ * кожна клітинка, яку запис бачить, прив'язана до сценарію; зміна клітинки
+ * червонить цей тест, а не лише копію таблиці. Клітинки, яких запис не бачить,
+ * названо в `UNTIED` з причиною.
+ */
+describe("the kind table against the recorded behaviour of main", () => {
+  const lines = (name: string) => EXPECTED[name]!
+  const has = (name: string, pattern: RegExp) =>
+    lines(name).some((line) => pattern.test(line))
+  const R = FLIGHT_KIND_RULES
+
+  it("failureCounts: the pause counts for a loaded view only (load), never (page), always (reread)", () => {
+    expect([
+      R.load.failureCounts,
+      R.page.failureCounts,
+      R.reread.failureCounts,
+    ]).toEqual(["if-loaded", "never", "always"])
+    expect(has("load failed: read refused, view loaded", /failures=1/)).toBe(
+      true
+    )
+    expect(
+      has("load failed: read refused, view never loaded", /failures=/)
+    ).toBe(false)
+    expect(has("page failed: read refused", /failures=/)).toBe(false)
+    expect(
+      has(
+        "reread failed: read refused (the pause counts for a loaded view)",
+        /failures=1/
+      )
+    ).toBe(true)
+  })
+
+  it("liftsBanners and setsBanners: load lifts, page and reread leave, only reread sets", () => {
+    expect([
+      R.load.liftsBanners,
+      R.page.liftsBanners,
+      R.reread.liftsBanners,
+    ]).toEqual([true, false, false])
+    expect(has("load applied lifts the banners", /hasNewRows=false/)).toBe(true)
+    expect(has("page applied leaves the banners", /hasNewRows=false/)).toBe(
+      false
+    )
+    expect(has("reread applied leaves the banners", /hasNewRows=false/)).toBe(
+      false
+    )
+    expect([
+      R.load.setsBanners,
+      R.page.setsBanners,
+      R.reread.setsBanners,
+    ]).toEqual([false, false, true])
+    expect(
+      has(
+        "reread after a purge of the object: barrier, R16 again",
+        /hasNewRows=true/
+      )
+    ).toBe(true)
+    for (const name of Object.keys(EXPECTED))
+      if (name.startsWith("load ") || name.startsWith("page "))
+        expect(has(name, /hasNewRows=true/), name).toBe(false)
+  })
+
+  it("confirms: load and page write their composition, reread does not; a page keeps the requirement", () => {
+    expect([
+      R.load.confirms,
+      R.page.confirms,
+      R.reread.confirms,
+      R.keys.confirms,
+    ]).toEqual(["view-with-composition", "own-page", "view-stable", "rows"])
+    expect(has("load applied", /^ops\.own/)).toBe(true)
+    expect(has("reread applied", /^ops\.own/)).toBe(false)
+    expect(has("tail read", /^ops\.own/)).toBe(false)
+    // Завантаження знімає вимогу власним польотом, сторінка — лише читанням,
+    // яке вона викликає після себе.
+    const own = lines(
+      "load applied, then M7 again (requirement raised in flight)"
+    )
+    expect(own.findIndex((l) => /unconfirmedSince=-/.test(l))).toBeGreaterThan(
+      own.findIndex((l) => l.startsWith("attempt.start load M7"))
+    )
+    const page = lines(
+      "page applied, a standing requirement read after it (readRequirement)"
+    )
+    expect(page.findIndex((l) => /unconfirmedSince=-/.test(l))).toBeGreaterThan(
+      page.findIndex((l) => l.startsWith("attempt.start reread"))
+    )
+  })
+
+  it("discarded: load and page pause then retry, reread moves the object deadline, keys do nothing", () => {
+    expect([
+      R.load.discarded,
+      R.page.discarded,
+      R.reread.discarded,
+      R.keys.discarded,
+    ]).toEqual([
+      "pause-then-retry",
+      "pause-then-retry",
+      "pause-then-deadline",
+      "nothing",
+    ])
+    expect(
+      has("load discarded by epoch, pause, then M8", /^attempt\.start load M8/)
+    ).toBe(true)
+    expect(
+      has("page discarded by epoch, pause, then P2", /^attempt\.start page P2/)
+    ).toBe(true)
+    const reread = lines(
+      "reread discarded by epoch: pause in the object deadline, then retry"
+    )
+    expect(reread).toContain("scheduled Catalog.Task")
+    expect(reread.some((l) => l.startsWith("attempt.start reread R3"))).toBe(
+      true
+    )
+    // Одне читання хвоста й жодного повтору після відкинутої відповіді.
+    expect(
+      lines("tail discarded by epoch").filter((l) => l.startsWith("read "))
+    ).toHaveLength(1)
+    expect(keysDiscarded("signal")).toBe("nothing")
+    expect(keysDiscarded("requirement")).toBe("nothing")
+  })
+
+  it("keys failure by reason: signal and K2 mark the views, the tail marks nothing", () => {
+    expect(KEYS_FAILURE.signal).toBe("composition-unconfirmed")
+    expect(KEYS_FAILURE.requirement).toBe("requirement-budget")
+    expect(
+      has(
+        "signal read failed: refused (needsRefresh and the composition mark)",
+        /needsRefresh=true/
+      )
+    ).toBe(true)
+    expect(
+      has(
+        "tail failed: read refused (no retry)",
+        /needsRefresh|unconfirmedSince/
+      )
+    ).toBe(false)
+    // K2 — перевизначення: збій як K1, а повтор іде після області запису.
+    expect(Object.keys(SITE_OVERRIDES)).toEqual(["K2"])
+    expect(keysFailureOf("K2", "requirement")).toBe("composition-unconfirmed")
+    expect(keysFailureOf("K3", "requirement")).toBe("requirement-budget")
+    expect(
+      has(
+        "min-version retry read refused (K2 fails like K1)",
+        /needsRefresh=true/
+      )
+    ).toBe(true)
+    expect(SITE_OVERRIDES.K2?.schedulesRetryAfterCommit).toBe(true)
+    const retry = lines(
+      "signal read with a version below the promised one: min-version retry after the region"
+    )
+    expect(
+      retry.findIndex((l) => l.startsWith("read keys K2"))
+    ).toBeGreaterThan(retry.indexOf("flush"))
+  })
+
+  it("reasons: every read of the recordings carries a reason of its kind", () => {
+    const kindOfSite: Record<string, FlightKind> = {
+      M: "load",
+      P: "page",
+      R: "reread",
+      K: "keys",
+      S: "service",
+    }
+    // Повтори R16–R18 системного перечитування несуть причину `retry`; рядок
+    // таблиці її не називає (повтор — та сама дія).
+    const repeats: Partial<Record<FlightKind, string>> = { reread: "retry" }
+    const seen = new Set<string>()
+    for (const log of Object.values(EXPECTED))
+      for (const line of log) {
+        const m = /^read \w+ ([MPRKS])\d+\/(.+)$/.exec(line)
+        if (m === null) continue
+        const kind = kindOfSite[m[1]!]!
+        const reason = (READ_REASONS as readonly string[]).includes(m[2]!)
+          ? m[2]!
+          : "requirement"
+        seen.add(`${kind}:${reason}`)
+        expect(
+          (R[kind].reasons as readonly string[]).includes(reason) ||
+            repeats[kind] === reason,
+          line
+        ).toBe(true)
+      }
+    expect(seen.size).toBeGreaterThan(0)
+  })
+
+  /*
+   * Клітинки, яких запис `main` не бачить, — без вигаданого зв'язку:
+   * - `successMovesDeadline` (reread, service): `refreshedAt` і `okReadEpoch`
+   *   у записі нормалізовано до «задано», рух значення між двома успіхами не
+   *   видно; сторінка й завантаження прив'язані (page не задає, load задає);
+   * - `failureCounts` (service, by-reason для ключів), `liftsBanners` (service),
+   *   `discarded` (service, `reply-discarded` для write-confirm), `confirms`
+   *   (service): служби читає лише ядро (S1–S3) без подій спроби, а запитувач
+   *   `write-confirm` і `markUnconfirmed` не мають спостережуваного ефекту в
+   *   сценаріях (рядок уже має версію чи позначку епохи);
+   * - `reasons` ключів `requirement`/службових: видно лише ті, що пускають
+   *   сценарії.
+   */
+  it("moves of the deadline: load moves it, page does not", () => {
+    expect([R.load.successMovesDeadline, R.page.successMovesDeadline]).toEqual([
+      true,
+      false,
+    ])
+    expect(has("load applied", /refreshedAt=set/)).toBe(true)
+    expect(has("page applied", /refreshedAt=set/)).toBe(false)
   })
 })

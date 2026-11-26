@@ -15,12 +15,7 @@ import { createGate, isPermit, type Flight } from "../sync/flight"
 import {
   FLIGHT_KINDS,
   FLIGHT_KIND_RULES,
-  KEYS_FAILURE,
-  SITE_OVERRIDES,
-  keysDiscarded,
-  keysFailureOf,
   type FlightKind,
-  type FlightKindRules,
 } from "../sync/flight-kinds"
 import { EVIDENCE_KINDS, type Evidence } from "../sync/evidence"
 import {
@@ -38,91 +33,13 @@ import {
  * цьому файлі, а не лише в таблиці. Поля польоту §5.4 — у кінці.
  */
 
+/*
+ * Таблиця видів польоту (§5.5, Р-SK2-4) звірена з записаною поведінкою `main`
+ * у `settle-sites-main.test.ts`, а не з її копією. Тут — лише її форма.
+ */
 describe("flight kind table §5.5", () => {
-  const EXPECTED: Record<FlightKind, FlightKindRules> = {
-    load: {
-      reasons: ["mount", "user", "retry", "requirement"],
-      confirms: "view-with-composition",
-      successMovesDeadline: true,
-      failureCounts: "if-loaded",
-      liftsBanners: true,
-      setsBanners: false,
-      discarded: "pause-then-retry",
-    },
-    page: {
-      reasons: ["user", "retry"],
-      confirms: "own-page",
-      successMovesDeadline: false,
-      failureCounts: "never",
-      liftsBanners: false,
-      setsBanners: false,
-      discarded: "pause-then-retry",
-    },
-    reread: {
-      reasons: ["requirement", "interval", "user", "signal"],
-      confirms: "view-stable",
-      successMovesDeadline: true,
-      failureCounts: "always",
-      liftsBanners: false,
-      setsBanners: true,
-      discarded: "pause-then-deadline",
-    },
-    keys: {
-      reasons: ["signal", "requirement", "write-confirm"],
-      confirms: "rows",
-      successMovesDeadline: false,
-      failureCounts: "by-reason",
-      liftsBanners: false,
-      setsBanners: false,
-      discarded: "nothing",
-    },
-    service: {
-      reasons: ["requirement", "interval"],
-      confirms: "service",
-      successMovesDeadline: true,
-      failureCounts: "never",
-      liftsBanners: null,
-      setsBanners: false,
-      discarded: "none",
-    },
-  }
-
-  it.each(FLIGHT_KINDS)("%s: every column as in §5.5", (kind) => {
-    expect(FLIGHT_KIND_RULES[kind]).toEqual(EXPECTED[kind])
-  })
-
   it("has a row for exactly the five kinds", () => {
     expect(Object.keys(FLIGHT_KIND_RULES)).toEqual([...FLIGHT_KINDS])
-  })
-
-  it("keys failure follows the reason: signal, requirement budget, write-confirm reply", () => {
-    expect(KEYS_FAILURE).toEqual({
-      signal: "composition-unconfirmed",
-      requirement: "requirement-budget",
-      "write-confirm": "reply-to-requester",
-    })
-  })
-
-  it("keys discard answers the requester only for write-confirm", () => {
-    const reasons: ReadonlyArray<"signal" | "requirement" | "write-confirm"> = [
-      "signal",
-      "requirement",
-      "write-confirm",
-    ]
-    expect(reasons.map(keysDiscarded)).toEqual([
-      "nothing",
-      "nothing",
-      "reply-discarded",
-    ])
-  })
-
-  it("K2 overrides the failure of the requirement reason like K1; K3 does not", () => {
-    expect(Object.keys(SITE_OVERRIDES)).toEqual(["K2"])
-    expect(keysFailureOf("K2", "requirement")).toBe("composition-unconfirmed")
-    expect(keysFailureOf("K1", "signal")).toBe("composition-unconfirmed")
-    expect(keysFailureOf("K3", "requirement")).toBe("requirement-budget")
-    expect(keysFailureOf("K4", "write-confirm")).toBe("reply-to-requester")
-    expect(SITE_OVERRIDES.K2?.schedulesRetryAfterCommit).toBe(true)
   })
 })
 
@@ -270,6 +187,8 @@ function flightOf(
 
 interface Rig {
   readonly calls: string[]
+  /** `failure` argument of every `settleTarget` call, in order. */
+  readonly failures: unknown[]
   readonly hooks: SettleHooks<SettleEntry, string>
   readonly session: { commit: (fn: (scope: Scope) => void) => boolean }
   /** Hook name → a thrown error for the next call. */
@@ -288,9 +207,11 @@ function rig(
     dropped?: boolean
     refused?: boolean
     lost?: SettleOutcome
+    evidence?: Evidence
   } = {}
 ): Rig {
   const calls: string[] = []
+  const failures: unknown[] = []
   const throwing = new Set<string>()
   let regionRefused = false
   const step = <T>(name: string, value?: T): T | undefined => {
@@ -322,10 +243,13 @@ function rig(
     applyFailed: () => void step("applyFailed"),
     dropped: () => step("dropped", behave.dropped) ?? false,
     marks: () => void step("marks"),
-    settleTarget: (_flight, outcome, evidence) =>
-      void step(
+    evidence: () => behave.evidence,
+    settleTarget: (_flight, outcome, evidence, failure) => {
+      failures.push(failure?.error)
+      return void step(
         `settleTarget:${outcome}${evidence === undefined ? "" : `:${evidence.kind}`}`
-      ),
+      )
+    },
     sweep: () => void step("sweep"),
     finish: (_entry, outcome) => void step(`finish:${outcome}`),
     settled: (_entry, outcome, detail) =>
@@ -335,6 +259,7 @@ function rig(
   }
   return {
     calls,
+    failures,
     hooks,
     session: {
       commit(fn) {
@@ -363,6 +288,7 @@ describe("settlePass: one outcome per flight, in the order of the steps", () => 
     const evidence = kind === "service" ? "service-sent" : "session-start"
     const result = settlePass(r.session, [{ flight }], r.hooks)
     expect(result).toEqual([{ outcome: "applied" }])
+    expect(r.failures).toEqual([undefined])
     expect(r.calls).toEqual([
       "commit:begin",
       "invalid",
@@ -409,14 +335,16 @@ describe("settlePass: one outcome per flight, in the order of the steps", () => 
     (kind) => {
       const r = rig()
       const flight = flightOf(kind)
+      const error = new Error("refused by server")
       const result = settlePass(
         r.session,
-        [{ flight, failure: { error: new Error("refused by server") } }],
+        [{ flight, failure: { error } }],
         r.hooks
       )
       expect(result).toEqual([
         { outcome: "failed", detail: "refused by server" },
       ])
+      expect(r.failures).toEqual([error])
       expect(r.calls).toEqual([
         "refused",
         "commit:begin",
@@ -430,6 +358,17 @@ describe("settlePass: one outcome per flight, in the order of the steps", () => 
       ])
     }
   )
+
+  it("the evidence hook overrides the epoch evidence the pass derives from the flight", () => {
+    const evidence: Evidence = {
+      kind: "row-version",
+      versionEpoch: null,
+      version: 3,
+    }
+    const r = rig({ evidence })
+    settlePass(r.session, [{ flight: flightOf("reread") }], r.hooks)
+    expect(r.calls).toContain("settleTarget:applied:row-version")
+  })
 
   it("which kinds sweep after a failed read is data, as on main", () => {
     expect(SWEEPS_AFTER_READ_FAILURE).toEqual({
@@ -451,6 +390,7 @@ describe("settlePass: one outcome per flight, in the order of the steps", () => 
         r.hooks
       )
       expect(result).toEqual([{ outcome: "failed", detail: "apply threw" }])
+      expect(r.failures).toEqual([new Error("apply threw")])
       expect(r.calls).toEqual([
         "commit:begin",
         "invalid",

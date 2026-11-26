@@ -1,7 +1,8 @@
 import type { DefectFlag } from "../defects"
 import type { WriteLease } from "../source"
 import type { Subset } from "../subsets"
-import type { GenerationToken, ObjectName } from "../types"
+import type { Scope } from "../session"
+import type { GenerationToken, ObjectName, ServerRow } from "../types"
 import type { FlightKind } from "./flight-kinds"
 import { answerOf, JUDGED_CONDITIONS, type JudgedCondition } from "./admission"
 import type {
@@ -56,13 +57,26 @@ export type Flight = ReadRecord & {
    */
   readonly purgeBarrier?: ReadonlyMap<string, number>
   /** Лише `write-confirm`: зворотний виклик запитувача в `commit` осідання. */
-  readonly requester?: (outcome: WriteConfirmOutcome) => void
+  readonly requester?: (outcome: RereadOutcome, scope: Scope) => void
   /** Лише `write-confirm`: межа часу (`REREAD_TIMEOUT_MS`), мс від старту. */
   readonly deadlineMs?: number
+  /**
+   * Лише `write-confirm`: запитувача вже покликано (Р-SK2-9). Спільне для
+   * строку й осідання: пізня відповідь після строку проходить прохід без
+   * запитувача.
+   */
+  readonly done?: { fired: boolean }
 } & { readonly [FLIGHT]: true }
 
-/** Наслідок, який `write-confirm` віддає запитувачу (`writer.ts`). */
-export type WriteConfirmOutcome = "applied" | "failed" | "discarded" | "timeout"
+/**
+ * Наслідок читання ключа після власного запису, який віддається запитувачу:
+ * `read` — відповідь пройшла брамою епох (`row` — рядок ключа, `undefined`,
+ * коли його немає); `failed` — читання відмовило чи минув строк
+ * `REREAD_TIMEOUT_MS`; `discarded` — відповідь з покинутої епохи версій.
+ */
+export type RereadOutcome =
+  | { readonly kind: "read"; readonly row: ServerRow | undefined }
+  | { readonly kind: "failed" | "discarded" }
 
 /** Те, що шлях додає до польоту, крім причини, цілі й коду. */
 export interface FlightExtras {
@@ -72,8 +86,9 @@ export interface FlightExtras {
   readonly kind?: FlightKind
   readonly token?: GenerationToken
   readonly purgeBarrier?: ReadonlyMap<string, number>
-  readonly requester?: (outcome: WriteConfirmOutcome) => void
+  readonly requester?: (outcome: RereadOutcome, scope: Scope) => void
   readonly deadlineMs?: number
+  readonly done?: { fired: boolean }
 }
 
 // Один реєстр: запис — копія полів у мить видачі плюс шлюз, що видав політ

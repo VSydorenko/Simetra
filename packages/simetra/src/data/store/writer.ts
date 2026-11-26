@@ -53,7 +53,12 @@ import {
   type Subset,
   type SubsetRegistry,
 } from "./subsets"
-import { isPermit, type Flight, type Permit } from "./sync/flight"
+import {
+  isPermit,
+  type Flight,
+  type Permit,
+  type RereadOutcome,
+} from "./sync/flight"
 import type { ReadCause, ReadWhy, SettleOutcome } from "./sync/vocabulary"
 import type {
   ActiveView,
@@ -141,16 +146,6 @@ type BoundWriter = WithSource<WriterContext, BoundSource>
 
 /** The longest wait for a re-read the journal settles a mutation by (§7.2 step 4). */
 export const REREAD_TIMEOUT_MS = 5_000
-
-/**
- * The outcome of a re-read by key: `read` — the answer
- * passed the epoch gate (`row` — the key's row, `undefined` when absent);
- * `failed` — the read failed or ran out of {@link REREAD_TIMEOUT_MS};
- * `discarded` — the answer came from an abandoned version epoch.
- */
-export type RereadOutcome =
-  | { readonly kind: "read"; readonly row: ServerRow | undefined }
-  | { readonly kind: "failed" | "discarded" }
 
 const isVisible = (s: Subset) => s.visible ?? s.listeners.size > 0
 
