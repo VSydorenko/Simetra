@@ -5,6 +5,7 @@ import {
   recordActions,
 } from "./actions"
 import { catalogSchema, type Catalog } from "../schemas/catalog"
+import { LANGUAGE_CODE_PATTERN } from "../schemas/language-code"
 import {
   authorColumns,
   deletionMarkColumn,
@@ -496,8 +497,8 @@ const CATALOG_ROLES: Record<
       codeLength: 12,
       autonumber: false,
       codeUnique: true,
-      // Підмножина BCP 47 «мова[-Script][-REGION]» (спека багатомовності §5.2).
-      check: `code ~ '^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$'`,
+      // Підмножина BCP 47 (спека багатомовності §5.2); регекс — спільний з проєктом.
+      check: `code ~ '${LANGUAGE_CODE_PATTERN}'`,
     },
     actions: "noDelete",
     notMarked: true,

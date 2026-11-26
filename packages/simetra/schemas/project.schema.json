@@ -34,6 +34,11 @@
         "en"
       ]
     },
+    "primaryDataLanguage": {
+      "description": "Primary data language: code of the primary row of the languages catalog. Assigned once.",
+      "type": "string",
+      "pattern": "^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$"
+    },
     "defaultSchema": {
       "default": "public",
       "description": "PostgreSQL schema for objects that declare none.",

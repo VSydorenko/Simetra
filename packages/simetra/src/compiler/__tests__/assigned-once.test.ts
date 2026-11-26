@@ -325,6 +325,50 @@ describe("assigned-once fields against the baseline", () => {
   })
 })
 
+describe("primaryDataLanguage of the project is assigned once", () => {
+  const withLanguage = (code?: string) =>
+    baseState({
+      [PROJECT]: project(
+        code === undefined ? {} : { primaryDataLanguage: code }
+      ),
+    })
+
+  it.each([
+    ["changing", "en", "uk", "en", "uk"],
+    ["removing", "uk", undefined, "uk", "(removed)"],
+  ])(
+    "%s the value is an error on the project pointer",
+    async (_, was, now, before, after) => {
+      const result = await againstBase(withLanguage(was), withLanguage(now))
+      expect(changes(result)).toEqual([
+        [
+          PROJECT,
+          "/primaryDataLanguage",
+          { field: "primaryDataLanguage", before, after },
+        ],
+      ])
+    }
+  )
+
+  it("the first value where there was none is not a change", async () => {
+    const result = await againstBase(withLanguage(), withLanguage("uk"))
+    expect(changes(result)).toEqual([])
+  })
+
+  it("the same value is not a change", async () => {
+    const result = await againstBase(withLanguage("uk"), withLanguage("uk"))
+    expect(changes(result)).toEqual([])
+  })
+
+  it.each(["UK", "ukr-", "u", "uk_UA", "uk-ua"])(
+    "refuses the code %s outside the BCP 47 subset",
+    async (code) => {
+      const result = await compile(metaFiles(withLanguage(code)))
+      expect(result.ok).toBe(false)
+    }
+  )
+})
+
 describe("assigned-once fields on a promotion", () => {
   const TABLE = "custom-tables/Counterparty/Counterparty.meta.json"
   const SECTION_TABLE =
