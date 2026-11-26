@@ -203,20 +203,74 @@ describe("reading the target for the seed (Р-B2-8)", () => {
   })
   const ALL = ["id", "code", "predefined_name", "state", "is_primary"]
 
-  it.each([
-    ["no table", { tables: [] }],
-    ["no is_primary column", live(ALL.filter((c) => c !== "is_primary"))],
-    ["no state column", live(ALL.filter((c) => c !== "state"))],
-  ])("reads nothing and reports absent with %s", async (_, target) => {
+  it("reads nothing and reports absent without the table", async () => {
+    const { fake, queries } = tx()
+    expect(
+      await readSeedTargetRows(fake, [await seedOf()], { tables: [] })
+    ).toEqual(["absent"])
+    expect(queries).toEqual([])
+  })
+
+  // Роль додано на наявний довідник: мітка й код уже є, колонок ролі ще
+  // немає. Рядки читаються за наявними колонками, відсутні — `NULL`
+  const ROLE_ADDED = live(["id", "code", "predefined_name"])
+
+  it("reads the label and the code where the role columns are not there yet", async () => {
     const { fake, queries } = tx()
     expect(
       await readSeedTargetRows(
         fake,
         [await seedOf()],
-        target as Parameters<typeof readSeedTargetRows>[2]
+        ROLE_ADDED as Parameters<typeof readSeedTargetRows>[2]
       )
-    ).toEqual(["absent"])
-    expect(queries).toEqual([])
+    ).toEqual([[]])
+    expect(queries).toEqual([
+      {
+        sql: "SELECT predefined_name::text AS predefined_name, NULL::text AS is_primary, code::text AS code, NULL::text AS state FROM public.languages WHERE predefined_name::text = $1 OR code::text = $2",
+        params: ["primary_language", "uk"],
+      },
+    ])
+  })
+
+  it.each<[string, Record<string, string | null>[], string]>([
+    ["no row matches", [], "seed"],
+    [
+      "a row already holds the label",
+      [
+        {
+          predefined_name: "primary_language",
+          is_primary: null,
+          code: "en",
+          state: null,
+        },
+      ],
+      "refused",
+    ],
+    [
+      "a row already holds the label and the primary code",
+      [
+        {
+          predefined_name: "primary_language",
+          is_primary: null,
+          code: "uk",
+          state: null,
+        },
+      ],
+      "refused",
+    ],
+    [
+      "an unlabelled row holds the primary code",
+      [{ predefined_name: null, is_primary: null, code: "uk", state: null }],
+      "refused",
+    ],
+  ])("without the role columns: %s → %s", async (_, rows, status) => {
+    const seed = await seedOf()
+    const [read] = await readSeedTargetRows(
+      tx(rows).fake,
+      [seed],
+      ROLE_ADDED as Parameters<typeof readSeedTargetRows>[2]
+    )
+    expect(seedVerdict(seed, read!).status).toBe(status)
   })
 
   it("reads the rows with the label or a seed key value", async () => {

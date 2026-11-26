@@ -9,7 +9,8 @@ import { tableKey } from "./table-key"
 /**
  * Рядки цілі, що стосуються рядка засіву: з його міткою або зі значенням
  * колонки `unique`. Значення — текст (`::text`), бо порівнюються з текстом
- * значень контракту; `absent` — на цілі немає таблиці чи колонки звірки.
+ * значень контракту; `absent` — на цілі немає таблиці. Колонки звірки, якої
+ * на цілі ще немає, у рядку `NULL`.
  */
 export type SeedTargetRows =
   "absent" | readonly Readonly<Record<string, string | null>>[]
@@ -37,8 +38,8 @@ const valueOf = (seed: PredefinedSeedContract, column: string): string =>
  * або рядок з міткою — це рядок засіву (усі колонки `unique` і `fixed` мають
  * значення контракту), і іншого рядка зі значенням `unique` немає. Решта —
  * відмова: `DO NOTHING` проковтнув би зміну основної мови чи лишив би базу без
- * неї, а вставка рядка без мітки з кодом основної впала б `23505`. Таблиця чи
- * колонка звірки, якої на цілі ще немає, — «основної ще немає».
+ * неї, а вставка рядка без мітки з кодом основної впала б `23505`. Таблиця,
+ * якої на цілі ще немає, — «основної ще немає».
  */
 export function seedVerdict(
   seed: PredefinedSeedContract,
@@ -70,7 +71,8 @@ const qualified = (t: QualifiedName): string =>
 
 /**
  * Читання цілі для звірки (Р-B2-8): рядки з міткою засіву або зі значенням
- * колонки `unique`. Наявність таблиці й колонок — з моделі живої цілі, а не
+ * колонки `unique`, серед колонок, які на цілі вже є. Наявність таблиці й
+ * колонок — з моделі живої цілі, а не
  * запитом, що впав би й зламав транзакцію. `names` — імена таблиці й колонок
  * на цілі, коли вони інші (промоція); рядки — в іменах контракту.
  */
@@ -91,29 +93,39 @@ export async function readSeedTargetRows(
   for (const seed of seeds) {
     const name = names.table(seed.table)
     const table = tables.get(tableKey(name.schema, name.name))
-    const columns = [seed.label.column, ...seed.unique, ...seed.fixed]
-    const onTarget = (c: string) => names.column(seed.table, c)
-    if (
-      table === undefined ||
-      columns.some((c) => !table.columns.some((t) => t.name === onTarget(c)))
-    ) {
+    if (table === undefined) {
       result.push("absent")
       continue
     }
-    const params = [
-      seed.label.value,
-      ...seed.unique.map((c) => valueOf(seed, c)),
-    ]
-    const where = [seed.label.column, ...seed.unique]
-      .map((c, i) => `${quoteIdent(onTarget(c))}::text = $${i + 1}`)
+    const columns = [seed.label.column, ...seed.unique, ...seed.fixed]
+    const onTarget = (c: string) => names.column(seed.table, c)
+    const present = (c: string) =>
+      table.columns.some((t) => t.name === onTarget(c))
+    // Колонки, якої на цілі ще немає (роль додано на наявний довідник), рядок
+    // не має: `NULL` не збігається зі значенням засіву, тож рядок з міткою
+    // чи з кодом основної без `is_primary`/`state` — відмова, а не тихий
+    // `DO NOTHING` чи `23505` на застосуванні
+    const keys = [
+      { column: seed.label.column, value: seed.label.value },
+      ...seed.unique.map((c) => ({ column: c, value: valueOf(seed, c) })),
+    ].filter((k) => present(k.column))
+    if (keys.length === 0) {
+      result.push([])
+      continue
+    }
+    const where = keys
+      .map((k, i) => `${quoteIdent(onTarget(k.column))}::text = $${i + 1}`)
       .join(" OR ")
     const select = columns
-      .map((c) => `${quoteIdent(onTarget(c))}::text AS ${quoteIdent(c)}`)
+      .map(
+        (c) =>
+          `${present(c) ? `${quoteIdent(onTarget(c))}::text` : "NULL::text"} AS ${quoteIdent(c)}`
+      )
       .join(", ")
     result.push(
       await tx.query<Record<string, string | null>>(
         `SELECT ${select} FROM ${qualified(name)} WHERE ${where}`,
-        params
+        keys.map((k) => k.value)
       )
     )
   }
