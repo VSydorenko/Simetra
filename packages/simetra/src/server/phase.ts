@@ -178,6 +178,9 @@ function encodeExpected(
     path: "expectedValues",
     prefix: "expectedValues.",
     maxBytes: true,
+    // Базу порівнюють зі збереженим, а не пишуть: документ поза профілем у
+    // базі (зміна типу, `psql`) інакше заблокував би CAS-редагування.
+    profile: false,
   })
 }
 

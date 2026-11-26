@@ -12,7 +12,8 @@ import {
   LOGIN_SECRETS_FILE,
   PROVIDER_ENV,
   SUPERUSER_PRELUDE,
-  TEST_STACKS,
+  profileStack,
+  stackEnvPrefix,
   testProvider,
   testStack,
 } from "./profile"
@@ -31,7 +32,7 @@ describe("testProvider", () => {
   it("reads the profile from the variable", () => {
     vi.stubEnv(PROVIDER_ENV, "postgres")
     expect(testProvider()).toBe("postgres")
-    expect(testStack()).toBe(TEST_STACKS.postgres)
+    expect(testStack()).toEqual(profileStack("postgres"))
   })
 
   it("rejects an unknown profile and names the variable", () => {
@@ -54,15 +55,17 @@ describe("enterProvider", () => {
   })
 })
 
-describe("TEST_STACKS", () => {
-  it.each(Object.entries(TEST_STACKS))(
+describe("profileStack", () => {
+  it.each(["postgres", "supabase"] as const)(
     "%s: every address is on 127.0.0.1",
-    (_name, stack) => {
+    (name) => {
+      const stack = profileStack(name)
       const urls = [
         stack.databaseUrl,
         stack.superuserUrl,
         stack.poolerUrl,
         stack.garageAdminUrl,
+        stack.garageS3Url,
       ].filter((u) => u !== null)
       for (const url of urls) expect(new URL(url).hostname).toBe("127.0.0.1")
     }
@@ -71,22 +74,87 @@ describe("TEST_STACKS", () => {
   // База тестів `simetra`, а стартовий параметр — роль власника на
   // кожному новому з'єднанні з адреси тестів
   it("postgres: tests run in database simetra as the owner, the superuser without options", () => {
-    const tests = new URL(TEST_STACKS.postgres.databaseUrl)
+    const tests = new URL(profileStack("postgres").databaseUrl)
     expect(tests.pathname).toBe("/simetra")
     expect(tests.searchParams.getAll("options")).toEqual([
       `-c role=${PROVIDER_OWNER_ROLES.postgres}`,
     ])
-    const superuser = new URL(TEST_STACKS.postgres.superuserUrl)
+    const superuser = new URL(profileStack("postgres").superuserUrl)
     expect(superuser.pathname).toBe("/simetra")
     expect(superuser.searchParams.has("options")).toBe(false)
-    expect(superuser.username).toBe(TEST_STACKS.postgres.superuserName)
+    expect(superuser.username).toBe(profileStack("postgres").superuserName)
   })
 
   it("gives each profile its own lock file, keeping the Supabase name", () => {
-    expect(TEST_STACKS.supabase.lockFile).toBe("simetra-db-stack.lock")
-    expect(TEST_STACKS.postgres.lockFile).not.toBe(
-      TEST_STACKS.supabase.lockFile
+    expect(profileStack("supabase").lockFile).toBe("simetra-db-stack.lock")
+    expect(profileStack("postgres").lockFile).not.toBe(
+      profileStack("supabase").lockFile
     )
+  })
+})
+
+// Інваріант 1 (адреси): індекс читається на виклик, не при імпорті
+describe("profileStack and the stack index", () => {
+  it("stack 1 keeps today's addresses, key and lock file", () => {
+    vi.stubEnv("SIMETRA_STACK", undefined)
+    const s = profileStack("postgres")
+    expect(s.index).toBe(1)
+    expect(s.key).toBe("postgres")
+    expect(s.superuserUrl).toBe(
+      "postgresql://postgres:postgres@127.0.0.1:54422/simetra"
+    )
+    expect(
+      s.databaseUrl.startsWith(
+        "postgresql://postgres:postgres@127.0.0.1:54422/simetra?options="
+      )
+    ).toBe(true)
+    expect(s.garageAdminUrl).toBe("http://127.0.0.1:3903")
+    expect(s.garageS3Url).toBe("http://127.0.0.1:3900")
+    expect(s.lockFile).toBe("simetra-db-stack-postgres.lock")
+  })
+
+  it("SIMETRA_STACK=2: every address, the key and the lock are stack 2's", () => {
+    vi.stubEnv("SIMETRA_STACK", "2")
+    const s = profileStack("postgres")
+    expect(s.index).toBe(2)
+    expect(s.key).toBe("postgres-2")
+    expect(new URL(s.databaseUrl).port).toBe("54432")
+    expect(new URL(s.superuserUrl).port).toBe("54432")
+    expect(s.garageAdminUrl).toBe("http://127.0.0.1:3913")
+    expect(s.garageS3Url).toBe("http://127.0.0.1:3910")
+    expect(s.lockFile).toBe("simetra-db-stack-postgres-2.lock")
+  })
+
+  it("follows the variable on every call, not at import", () => {
+    vi.stubEnv("SIMETRA_STACK", "2")
+    const second = profileStack("postgres")
+    vi.stubEnv("SIMETRA_STACK", "3")
+    expect(profileStack("postgres").key).toBe("postgres-3")
+    expect(second.key).toBe("postgres-2")
+  })
+
+  it("an invalid SIMETRA_STACK is an error naming the variable, not stack 1", () => {
+    vi.stubEnv("SIMETRA_STACK", "0")
+    expect(() => profileStack("postgres")).toThrow("SIMETRA_STACK")
+  })
+
+  it("supabase has no index: refused under SIMETRA_STACK=2 and a pool, unchanged otherwise", () => {
+    vi.stubEnv("SIMETRA_STACK", "2")
+    expect(() => profileStack("supabase")).toThrow("ADR-0117")
+    vi.stubEnv("SIMETRA_STACK", undefined)
+    vi.stubEnv("SIMETRA_STACK_POOL", "1,2")
+    expect(() => profileStack("supabase")).toThrow("ADR-0117")
+    vi.stubEnv("SIMETRA_STACK_POOL", undefined)
+    expect(profileStack("supabase").key).toBe("supabase")
+    expect(profileStack("supabase").garageS3Url).toBeNull()
+  })
+
+  it("prefixes printed commands with SIMETRA_STACK only for N other than 1", () => {
+    vi.stubEnv("SIMETRA_STACK", undefined)
+    expect(stackEnvPrefix(profileStack("postgres"))).toBe("")
+    expect(stackEnvPrefix(profileStack("supabase"))).toBe("")
+    vi.stubEnv("SIMETRA_STACK", "3")
+    expect(stackEnvPrefix(profileStack("postgres"))).toBe("SIMETRA_STACK=3 ")
   })
 })
 
@@ -182,8 +250,8 @@ describe("profile.ts import", () => {
       }
     })
     const fresh = await import("./profile")
-    expect(fresh.TEST_STACKS.postgres.databaseUrl).toBe(
-      TEST_STACKS.postgres.databaseUrl
+    expect(fresh.profileStack("postgres").databaseUrl).toBe(
+      profileStack("postgres").databaseUrl
     )
     expect(reads.filter((path) => path.endsWith("secrets.env"))).toEqual([])
     // Підстава справжня: виклик читає файл через ту саму підміну

@@ -24,9 +24,7 @@
         "command": ["pnpm", "exec", "vitest", "run", "--project", "db"],
         "reporter": "vitest-json",
         "packages": ["simetra", "designer", "template"],
-        "lock": "/tmp/simetra-db-stack-postgres.lock",
-        "lockWait": 2700,
-        "timeout": 2400,
+        "timeout": 5100,
         "ci": true
       },
       "db-supabase": {
@@ -50,9 +48,7 @@
         "command": ["pnpm", "run", "e2e"],
         "reporter": "exit-code",
         "packages": ["e2e"],
-        "lock": "/tmp/simetra-db-stack-postgres.lock",
-        "lockWait": 2700,
-        "timeout": 1500,
+        "timeout": 4200,
         "ci": true
       }
     }

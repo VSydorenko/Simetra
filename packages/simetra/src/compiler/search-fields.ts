@@ -15,7 +15,7 @@ import type { ParsedObject } from "./stages/files"
  * оголошене `fields` може так помилитися — типові поля дає реєстр.
  */
 export type SearchFieldProblem =
-  "unknown" | "duplicate" | "tabularSection" | "ref" | "generated"
+  "unknown" | "duplicate" | "tabularSection" | "ref" | "generated" | "richText"
 
 /** Поле шапки, що знайдене за логічним ім'ям, і чи дає воно нормалізовану колонку. */
 export interface SearchField {
@@ -90,11 +90,13 @@ export function resolveSearch(
           element.array !== true,
         ...(element.type === "Ref"
           ? { problem: "ref" as const }
-          : element.generated !== undefined
-            ? // Вираз генерації не може посилатися на згенеровану колонку
-              // (42P17): нормалізованої колонки над нею не буде.
-              { problem: "generated" as const }
-            : {}),
+          : element.type === "RichText"
+            ? { problem: "richText" as const }
+            : element.generated !== undefined
+              ? // Вираз генерації не може посилатися на згенеровану колонку
+                // (42P17): нормалізованої колонки над нею не буде.
+                { problem: "generated" as const }
+              : {}),
       })
     }
   }

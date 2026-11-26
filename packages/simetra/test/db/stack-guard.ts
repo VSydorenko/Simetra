@@ -1,20 +1,28 @@
 // Сторож DB-прогону vitest обох пакетів; globalSetup проєкту — файл профілю
 // (`stack-guard.<профіль>.ts`), бо профіль прогону задає проєкт, а не env
-// людини. Локальний стек кожного профілю один на машину, а DB-тести ганяють
-// кілька сесій і агентів: правила «один прогін стека за раз» і «стек після
-// прогону такий самий, як до нього» тримає цей механізм, а не дисципліна в
-// промптах.
+// людини. Стеків `postgres` на машині кілька (пул, ADR-0124), `supabase` —
+// один, а DB-тести ганяють кілька сесій і агентів: правила «один прогін
+// стека за раз», «прогін бере вільний живий стек пулу» і «стек після прогону
+// такий самий, як до нього» тримає цей механізм, а не дисципліна в промптах.
 import { execFileSync } from "node:child_process"
 import {
+  closeSync,
+  existsSync,
   openSync,
   readFileSync,
+  statSync,
   statfsSync,
   unlinkSync,
   writeSync,
-  closeSync,
 } from "node:fs"
 import { join } from "node:path"
 import pg from "pg"
+import {
+  STACK_ENV,
+  postgresStack,
+  stackIndex,
+  stackPool,
+} from "../../../../scripts/db-stack-index.mjs"
 import {
   PROVIDER_EVENT_SOURCES,
   PROVIDER_IDENTITY_SOURCES,
@@ -31,6 +39,7 @@ import {
   shadowAgeMinutes,
   testDatabaseUrl,
   testSuperuserUrl,
+  testUrlOverrideSet,
 } from "./connection"
 import {
   type Exec,
@@ -44,7 +53,9 @@ import { provideSupabaseS3 } from "./s3"
 import {
   enterProvider,
   PROVIDER_ENV,
-  TEST_STACKS,
+  postgresStackAt,
+  profileStack,
+  stackEnvPrefix,
   type TestProvider,
 } from "./profile"
 import {
@@ -53,6 +64,7 @@ import {
   type GuardClient,
   openAdmin,
   stackDatabases,
+  stackIndexMismatch,
   stopRunBackends,
 } from "./sweep"
 
@@ -60,6 +72,14 @@ import {
 // означає завислий прогін, і про нього краще дізнатися, ніж чекати безкінечно
 const LOCK_WAIT_MS = 45 * 60_000
 const LOCK_POLL_MS = 5_000
+// Стек пулу, що не відповів за кілька секунд, не живий: чекати типових 30 с
+// на кожного з дев'яти кандидатів означало б хвилини до першої помилки
+const PROBE_TIMEOUT_MS = 3_000
+// Замок щойно створений `wx`, а його вміст ще пишеться: порожній файл
+// молодший за це вікно — зайнятий, а не покинутий
+const LOCK_WRITE_GRACE_MS = 2_000
+// Воротар зняття покинутого замка живе мілісекунди; старший — лишок убитого
+const RECLAIM_GATE_STALE_MS = 10_000
 // Тіні двигуна — повні бази; прогін, що впирається в заповнений диск, падає
 // вже наприкінці й лишає сиріт, тож краще не стартувати зовсім. Docker на
 // Linux тримає дані стеку на кореневому розділі
@@ -100,7 +120,7 @@ export interface RunStart {
  * `scripts/db-stack.mjs` takes the same path.
  */
 export function lockPath(p: TestProvider): string {
-  return join("/tmp", TEST_STACKS[p].lockFile)
+  return join("/tmp", profileStack(p).lockFile)
 }
 
 /** The vitest globalSetup of a DB project that runs against the stack of `p`. */
@@ -111,13 +131,10 @@ export function setupFor(p: TestProvider): () => Promise<() => Promise<void>> {
 async function setup(p: TestProvider): Promise<() => Promise<void>> {
   // До воркерів: env профілю успадковують і вони, і прибиральник на сигналі
   enterProvider(p)
-  const lock = lockPath(p)
-  const releaseLock = (): void => {
-    // Лише свій замок: чужий, перехоплений після нашого падіння, не чіпаємо
-    if (readHolder(lock)?.pid === process.pid) removeLockFile(lock)
-  }
   checkFreeSpace()
-  await acquireLock(lock, p)
+  // Індекс стека потрапляє в `process.env.SIMETRA_STACK` усередині
+  // `takeStack`, до будь-чого, що обчислює адресу
+  const { release: releaseLock } = await takeStack(p)
   let removeInterruptCleanup = (): void => {}
   try {
     // Форки воркерів, які vitest стартує після globalSetup, успадковують env:
@@ -140,7 +157,7 @@ async function setup(p: TestProvider): Promise<() => Promise<void>> {
     const before = await startChecks(p, {
       announce: () =>
         process.stderr.write(
-          `DB run ${runTag} on ${p} stack${tree !== undefined ? ` at ${tree.summary}` : ""}\n`
+          `DB run ${runTag} on ${p} stack${stackSuffix(profileStack(p).index)}${tree !== undefined ? ` at ${tree.summary}` : ""}\n`
         ),
     })
     const leftovers = leftoverReport(before.snapshot, p)
@@ -184,16 +201,218 @@ function checkFreeSpace(): void {
     )
 }
 
+/** Параметри вибору й захоплення стека; тест підставляє замки, живість і паузи. */
+export interface PickOptions {
+  /** Індекси кандидатів у порядку спроб. */
+  candidates: readonly number[]
+  provider: TestProvider
+  /** Шлях замка кандидата; типово — з модуля індексу. */
+  lockOf?: (index: number) => string
+  /**
+   * Перевірка, що стек кандидата живий і звітує свій індекс; без неї
+   * (явний стек) кандидат береться, як є: помилку дасть `assertStack`.
+   */
+  live?: (index: number) => Promise<boolean>
+  waitMs?: number
+  pollMs?: number
+}
+
+/** Захоплений стек: індекс, шлях замка й звільнення саме цього замка. */
+export interface TakenStack {
+  index: number
+  lock: string
+  release: () => void
+}
+
 /**
- * Takes the lock file `lock` of the stack of `p`, waiting while a live run
- * holds it; refuses a lock this process already holds.
+ * Release of exactly the lock `lock` and only while this process still holds
+ * it: a lock taken over by another run after our crash is not touched, and the
+ * lock of another stack of the pool is never named here.
  */
-export async function acquireLock(
-  lock: string,
-  p: TestProvider
-): Promise<void> {
-  const deadline = Date.now() + LOCK_WAIT_MS
+export function lockReleaser(lock: string): () => void {
+  return () => {
+    if (readHolder(lock)?.pid === process.pid) removeLockFile(lock)
+  }
+}
+
+/**
+ * Chooses the stack of the run and takes its lock: explicit `SIMETRA_STACK` or
+ * a `SIMETRA_TEST_*_URL` override means one stack, otherwise the pool. Puts the
+ * index into `process.env.SIMETRA_STACK` at once, so that every address
+ * computed after it, and every forked worker, points at this stack.
+ */
+export async function takeStack(
+  p: TestProvider,
+  o: Partial<PickOptions> = {}
+): Promise<TakenStack> {
+  let pick: PickOptions
+  if (p === "supabase") {
+    // Профіль без індексу й пулу; `profileStack` відмовить на змінних пулу
+    pick = {
+      candidates: [1],
+      provider: p,
+      lockOf: () => lockPath(p),
+    }
+  } else if (
+    process.env[STACK_ENV] !== undefined ||
+    testUrlOverrideSet(process.env)
+  ) {
+    // Адресу, задану вручну, сторож за пулом не вибере: стек — явний або перший
+    pick = { candidates: [stackIndex(process.env)], provider: p }
+  } else {
+    pick = {
+      candidates: stackPool(process.env),
+      provider: p,
+      live: (index) => probeStack(index),
+    }
+  }
+  const taken = await acquireStack({ ...pick, ...o })
+  if (p === "postgres") process.env[STACK_ENV] = String(taken.index)
+  return taken
+}
+
+/**
+ * Живий ли стек `index` пулу: вхід суперкористувачем у базу `postgres` з
+ * короткою межею й збіг `simetra.stack_index` з індексом (порожнє — лише для
+ * стека 1, ще не перебудованого). Недосяжний стек — не живий, не помилка.
+ */
+export async function probeStack(
+  index: number,
+  make: (config: pg.ClientConfig) => GuardClient = (c) => {
+    // Обрив з'єднання після `connect` не має валити процес сторожа
+    const client = new pg.Client(c)
+    client.on("error", () => {})
+    return client
+  }
+): Promise<boolean> {
+  const target = new URL(postgresStackAt(index).superuserUrl)
+  target.pathname = "/postgres"
+  const client = make({
+    connectionString: target.toString(),
+    connectionTimeoutMillis: PROBE_TIMEOUT_MS,
+    query_timeout: PROBE_TIMEOUT_MS,
+    application_name: GUARD_APPLICATION_NAME,
+  })
+  try {
+    await client.connect()
+    const row = (
+      await client.query<{ idx: string | null }>(
+        "select pg_catalog.current_setting('simetra.stack_index', true) as idx"
+      )
+    ).rows[0]
+    return stackIndexOk(index, row?.idx)
+  } catch {
+    return false
+  } finally {
+    await client.end().catch(() => undefined)
+  }
+}
+
+function stackIndexOk(
+  index: number,
+  reported: string | null | undefined
+): boolean {
+  return stackIndexMismatch(index, reported) === null
+}
+
+/**
+ * Takes the lock of the first free live candidate. The pick and the lock are
+ * one step: `wx` creates the file only for one of the competitors, and a
+ * candidate counts only when its lock is created. Live candidates that are all
+ * busy are polled together until one frees; with no live candidate it throws.
+ * Refuses a lock this process already holds.
+ */
+export async function acquireStack(o: PickOptions): Promise<TakenStack> {
+  const lockOf = o.lockOf ?? ((index) => postgresStack(index).lockPath)
+  const waitMs = o.waitMs ?? LOCK_WAIT_MS
+  const pollMs = o.pollMs ?? LOCK_POLL_MS
+  const deadline = Date.now() + waitMs
+  const dead = new Set<number>()
   let announced = false
+  for (;;) {
+    const busy: { index: number; lock: string; holder: Holder }[] = []
+    for (const index of o.candidates) {
+      if (dead.has(index)) continue
+      const lock = lockOf(index)
+      const holder = tryCreateLock(lock)
+      if (holder !== undefined) {
+        busy.push({ index, lock, holder })
+        continue
+      }
+      // Замок наш: живий стек лишає його, не живий — звільняє для інших
+      if (o.live === undefined || (await alive(o.live, index, lock))) {
+        return { index, lock, release: lockReleaser(lock) }
+      }
+      dead.add(index)
+    }
+    if (busy.length === 0) {
+      throw new Error(
+        `No live local ${o.provider} stack among the candidates ${o.candidates.join(", ")}: start one with ${o.candidates
+          .map(
+            (index) =>
+              `${index === 1 ? "" : `${STACK_ENV}=${index} `}pnpm db:pg:start`
+          )
+          .join(" or ")}`
+      )
+    }
+    const who = busy
+      .map(
+        ({ holder }) =>
+          `DB run PID ${holder.pid} (${holder.cwd}, since ${holder.since})`
+      )
+      .join(", ")
+    // Один живий кандидат (решта не живі): текст стека без пулу, для стека 1
+    // такий самий, як до пулу
+    const single = busy.length === 1
+    const first = busy[0]!
+    if (Date.now() > deadline)
+      throw new Error(
+        `The local ${o.provider} stack${single ? stackSuffix(first.index) : "s"} ${single ? "is" : "are"} still busy after ${waitMs / 60_000} min: ${who}. Lock file${single ? "" : "s"}: ${busy.map((b) => b.lock).join(", ")}`
+      )
+    if (!announced) {
+      process.stderr.write(
+        single
+          ? `The local ${o.provider} stack${stackSuffix(first.index)} is busy: ${who}; waiting…\n`
+          : `All live local ${o.provider} stacks (${busy.map((b) => b.index).join(", ")}) are busy: ${who}; waiting…\n`
+      )
+      announced = true
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs))
+  }
+}
+
+// Для стека 1 повідомлення лишається таким, яким воно було до пулу
+function stackSuffix(index: number): string {
+  return index === 1 ? "" : ` ${index}`
+}
+
+async function alive(
+  live: (index: number) => Promise<boolean>,
+  index: number,
+  lock: string
+): Promise<boolean> {
+  let ok = false
+  try {
+    ok = await live(index)
+  } finally {
+    // Лише свій замок: і при помилці проби, і коли стек не живий
+    if (!ok) lockReleaser(lock)()
+  }
+  return ok
+}
+
+interface Holder {
+  pid: number
+  cwd: string
+  since: string
+}
+
+/**
+ * Creates the lock file with `wx`; `undefined` — the lock is ours. Otherwise
+ * the live holder: a lock of a dead process is taken over here, and a refusal
+ * names the lock this very process already holds.
+ */
+function tryCreateLock(lock: string): Holder | undefined {
   for (;;) {
     try {
       const fd = openSync(lock, "wx")
@@ -202,7 +421,7 @@ export async function acquireLock(
         `${process.pid}\n${process.cwd()}\n${new Date().toISOString()}\n`
       )
       closeSync(fd)
-      return
+      return undefined
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
     }
@@ -213,23 +432,57 @@ export async function acquireLock(
       throw new Error(
         `This process already holds ${lock}: one DB project per vitest process (run each with its own --project)`
       )
+    if (holder !== undefined && isAlive(holder.pid)) return holder
+    // Файла вже нема (власник його звільнив між `wx` і читанням): нічого
+    // знімати, а знімок «стале» чужий свіжий замок — саме та гонка, яку
+    // виключає вибір під `wx`
+    if (holder === undefined && !existsSync(lock)) continue
+    // Без вмісту: або `wx` щойно створив файл і пише pid (тоді він зайнятий),
+    // або файл покинутий
+    if (holder === undefined && lockAgeMs(lock) < LOCK_WRITE_GRACE_MS)
+      return { pid: 0, cwd: "?", since: "?" }
     // Убитий прогін лишає файл замка без живого процесу — замок не тримає
     // ніхто, і його можна забрати
-    if (holder === undefined || !isAlive(holder.pid)) {
+    if (!reclaimStale(lock, holder?.pid))
+      return { pid: 0, cwd: "?", since: "?" }
+  }
+}
+
+// Знімає покинутий замок так, щоб не зняти чужий свіжий: двоє, що бачать той
+// самий покинутий файл, інакше обоє зняли б його, а другий зняв би вже замок
+// першого. Воротар `<замок>.reclaim` створюється `wx`, тож під ним знімає один;
+// звільнити замок тим часом може лише власник, а покинутий власника не має.
+// `false` — воротар зайнятий, спробу повторить наступне опитування
+function reclaimStale(lock: string, stalePid: number | undefined): boolean {
+  const gate = `${lock}.reclaim`
+  try {
+    closeSync(openSync(gate, "wx"))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+    // Воротар покинутого знімальника: інакше замок не знявся б ніколи
+    if (lockAgeMs(gate) > RECLAIM_GATE_STALE_MS) removeLockFile(gate)
+    return false
+  }
+  try {
+    const now = readHolder(lock)
+    if (
+      existsSync(lock) &&
+      now?.pid === stalePid &&
+      (stalePid !== undefined || lockAgeMs(lock) >= LOCK_WRITE_GRACE_MS)
+    )
       removeLockFile(lock)
-      continue
-    }
-    if (Date.now() > deadline)
-      throw new Error(
-        `The local ${p} stack is still busy after ${LOCK_WAIT_MS / 60_000} min: DB run PID ${holder.pid} (${holder.cwd}, since ${holder.since}). Lock file: ${lock}`
-      )
-    if (!announced) {
-      process.stderr.write(
-        `The local ${p} stack is busy: DB run PID ${holder.pid} (${holder.cwd}, since ${holder.since}); waiting…\n`
-      )
-      announced = true
-    }
-    await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS))
+  } finally {
+    removeLockFile(gate)
+  }
+  return true
+}
+
+function lockAgeMs(lock: string): number {
+  try {
+    return Date.now() - statSync(lock).mtimeMs
+  } catch {
+    // Файла вже нема: він не «щойно створений», наступна спроба `wx` вирішить
+    return Number.POSITIVE_INFINITY
   }
 }
 
@@ -594,7 +847,7 @@ async function snapshot(
   )
   // Для Supabase — порожньо: його бакети додаються нижче з `storage.buckets`
   const buckets = (
-    await runBuckets(TEST_STACKS[p], deps.fetch ?? fetch, LIST_TIMEOUT_MS)
+    await runBuckets(profileStack(p), deps.fetch ?? fetch, LIST_TIMEOUT_MS)
   ).map((b) => b.name)
   const names = async (client: GuardClient, sql: string): Promise<string[]> =>
     (await client.query<{ name: string }>(sql)).rows.map((row) => row.name)
@@ -705,7 +958,7 @@ export function leftoverReport(
       ...[...byTag].flatMap(([tag, names]) => [
         `  run ${tag}: ${names.join(", ")}`,
         // Профіль явно: прибиральник без нього пішов би на типовий стек
-        `    cd packages/simetra && ${PROVIDER_ENV}=${p} node --import tsx test/db/sweep.ts ${tag}`,
+        `    cd packages/simetra && ${stackEnvPrefix(profileStack(p))}${PROVIDER_ENV}=${p} node --import tsx test/db/sweep.ts ${tag}`,
       ])
     )
   if (containers.length > 0)
@@ -720,6 +973,13 @@ export function leftoverReport(
         (name) =>
           `  DROP DATABASE "${name}" WITH (FORCE);  -- ${ageNote(name, now)}`
       )
+    )
+  // Лишки стека N ≠ 1: без назви стека рядки `DROP DATABASE` нічим не
+  // прив'язані до нього
+  const stack = profileStack(p)
+  if (lines.length > 0 && stack.index !== 1)
+    lines.unshift(
+      `Stack ${stack.key} (${STACK_ENV}=${stack.index}) — the objects below are on it:`
     )
   return lines
 }
@@ -770,7 +1030,7 @@ export function leakMessage(
     // `DROP OWNED BY` діє в поточній базі — тож у кожній базі стека
     if (kind === "roles") {
       const [main, ...rest] = stackDatabases(p)
-      const su = TEST_STACKS[p].superuserName
+      const su = profileStack(p).superuserName
       return [
         ...rest.map(
           (database) =>

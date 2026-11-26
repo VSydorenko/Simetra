@@ -3,6 +3,7 @@ import {
   BASE,
   baseAnswer,
   HIDDEN_TAB,
+  HIDDEN_TAB_BASIS,
   JUDGED_CONDITIONS,
   OVERRIDES,
   type JudgedCondition,
@@ -248,6 +249,36 @@ describe("base cells: the target table §5.3", () => {
       ).toBe(HIDDEN_TAB[requirement])
   })
 
+  it("every hidden-tab cell that differs from §5.2 names row 23 of §5.14, and only those", () => {
+    // Колонка §5.2 літералом: `by-setter` — відповідь залежить від
+    // постановника вимоги, якого SK-1 не несе, тож одна клітинка з нею
+    // розходиться завжди.
+    const spec: Record<
+      keyof typeof HIDDEN_TAB,
+      "defer" | "admit" | "by-setter"
+    > = {
+      "composition-unconfirmed": "defer",
+      "channel-rejoin": "defer",
+      "hydration-trust": "defer",
+      "access-narrowed": "admit",
+      "target-behind-header": "defer",
+      "min-version": "defer",
+      "value-hidden": "defer",
+      "row-unfinished": "defer",
+      "version-epoch-switched": "defer",
+      "rights-unconfirmed": "by-setter",
+      "version-unconfirmed": "by-setter",
+    }
+    const differing = REQUIREMENT_KINDS.filter(
+      (kind) => HIDDEN_TAB[kind] !== spec[kind]
+    )
+    expect(Object.keys(HIDDEN_TAB_BASIS).sort()).toEqual([...differing].sort())
+    expect(HIDDEN_TAB_BASIS).toEqual({
+      "rights-unconfirmed": { row: 23 },
+      "version-unconfirmed": { row: 23 },
+    })
+  })
+
   it("discard-bound does not apply to service targets, for every reason", () => {
     for (const reason of READ_REASONS) {
       const cause: ReadCause =
@@ -370,6 +401,14 @@ describe("closed: the session token is invalid (Р-SK1-5)", () => {
     expect(isPermit(gate.admit(cause, target, "M1"))).toBe(true)
     valid = false
     expect(gate.admit(cause, target, "M1")).toEqual({ refused: "closed" })
+  })
+
+  it("the timer query asks the same predicate, at the moment of the question", () => {
+    let valid = true
+    const gate = createGate({ token: () => ({ valid }) })
+    expect(gate.closed()).toBe(false)
+    valid = false
+    expect(gate.closed()).toBe(true)
   })
 
   it("a condition without a state function never holds", () => {
@@ -547,5 +586,56 @@ describe("the permit issues one flight (рішення архітекторки 
     expect(() => {
       ;(flight as { site: string }).site = "R1"
     }).toThrow(TypeError)
+  })
+})
+
+describe("diagnostics queries of the gate (Р-SK1-12)", () => {
+  it("refusal lists closed, stale-object and discard-bound in the order of §5.3; a service has no object", () => {
+    const stale = new Set<string>()
+    let unavailable = false
+    let valid = true
+    const gate = createGate({
+      token: () => (valid ? OPEN : SHUT),
+      staleObject: (object) => stale.has(object),
+      discardBound: () => unavailable,
+    })
+    expect(gate.refusal(OBJECT)).toBeUndefined()
+    unavailable = true
+    expect(gate.refusal(OBJECT)).toBe("discard-bound")
+    expect(gate.refusal()).toBeUndefined()
+    stale.add(OBJECT)
+    expect(gate.refusal(OBJECT)).toBe("stale-object")
+    valid = false
+    expect(gate.refusal(OBJECT)).toBe("closed")
+    expect(gate.refusal()).toBe("closed")
+  })
+
+  it("timersRead needs a visible tab, a compatible object and a session within the limit", () => {
+    const stale = new Set<string>()
+    let hidden = false
+    let unavailable = false
+    const state: GateState = {
+      token: () => OPEN,
+      staleObject: (object) => stale.has(object),
+      discardBound: () => unavailable,
+      tabHidden: () => hidden,
+    }
+    const gate = createGate(state)
+    expect(gate.timersRead(OBJECT)).toBe(true)
+    hidden = true
+    expect(gate.timersRead(OBJECT)).toBe(false)
+    hidden = false
+    stale.add(OBJECT)
+    expect(gate.timersRead(OBJECT)).toBe(false)
+    stale.clear()
+    unavailable = true
+    expect(gate.timersRead(OBJECT)).toBe(false)
+    // Мутація самотесту відкриває межу таймерам.
+    expect(
+      createGate({
+        ...state,
+        defects: new Set(["scheduler-reads-unavailable"]),
+      }).timersRead(OBJECT)
+    ).toBe(true)
   })
 })

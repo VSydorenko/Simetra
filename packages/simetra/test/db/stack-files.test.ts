@@ -28,13 +28,14 @@ import {
   type PlatformLoginPurpose,
 } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { postgresStack } from "../../../../scripts/db-stack-index.mjs"
 import {
   assertServerVersion,
   betterAuthCommand,
   imageTagVersion,
   passwordMatches,
-  POSTGRES_LOCK_FILE,
-  POSTGRES_LOCK_PATH,
+  postgresLockFile,
+  postgresLockPath,
   POSTGRES_PSQL_ARGS,
   runChild,
   rolesSupabaseInput,
@@ -43,6 +44,7 @@ import {
   STACK_REFUSAL,
   SUPABASE_LOCK_PATH,
   stackFilesHash,
+  stackUrl,
   startPostgres,
   stopPostgres,
   withStackLock,
@@ -52,7 +54,7 @@ import {
   centrifugoConfig,
   centrifugoConfigRefusals,
 } from "../../../designer/src/tools/signals-config"
-import { TEST_STACKS } from "./profile"
+import { profileStack } from "./profile"
 import { centrifugoImage } from "./signal-stand"
 import { lockPath } from "./stack-guard"
 
@@ -138,11 +140,26 @@ describe.each(STACKS)("compose.yaml of the $title", ({ dir, project }) => {
     expect(compose).toMatch(new RegExp(`^name: ${project}$`, "m"))
   })
 
+  // Голий `docker compose` без змінних — стек 1: типові значення інтерполяції
+  // мусять збігатися з ідентичністю стека 1 модуля індексу
+  it("the interpolation defaults are the identity of stack 1", () => {
+    const fallback = (name: string): number =>
+      Number(new RegExp(`\\$\\{${name}:-(\\d+)\\}`).exec(compose)?.[1])
+    const stack = postgresStack(1)
+    expect(fallback("SIMETRA_PG_PORT")).toBe(stack.pgPort)
+    expect(fallback("SIMETRA_GARAGE_S3_PORT")).toBe(stack.garageS3Port)
+    expect(fallback("SIMETRA_GARAGE_ADMIN_PORT")).toBe(stack.garageAdminPort)
+    expect(fallback("SIMETRA_STACK")).toBe(stack.index)
+  })
+
   it("publishes every port on 127.0.0.1 only and never the Garage RPC port", () => {
     const ports = publishedPorts(compose)
     // Порожній перелік пройшов би цикл нижче без жодної перевірки
     expect(ports.length > 0).toBe(true)
-    for (const port of ports) expect(port).toMatch(/^127\.0\.0\.1:\d+:\d+$/)
+    // Хост-порт — літерал або інтерполяція `${ЗМІННА:-порт стека 1}`: скрипт
+    // стека передає порти стека N змінними (Р-POOL-3)
+    for (const port of ports)
+      expect(port).toMatch(/^127\.0\.0\.1:(\d+|\$\{[A-Z0-9_]+:-\d+\}):\d+$/)
     expect(ports.some((p) => /:3901(:|$)/.test(p))).toBe(false)
   })
 
@@ -335,11 +352,35 @@ describe("the Centrifugo config of the stands", () => {
   )
 })
 
-describe("garage.toml of the postgres stack", () => {
+// Конфіг Garage — inline `configs:` у compose.yaml, не файл: bind-монтування
+// несло б у контейнер шлях checkout-а (Р-POOL-4)
+describe("inline Garage config of the postgres stack", () => {
+  const compose = read("compose.yaml")
+  const config =
+    /^ {2}garage-config:\n {4}content: \|\n((?: {6}.*\n|\n)*)/m.exec(
+      compose
+    )?.[1]
+
+  it("exists, and no garage.toml file is left in the stack directory", () => {
+    expect(config).toContain("replication_factor = 1")
+    expect(existsSync(join(STACK_DIR, "garage.toml"))).toBe(false)
+    expect(serviceBlocks(compose).get("garage")).toMatch(
+      /^ {6}- source: garage-config\n {8}target: \/etc\/garage\.toml$/m
+    )
+  })
+
   it("holds no secrets: they come from dev-secrets.env", () => {
-    const toml = read("garage.toml")
-    expect(toml).not.toMatch(/^\s*rpc_secret\s*=/m)
-    expect(toml).not.toMatch(/^\s*admin_token\s*=/m)
+    expect(config).not.toMatch(/^\s*rpc_secret\s*=/m)
+    expect(config).not.toMatch(/^\s*admin_token\s*=/m)
+  })
+
+  // Compose інтерполює `$` у content; без нього жодної підстановки не буде
+  it("has no $ that compose would interpolate", () => {
+    expect(config).not.toContain("$")
+  })
+
+  it("garage mounts no bind volume", () => {
+    expect(serviceBlocks(compose).get("garage")).not.toMatch(/^ {6}- \.\//m)
   })
 })
 
@@ -708,8 +749,8 @@ describe("withStackLock", () => {
   // Команда стека й DB-прогін мусять брати один замок: інакше `stop` зупинив
   // би стек посеред прогону
   it("the script locks the same file as the guard of the postgres stack", () => {
-    expect(POSTGRES_LOCK_FILE).toBe(TEST_STACKS.postgres.lockFile)
-    expect(basename(SUPABASE_LOCK_PATH)).toBe(TEST_STACKS.supabase.lockFile)
+    expect(postgresLockFile()).toBe(profileStack("postgres").lockFile)
+    expect(basename(SUPABASE_LOCK_PATH)).toBe(profileStack("supabase").lockFile)
   })
 
   let dir: string
@@ -817,20 +858,48 @@ describe("stack-files hash wiring of the postgres stack", () => {
   })
 })
 
+describe("stack by index", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  // Хеш не залежить від N: інакше стек N ≥ 2 відмовляв би «файли відрізняються»
+  it("the files hash is the same for two stacks", () => {
+    vi.stubEnv("SIMETRA_STACK", "1")
+    const first = stackFilesHash()
+    vi.stubEnv("SIMETRA_STACK", "3")
+    expect(stackFilesHash()).toBe(first)
+  })
+
+  it("lock, project and url follow SIMETRA_STACK", () => {
+    vi.stubEnv("SIMETRA_STACK", "2")
+    expect(postgresLockPath()).toBe("/tmp/simetra-db-stack-postgres-2.lock")
+    expect(postgresLockFile()).toBe("simetra-db-stack-postgres-2.lock")
+    expect(stackUrl("postgres", "postgres")).toBe(
+      "postgresql://postgres:postgres@127.0.0.1:54432/simetra"
+    )
+  })
+
+  it("an invalid SIMETRA_STACK is an error naming the variable", () => {
+    vi.stubEnv("SIMETRA_STACK", "10")
+    expect(() => postgresLockPath()).toThrow(/SIMETRA_STACK/)
+  })
+})
+
 describe("stack lock path", () => {
   afterEach(() => {
     vi.unstubAllEnvs()
   })
 
   // Сесії з різним TMPDIR інакше брали б різні файли й не виключали б одна одну
-  // Шлях скрипту обчислюється при імпорті: імпорт — у процесі з іншим TMPDIR
+  // Шлях скрипту має бути від TMPDIR незалежним: виклик — у процесі з іншим TMPDIR
   it("is /tmp/<lockFile> in the script whatever TMPDIR is", () => {
     const result = spawnSync(
       process.execPath,
       [
         "--input-type=module",
         "-e",
-        `import { POSTGRES_LOCK_PATH } from ${JSON.stringify(SCRIPT_URL.href)}; process.stdout.write(POSTGRES_LOCK_PATH)`,
+        `import { postgresLockPath } from ${JSON.stringify(SCRIPT_URL.href)}; process.stdout.write(postgresLockPath())`,
       ],
       {
         encoding: "utf8",
@@ -838,14 +907,18 @@ describe("stack lock path", () => {
       }
     )
     expect(result.status).toBe(0)
-    expect(result.stdout).toBe(`/tmp/${TEST_STACKS.postgres.lockFile}`)
-    expect(POSTGRES_LOCK_PATH).toBe(result.stdout)
+    expect(result.stdout).toBe(`/tmp/${profileStack("postgres").lockFile}`)
+    expect(postgresLockPath()).toBe(result.stdout)
   })
 
   it("is /tmp/<lockFile> in the guard whatever TMPDIR is", () => {
     vi.stubEnv("TMPDIR", "/var/tmp/some-session")
-    expect(lockPath("postgres")).toBe(`/tmp/${TEST_STACKS.postgres.lockFile}`)
-    expect(lockPath("supabase")).toBe(`/tmp/${TEST_STACKS.supabase.lockFile}`)
+    expect(lockPath("postgres")).toBe(
+      `/tmp/${profileStack("postgres").lockFile}`
+    )
+    expect(lockPath("supabase")).toBe(
+      `/tmp/${profileStack("supabase").lockFile}`
+    )
   })
 
   it("withStackLock names the held lock to its children only while fn runs", async () => {
@@ -1401,13 +1474,16 @@ describe("startPostgres", () => {
     }
   })
 
-  it("refuses a running stack created with another garage.toml, without up", async () => {
+  it("refuses a running stack created with another inline Garage config, without up", async () => {
     const copy = mkdtempSync(join(tmpdir(), "simetra-other-checkout-"))
     try {
       cpSync(STACK_DIR, copy, { recursive: true })
       writeFileSync(
-        join(copy, "garage.toml"),
-        `${read("garage.toml")}\n# changed\n`
+        join(copy, "compose.yaml"),
+        read("compose.yaml").replace(
+          "replication_factor = 1",
+          "replication_factor = 1\n      # changed"
+        )
       )
       const other = stackFilesHash(copy)
       expect(other).not.toBe(stackFilesHash())

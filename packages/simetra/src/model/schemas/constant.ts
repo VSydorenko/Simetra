@@ -6,6 +6,7 @@ import { objectHeaderShape } from "./object-header"
 import {
   defaultValueSchema,
   refineValueType,
+  refuseRichText,
   valueTypeShape,
 } from "./value-type"
 
@@ -30,6 +31,9 @@ export const constantSchema = z
       .optional()
       .meta({ description: "Initial value of the constant." }),
   })
-  .superRefine(refineValueType)
+  .superRefine((value, ctx) => {
+    refineValueType(value, ctx)
+    refuseRichText(value, ctx)
+  })
 
 export type Constant = z.infer<typeof constantSchema>

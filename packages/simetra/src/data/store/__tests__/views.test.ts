@@ -794,6 +794,20 @@ describe("close", () => {
     expect(seen.some((s) => s.status === "loading")).toBe(false)
   })
 
+  it("a preload of a closed core settles at once, without a view or a read", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 1)
+    core.close("disposed")
+    let settled = false
+    void core.preload(keys(1)).then(() => {
+      settled = true
+    })
+    await settle()
+    expect(settled).toBe(true)
+    expect(fake.log).toEqual([])
+    expect([...coreInternals(core).registry.subsets()]).toEqual([])
+  })
+
   it("sends no queued request and writes no late response after close", async () => {
     const { core, fake, inspect, log } = setup({
       mode: "manual",

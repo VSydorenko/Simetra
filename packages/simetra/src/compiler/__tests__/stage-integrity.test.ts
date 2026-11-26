@@ -1509,6 +1509,34 @@ describe("stage 4: integrity", () => {
       ])
     })
 
+    it("refuses a RichText attribute in an object and a section index", async () => {
+      const result = await compileWith({
+        "documents/D/D.meta.json": document("D", {
+          attributes: [
+            attribute("qty", { type: "Integer" }),
+            attribute("body", { type: "RichText" }),
+          ],
+          indexes: [{ attributes: ["qty", "body"] }],
+          tabularSections: [
+            {
+              id: uuid(741),
+              name: "lines",
+              physicalName: "d_lines",
+              attributes: [attribute("note", { type: "RichText" })],
+              indexes: [{ attributes: [{ name: "note", order: "desc" }] }],
+            },
+          ],
+        }),
+      })
+      expect(result.diagnostics.map((d) => [d.code, d.pointer])).toEqual([
+        ["index.attribute-rich-text", "/indexes/0/attributes/1"],
+        [
+          "index.attribute-rich-text",
+          "/tabularSections/0/indexes/0/attributes/0",
+        ],
+      ])
+    })
+
     it("accepts a standard attribute in the project case and rejects indexes on other kinds", async () => {
       const result = await compileWith({
         "project.meta.json": project({

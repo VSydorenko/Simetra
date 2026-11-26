@@ -542,13 +542,15 @@ function attributes(
         ? facts.enumValues(value.ref)
         : undefined
     // Ефективна лінивість — лише реквізиту шапки: явний `load` чи типове за
-    // типом (`RichText` додасть блок метаданих разом із тим самим правилом).
-    // Стандартні атрибути (ключ, версія, скоуп) лінивими не бувають.
+    // типом (`Bytes`, `RichText` — великі значення, Р-B7-10). Стандартні
+    // атрибути (ключ, версія, скоуп) лінивими не бувають.
     const load = field.element?.load
     const lazy =
       keys.header &&
       field.element !== undefined &&
-      (load === "lazy" || (load === undefined && value?.type === "Bytes"))
+      (load === "lazy" ||
+        (load === undefined &&
+          (value?.type === "Bytes" || value?.type === "RichText")))
     // Межа входу — і стандартному атрибуту: його `Text` теж пише команда, а
     // явної межі стандартному не задати, тож діє типова за типом (П1).
     const maxBytes =

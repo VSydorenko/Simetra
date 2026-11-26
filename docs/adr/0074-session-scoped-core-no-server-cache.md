@@ -52,3 +52,4 @@ Spec: [П4-B](../superpowers/specs/2026-11-05-p4-b-client-data-design.md) §6.6 
 Гідратований HTML не кешується спільно. Хост мусить передати `Vary: Cookie`
 і `private, no-store` (ADR-0089). Кожне нове кешування даних користувача
 потребує нового ADR.
+Спільний кеш відповіді гостю на публічному маршруті — [ADR-0121](0121-guest-shared-cache-tag-invalidation.md).

@@ -20,6 +20,7 @@ import {
   REGCLASS_PARAMETER_QUERY,
   excludedBuiltin,
 } from "../src/compiler/sql/builtin-exclusions.ts"
+import { postgresStack, stackIndex } from "../../../scripts/db-stack-index.mjs"
 
 const OUTPUT = new URL(
   "../src/compiler/sql/builtin-functions.ts",
@@ -29,9 +30,10 @@ const TYPES_OUTPUT = new URL(
   "../src/compiler/sql/pg-catalog-types.ts",
   import.meta.url
 )
+// Типова адреса — стек з індексу (`SIMETRA_STACK`), а не пришитий порт
 const url =
   process.env.SIMETRA_TEST_DATABASE_URL ??
-  "postgresql://postgres:postgres@127.0.0.1:54422/simetra"
+  `postgresql://postgres:postgres@127.0.0.1:${postgresStack(stackIndex()).pgPort}/simetra`
 
 const client = new pg.Client({ connectionString: url })
 await client.connect()

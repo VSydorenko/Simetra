@@ -1135,8 +1135,8 @@ FileStore = {
 
 | Сервіс | Образ | Порт на хості | Профіль |
 | --- | --- | --- | --- |
-| Postgres 17 | образ репо: `postgres:17` + pgTAP + `plpgsql_check` з PGDG, точний тег і digest; пакети розширень з точними версіями, а `db:pg:start` після старту звіряє `server_version` з версією з тегу образу й відмовляє (`STACK_SERVER_VERSION`) при розбіжності | 54422 | `postgres` |
-| Garage | `dxflrs/garage`, точний тег | 3900 (S3), 3903 (admin) | `postgres` |
+| Postgres 17 | образ репо: `postgres:17` + pgTAP + `plpgsql_check` з PGDG, точний тег і digest; пакети розширень з точними версіями, а `db:pg:start` після старту звіряє `server_version` з версією з тегу образу й відмовляє (`STACK_SERVER_VERSION`) при розбіжності; стартує з `-c simetra.stack_index=<N>` | `54422 + 10·(N−1)` | `postgres` |
+| Garage | `dxflrs/garage`, точний тег; конфіг — inline `configs:` у `compose.yaml`, без bind-монтувань | `3900 + 10·(N−1)` (S3), `3903 + 10·(N−1)` (admin) | `postgres` |
 | Supabase | Supabase CLI (пін у `package.json`) | 54322, 54329 | `supabase` |
 
 - **Стеки Centrifugo не мають.** Споживач outbox дивиться на базу застосунку
@@ -1156,12 +1156,26 @@ FileStore = {
 - Порти стека публікуються лише на `127.0.0.1`: Docker інакше відкриває їх
   на всіх інтерфейсах в обхід брандмауера, а стек має суперкористувача з
   відомим паролем і admin Garage.
-- Compose-проєкт `simetra-pg` у каталозі `docker/postgres-stack/` репо:
-  Dockerfile образу Postgres, `compose.yaml`, `garage.toml`, `dev-environment.sql`, `dev-secrets.env` (ключ Garage) і `login-secrets.env`
+- **Стек за індексом.** Стек `postgres` має індекс `N` (1 ≤ N ≤ 9; *стек N*,
+  GLOSSARY), і на машині може стояти кілька стеків поруч. Ідентичність стека
+  `N` виводить один модуль індексу в `scripts/` (чистий ESM без залежностей):
+  проєкт compose `simetra-pg` для 1 і `simetra-pg-N` інакше, порти за формулами
+  таблиці вище, ключ стека `postgres` для 1 і `postgres-N` інакше. Стек 1 —
+  нинішні імена й порти. Індекс бере змінна `SIMETRA_STACK`; недійсне значення
+  — помилка з назвою змінної, не тихий 1. Ніхто інший (скрипти, тести, demo) не
+  тримає власних портів, імен проєкту чи шляхів замка. `compose.yaml` бере
+  порти й індекс з інтерполяції зі значеннями стека 1 за типовими, а
+  `scripts/db-stack.mjs` передає їх у середовищі кожного виклику compose разом
+  з `-p`; голий `docker compose -f …` без змінних дає стек 1. Профіль
+  `supabase` індексу не має: `SIMETRA_STACK` ≠ 1 чи `SIMETRA_STACK_POOL` для
+  нього — відмова з посиланням на ADR-0117.
+- Compose-проєкт стека (`simetra-pg` для стека 1) у каталозі `docker/postgres-stack/` репо:
+  Dockerfile образу Postgres, `compose.yaml`, `dev-environment.sql`, `dev-secrets.env` (ключ Garage) і `login-secrets.env`
   (паролі ролей входу; compose цей файл не читає, тож зміна паролів не
   перестворює контейнерів). Ініціалізацію
   Garage (layout, бакет `simetra-dev`, ключ) робить `scripts/db-stack.mjs`,
-  а не скрипт у `docker/`. Версії — у файлах стека, не в `AGENTS.md`.
+  а не скрипт у `docker/`. Жоден виклик Docker не пише в `docker/postgres-stack/`
+  під час прогону. Версії — у файлах стека, не в `AGENTS.md`.
 - Better Auth не має сервісу: він живе в host-і. Для тестів його таблиці
   створює справжня міграція закріпленої версії (§4.4) у кожній тегованій
   тестовій базі, якій потрібна ідентичність, від тегованої ролі
@@ -1181,26 +1195,49 @@ FileStore = {
 
 | Команда | Дія |
 | --- | --- |
-| `pnpm db:pg:start` | `docker compose -p simetra-pg up -d --wait` (Postgres і Garage), ініціалізація Garage і `simetra.environment = 'development'`; з ПГ-2 далі ролі Simetra й шаблон `simetra_template` кроком `simetra roles` (§3.4, §3.5) з теки `docker/postgres-stack/project/` (`project.meta.json`, `provider: "postgres"`), dev-паролі ролям входу (з `login-secrets.env`), міграція Better Auth у базі `simetra` від `simetra_auth` і повторний `simetra roles`, що дає `simetra_owner` `USAGE` на `better_auth` та `TRIGGER`, `REFERENCES` на `better_auth."user"` (усе під замком стека, повтор нічого не змінює); `start` на запущеному стеку йде як `up -d --wait --no-recreate`, без `--build`, і відмовляє, коли файли `docker/postgres-stack/**` стека відрізняються від гілки (мітка `simetra.stack-files-hash` — `sha256` вмісту цих файлів — на кожному контейнері стека: в образу `postgres` з аргументу збірки, у решти сервісів з `labels` compose; хеш конфігу compose не звіряється, бо містить абсолютний шлях bind-монтувань і відрізнявся б між checkout-ами); зупинка стека — за власником |
-| `pnpm db:pg:stop` | `docker compose -p simetra-pg down` (томи лишаються; `--volumes` — лише явно) |
-| `pnpm test:db:pg` | набір базового стану `postgres` через Vitest-раннер, тест переривання і DB-тести `simetra` та `@simetrajs/designer` (проєкт `db`) на стеку `postgres` |
+| `pnpm db:pg:start` | `docker compose -p <проєкт стека> up -d --wait` (Postgres і Garage; стек — за `SIMETRA_STACK`, без змінної стек 1; пул командам не потрібен), ініціалізація Garage і `simetra.environment = 'development'`; з ПГ-2 далі ролі Simetra й шаблон `simetra_template` кроком `simetra roles` (§3.4, §3.5) з теки `docker/postgres-stack/project/` (`project.meta.json`, `provider: "postgres"`), dev-паролі ролям входу (з `login-secrets.env`), міграція Better Auth у базі `simetra` від `simetra_auth` і повторний `simetra roles`, що дає `simetra_owner` `USAGE` на `better_auth` та `TRIGGER`, `REFERENCES` на `better_auth."user"` (усе під замком стека, повтор нічого не змінює); `start` на запущеному стеку йде як `up -d --wait --no-recreate`, без `--build`, і відмовляє, коли файли `docker/postgres-stack/**` стека відрізняються від гілки (мітка `simetra.stack-files-hash` — `sha256` вмісту цих файлів — на кожному контейнері стека: в образу `postgres` з аргументу збірки, у решти сервісів з `labels` compose; хеш залежить лише від вмісту файлів, а не від шляху checkout: bind-монтувань стек не має (Garage бере конфіг з inline `configs:`), тож стек стартує з будь-якого checkout, а `docker inspect` контейнера Garage не показує в `Mounts` жодного `bind`); зупинка стека — за власником |
+| `pnpm db:pg:stop` | `docker compose -p <проєкт стека> down` для стека за `SIMETRA_STACK` (томи лишаються; `--volumes` — лише явно) |
+| `pnpm test:db:pg` | набір базового стану `postgres` через Vitest-раннер, тест переривання і DB-тести `simetra` та `@simetrajs/designer` (проєкт `db`) на стеку `postgres`, обраному сторожем з пулу (§10.3) |
+| `pnpm demo`, `pnpm demo:drop` | `pnpm demo` — одиночка машини (порт 3000, контейнер `simetra-demo-signals`); стек — з `SIMETRA_STACK` (типово 1), `demo` і `demo:drop` мають той самий індекс, а відмова `demo:drop` про відсутню базу демо називає індекс |
 | `pnpm db:start`, `pnpm db:stop`, `pnpm test:db` | стек `supabase`, як зараз; `test:db` — набір базового стану провайдера і проєкт `db-supabase` обох пакетів, тобто лише регресійні набори (§10.5) |
 
 Стек запускається лише цими командами, ніколи глобальним `docker compose`
-без `-p` чи сторонньою версією образів.
+без `-p` чи сторонньою версією образів. Чергу DB-прогону тримає сторож
+(§10.3), а не раннер тестів: `run-tests` рівнів `db` і `e2e` не бере замка
+сам, а його тайм-аут покриває найдовше очікування сторожа.
 
 ### 10.3 Stack-guard і тег прогону
 
 `packages/simetra/test/db/stack-guard.ts` стає параметризованим профілем
 (`SIMETRA_TEST_PROVIDER = postgres | supabase`; типово `postgres`):
 
-- **замок на стек:** окремий файл замка на профіль; прогони різних стеків
-  не чекають один одного, прогони одного — по черзі;
-- **адреси:** `connection.ts` бере DSN з даних профілю; змінні
+- **замок на стек N:** окремий файл замка на стек: `/tmp/simetra-db-stack-postgres.lock`
+  для стека 1 і `/tmp/simetra-db-stack-postgres-N.lock` для решти; прогони
+  різних стеків не чекають один одного, прогони одного — по черзі;
+- **пул і вибір стека:** явний `SIMETRA_STACK=N` — лише стек `N`, прогін чекає
+  його замок. Без нього кандидати — `SIMETRA_STACK_POOL` (перелік індексів,
+  типово 1…9). Сторож у циклі пробує створити замок (`wx`) кожного кандидата;
+  узявши замок, звіряє, що стек живий і звітує свій індекс
+  (`current_setting('simetra.stack_index', true)`; порожнє значення
+  припустиме лише для N = 1, стеку до перебудови); не живий — знімає свій
+  замок і йде далі. Усі живі зайняті — чекає будь-який з них (опитує всіх
+  кандидатів), не стек 1; рядок «stack is busy … waiting…» у stderr
+  називає індекс стека. Жоден живий кандидат — помилка, що називає
+  кандидатів і `pnpm db:pg:start`. Очікування сторожа обмежене 2700 с.
+  Обраний індекс лягає в `process.env.SIMETRA_STACK` до форку воркерів, тож
+  адреси, імена контейнерів і мітки в усіх воркерах — одного стека. Будь-яка
+  змінна `SIMETRA_TEST_*_URL` вимикає пул: індекс — `SIMETRA_STACK` або 1;
+- **звірка індексу:** на `postgres` `assertStack` додатково читає
+  `simetra.stack_index` сервера кожної адреси й порівнює з індексом замка:
+  порожнє значення приймається лише під замком стека 1, будь-яка інша
+  розбіжність (порожнє під N ≥ 2 теж) — відмова з назвою обох індексів;
+- **адреси:** `connection.ts` бере DSN з даних профілю стека, обраного на
+  виклик (не константи, обчисленої при імпорті: адреса до вибору стека —
+  прогін на чужому стеку); змінні
   `SIMETRA_TEST_*` їх перевизначають. На `postgres` цільова база тестів —
   `simetra`; набір базового стану йде в базі `postgres` (кластерні факти й
   `simetra.environment` стоять там). Суперкористувач стека (`postgres`, порт
-  54422) створює ролі на старті стека й тегованих прогонів, а тести плану й
+  стека) створює ролі на старті стека й тегованих прогонів, а тести плану й
   застосування працюють з роллю `simetra_owner` (`NOSUPERUSER BYPASSRLS
   CREATEDB`), як у проді: інакше суперкористувач сховав би гранти
   `better_auth`, замок `dropTrigger` і режим `plpgsql_check`. Так само на
@@ -1237,9 +1274,14 @@ FileStore = {
      обслуговування в транзакції адреси тестів — через `asSessionLogin` із
      власником.
 - **знімок стека:** до бази, ролей, схем і розширень додаються контейнери з
-  двома мітками, `simetra-run=<тег>` і `simetra-stack=<профіль>`, і бакети
-  Garage з префіксом тегу; різниця після прогону — збій, як зараз. Контейнер
-  з міткою іншого стека не є витоком цього. Знімок не містить ACL, тож на
+  двома мітками, `simetra-run=<тег>` і `simetra-stack=<ключ стека>`
+  (`postgres` для стека 1, `postgres-N` інакше; `supabase` для `supabase`), і
+  бакети Garage з префіксом тегу; різниця після прогону — збій, як зараз.
+  Контейнер з міткою іншого стека не є витоком цього. Знімок, звіт залишків,
+  прибиральник і SQL ручного прибирання йдуть за ключем стека; бекенди й
+  бакети — у Postgres і Garage свого стека. Кожна надрукована команда й
+  підказка прибирання для N ≠ 1 несе `SIMETRA_STACK=<N>` і ключ стека; вивід
+  стека 1 без змін. Знімок не містить ACL, тож на
   `postgres` guard додатково знімає відбиток схеми `better_auth` бази
   `simetra` (відношення, колонки й типи, власники й ACL, тригери,
   `pg_default_acl`, налаштування ролі `simetra_auth`): відмінність після
@@ -1258,8 +1300,8 @@ FileStore = {
   S3 беруться з одного `supabase status -o env` у `globalSetup` і йдуть у
   тести через `provide`/`inject`;
 - **тег прогону:** бази, ролі й тіні — як зараз (`connection.ts`);
-  контейнер Centrifugo стенду DB-тестів — обидві мітки (аргументи `docker run` дає
-  помічник `runContainerLabels` у `packages/simetra/test/db/external.ts`) і
+  контейнер Centrifugo стенду DB-тестів — обидві мітки, друга за ключем стека
+  (аргументи `docker run` дає помічник `runContainerLabels` у `packages/simetra/test/db/external.ts`) і
   ім'я з тегом; бакет — `run-<тег>`.
 
 ### 10.4 Стенд сигналів
