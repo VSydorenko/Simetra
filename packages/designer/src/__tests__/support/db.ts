@@ -81,9 +81,11 @@ export function outboxSql(model: CompiledModel): string {
 
 /**
  * SQL of the project-level platform layer of `model`: the `platformLayer`
- * units without an owner object, which the compiler puts into every project
- * (today `simetra.rich_text_is_empty(jsonb)` and its grants). Every statement
- * is idempotent (`CREATE OR REPLACE`, `GRANT`, `REVOKE`).
+ * units without an owner object, which the compiler puts into every project.
+ * The filter is structural on purpose: it takes every such unit the project
+ * has (the emptiness function `simetra.rich_text_is_empty(jsonb)` and, when
+ * the project has them, the subject functions), not one named function. Every
+ * statement is idempotent (`CREATE OR REPLACE`, `GRANT`, `REVOKE`).
  */
 export function projectPlatformSql(model: CompiledModel): string {
   const units = new Set(
