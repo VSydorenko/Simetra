@@ -222,8 +222,8 @@ function validUserSql(model: CompiledModel): string {
 
 /**
  * Пояснення над контрактами доступу, де `Task` має умову публікації:
- * `published` будівник контрактів ще не заповнює (Р-D1-2), тож контракт —
- * вручну, а генератор той самий.
+ * контракт зібрано вручну: `Task` у фікстурі — Document, а Document не може
+ * мати умовну форму (`rights.public-read-published-kind`); генератор той самий.
  */
 function withPublishedTask(domain: CompiledModel): CompiledModel {
   const units = buildExplainUnits(
