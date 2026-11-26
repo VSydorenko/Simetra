@@ -1,6 +1,14 @@
 import type { WriteLease } from "../source"
 import type { Subset } from "../subsets"
-import type { ReadCause, ReadTarget, SiteCode, TestSite } from "./vocabulary"
+import type { GenerationToken, ObjectName } from "../types"
+import { answerOf, JUDGED_CONDITIONS, type JudgedCondition } from "./admission"
+import type {
+  ReadCause,
+  ReadTarget,
+  ReadWhy,
+  SiteCode,
+  TestSite,
+} from "./vocabulary"
 
 /*
  * Політ читання і шлюз, що його видає (спека ядра синхронізації §5.3, §5.4,
@@ -50,18 +58,51 @@ const registry = new WeakMap<
 export const recordOf = (flight: Flight): ReadRecord | undefined =>
   registry.get(flight)?.record
 
+declare const PERMIT: unique symbol
+
 /**
- * Допуск читання. SK-1 (частина А) допускає все; таблицю умов додає задача 3.
- * `issued` — політ видав цей шлюз: літерал, політ іншої сесії чи тестового
- * входу читання ядра відмовляє (Р-SK1-2).
+ * Дозвіл шлюзу: рішення «читати», ухвалене в мить, де шлях вирішує читати.
+ * Політ він видає там, де шлях уже має запитувача, оренду й номер спроби
+ * (рішення архітекторки 25.11): між ними немає `await`, і дозвіл ніде не
+ * зберігається. Одноразовий: друге `flight()` кидає.
+ */
+export interface Permit {
+  readonly [PERMIT]: true
+  /** Причина й рядок інвентаря: їх бачать спроба (`watchAttempts`) і повтор. */
+  readonly why: ReadWhy
+  readonly target: ReadTarget
+  flight(extras?: FlightExtras): Flight
+}
+
+/** Відповідь шлюзу (§5.3): дозвіл, «відкладено» чи «відмовлено» з умовою. */
+export type Admission =
+  | Permit
+  | { readonly deferred: JudgedCondition }
+  | { readonly refused: JudgedCondition }
+
+export const isPermit = (admission: Admission): admission is Permit =>
+  "flight" in admission
+
+/**
+ * Стан умов, які судить шлюз; шлюз отримує його функціями при створенні
+ * (§5.1). `closed` — токен сесії недійсний, закрито чи закривається
+ * (Р-SK1-5), а не знімок `closedSnapshot`. Решту умов ядро передає задачами
+ * 4–6; умова без функції не настає.
+ */
+export interface GateState {
+  readonly token: () => GenerationToken
+  readonly staleObject?: (object: ObjectName) => boolean
+  readonly discardBound?: () => boolean
+  readonly tabHidden?: () => boolean
+}
+
+/**
+ * Шлюз допуску. `admit` судить таблицю допуску (`admission.ts`); `issued` —
+ * політ видав цей шлюз: літерал, політ іншої сесії чи тестового входу
+ * читання ядра відмовляє (Р-SK1-2).
  */
 export interface Gate {
-  admit(
-    cause: ReadCause,
-    target: ReadTarget,
-    site: SiteCode,
-    extras?: FlightExtras
-  ): Flight
+  admit(cause: ReadCause, target: ReadTarget, site: SiteCode): Admission
   issued(flight: Flight): boolean
 }
 
@@ -79,19 +120,58 @@ function issue(
     site,
     ...(attempt === undefined ? {} : { attempt }),
   }
-  const flight = {
+  // Політ — незмінне значення: поля після видачі не підміниш.
+  const flight = Object.freeze({
     ...record,
     ...(caller === undefined ? {} : { caller }),
     ...(lease === undefined ? {} : { lease }),
-  } as Flight
-  registry.set(flight, { record, gate })
+  }) as Flight
+  registry.set(flight, { record: Object.freeze(record), gate })
   return flight
 }
 
-export function createGate(): Gate {
+/** Чи настала умова зараз: функція стану, якої немає, — умова не настає. */
+function holds(
+  state: GateState,
+  condition: JudgedCondition,
+  target: ReadTarget
+): boolean {
+  switch (condition) {
+    case "closed":
+      return !state.token().valid
+    case "stale-object":
+      return (
+        target.kind !== "service" && state.staleObject?.(target.object) === true
+      )
+    case "discard-bound":
+      return state.discardBound?.() === true
+    case "tab-hidden":
+      return state.tabHidden?.() === true
+  }
+}
+
+export function createGate(state: GateState): Gate {
   const gate: Gate = {
-    admit: (cause, target, site, extras = {}) =>
-      issue(gate, cause, target, site, extras),
+    admit(cause, target, site) {
+      // Умови в порядку переліку §5.3: `closed` — перша, тож закрита сесія
+      // відмовляє незалежно від решти.
+      for (const condition of JUDGED_CONDITIONS) {
+        if (!holds(state, condition, target)) continue
+        const answer = answerOf(cause, target.kind, site, condition)
+        if (answer === "refuse") return { refused: condition }
+        if (answer === "defer") return { deferred: condition }
+      }
+      let used = false
+      return {
+        why: { ...cause, site },
+        target,
+        flight(extras = {}) {
+          if (used) throw new Error("a permit issues one flight")
+          used = true
+          return issue(gate, cause, target, site, extras)
+        },
+      } as Permit
+    },
     issued: (flight) => registry.get(flight)?.gate === gate,
   }
   return gate

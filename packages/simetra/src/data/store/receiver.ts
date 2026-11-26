@@ -34,10 +34,12 @@ import type {
   Writer,
 } from "./types"
 import type { Subset } from "./subsets"
+import { isPermit } from "./sync/flight"
 import {
   activeViews,
   revalidate,
   revalidateTargets,
+  admitViews,
   singleFlight,
   type WriterContext,
 } from "./writer"
@@ -672,8 +674,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     o: ObjectState,
     plan: Plan,
     signals: ObjectBatch
-  ): Job => {
-    const lease = writer.source.lease()
+  ): Job | undefined => {
     // Пачка з самих дочитувань мінімальної версії — K2; щойно в ній є сигнал,
     // це читання сигналу (K1): зливаючись, пачка бере менший `attempt`.
     // Порожнього плану тут не буває (`classify` без ключів дає `whole`, і це
@@ -682,17 +683,17 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const retried =
       planned.length > 0 &&
       planned.every((key) => (signals.keys.get(key)?.attempt ?? 0) > 0)
-    const read = tracked(
-      writer.source,
-      writer.source.admit(
-        retried
-          ? { reason: "requirement", requirement: "min-version" }
-          : { reason: "signal" },
-        { kind: "keys", object },
-        retried ? "K2" : "K1",
-        { lease }
-      )
+    // Рішення читати ключі — шлюзу (§5.3).
+    const admitted = writer.source.admit(
+      retried
+        ? { reason: "requirement", requirement: "min-version" }
+        : { reason: "signal" },
+      { kind: "keys", object },
+      retried ? "K2" : "K1"
     )
+    if (!isPermit(admitted)) return undefined
+    const lease = writer.source.lease()
+    const read = tracked(writer.source, admitted.flight({ lease }))
     const owned = new Set(plan.stored)
     return {
       object,
@@ -926,6 +927,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         continue
       }
       const job = startJob(object, o, plan, signals)
+      if (job === undefined) continue
       jobs.push(job)
       // Нова версія шапки власника з видимою ТЧ веде до перечитування ТЧ
       // (§6.2, правило 2): її читання йде в тому самому пакеті, що й шапка, а
@@ -941,10 +943,16 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       })
       note(sections)
       if (sections.length > 0) {
-        const flight = singleFlight(writer, o, sections, {
-          visibleOnly: false,
-          why: { reason: "signal", site: "R9" },
-        }).done.catch((error: unknown) =>
+        const why = { reason: "signal", site: "R9" } as const
+        const flight = singleFlight(
+          writer,
+          o,
+          admitViews(writer, sections, why),
+          {
+            visibleOnly: false,
+            why,
+          }
+        ).done.catch((error: unknown) =>
           writer.log({ kind: "listener-failed", error })
         )
         flights.push(flight)

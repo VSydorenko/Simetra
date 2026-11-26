@@ -894,8 +894,8 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
   return fake
 }
 
-/** Шлюз прямих викликів у тестах: польоти не з ядра сесії. */
-const testGate = createGate()
+/** Шлюз прямих викликів у тестах: польоти не з ядра сесії, сесія не закривається. */
+const testGate = createGate({ token: () => ({ valid: true }) })
 
 /**
  * Політ прямого виклику джерела в тесті: код `TEST_SITE` поза інвентарем

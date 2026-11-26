@@ -41,8 +41,10 @@ import {
 import {
   createGate,
   forgeFlight,
+  isPermit,
   issueTestFlight,
   type Flight,
+  type Permit,
 } from "./sync/flight"
 import type {
   AdmissionCondition,
@@ -83,6 +85,7 @@ import {
   tailCause,
   viewDue,
   invalidateLoads,
+  admitViews,
   singleFlight,
   rereadKey,
   setVisible,
@@ -643,7 +646,9 @@ export function createCore(options: {
   // пише. Відмова — той самий `stale-client`, що дав би сервер.
   // Збирач (§6.7) стоїть під цим фільтром: через нього йдуть усі читання, а
   // значення `version` відповіді застосовується до видачі її частин даних.
-  const gate = createGate()
+  // Умову `closed` шлюз судить за токеном сесії (Р-SK1-5): він недійсний уже
+  // з `closing`, а `closedSnapshot` — лише публічний знімок.
+  const gate = createGate({ token: () => session.token() })
   const batcher = createBatcher(options.source, {
     ownFlight: gate.issued,
     // Сон сесії йде в кожне читання джерела: власного таймера джерело не має.
@@ -796,22 +801,24 @@ export function createCore(options: {
     const forward = parts.filter((_, slot) => sent[slot]).map(withLiveInclude)
     // Перший пакет рантайму несе `rights` без `known` (Р1); частину
     // додає ядро, тож її результат викликач не бачить.
-    const injected =
+    // Частина ядра — власний рядок інвентаря (S3): її теж допускає шлюз.
+    const rightsFirst =
       rightsEnabled &&
       !rightsFirstSent &&
       !forward.some((part) => part.type === "rights")
+        ? gate.admit(
+            RIGHTS_UNCONFIRMED,
+            { kind: "service", service: "rights" },
+            "S3"
+          )
+        : undefined
+    const injected = rightsFirst !== undefined && isPermit(rightsFirst)
     // Походження йде за слотом: частина, яку додало ядро, має свій рядок
     // інвентаря (S3), решта — походження виклику.
     const origins: Flight[] = forward.map(() => flight)
     if (injected) {
       forward.unshift({ type: "rights" })
-      origins.unshift(
-        gate.admit(
-          RIGHTS_UNCONFIRMED,
-          { kind: "service", service: "rights" },
-          "S3"
-        )
-      )
+      origins.unshift(rightsFirst.flight())
     }
     const rightsAt = forward.findIndex((part) => part.type === "rights")
     let answered: { items: CoreReadItem[] } = { items: [] }
@@ -952,7 +959,9 @@ export function createCore(options: {
   // до знімка, скасовується одразу (до `commit` його відповіді), а прохід
   // виглядів — один на хід.
   function narrow(views: readonly Subset[], appliedEpoch: number) {
-    if (!session.token().valid || views.length === 0) return
+    // Після закриття вигляди мертві (`invalidateLoads` їх минає), а `closed`
+    // перечитування судить шлюз.
+    if (views.length === 0) return
     invalidateLoads(views, appliedEpoch)
     if (narrowing.size === 0) {
       queueMicrotask(() => {
@@ -1359,12 +1368,15 @@ export function createCore(options: {
 
   function runTail(o: ObjectState) {
     const tail = tails.get(o)
-    if (
-      tail === undefined ||
-      tail.flying !== undefined ||
-      !session.token().valid
-    )
-      return
+    if (tail === undefined || tail.flying !== undefined) return
+    const tailCause = {
+      reason: "requirement",
+      requirement: "row-unfinished",
+    } as const
+    const tailTarget = { kind: "keys", object: o.name } as const
+    // Закриття судить шлюз (§5.3): ключі лишаються в черзі хвоста.
+    const admitted = source.admit(tailCause, tailTarget, "K3")
+    if (!isPermit(admitted)) return
     const keys = [...tail.pending]
     tail.pending.clear()
     if (keys.length === 0) return
@@ -1373,11 +1385,6 @@ export function createCore(options: {
     const token = session.childToken(() => tail.gen === gen)
     const readEpoch = session.epochs.now()
     const lease = source.lease()
-    const tailCause = {
-      reason: "requirement",
-      requirement: "row-unfinished",
-    } as const
-    const tailTarget = { kind: "keys", object: o.name } as const
     const read = tracked(
       source,
       // Мутації самотесту: політ підроблено чи взято з тестового входу, шлюз
@@ -1386,7 +1393,7 @@ export function createCore(options: {
         ? forgeFlight(tailCause, tailTarget, "K3", { lease })
         : defects.has("read-bypasses-gate-testing")
           ? issueTestFlight(tailCause, tailTarget, "K3", { lease })
-          : source.admit(tailCause, tailTarget, "K3", { lease })
+          : admitted.flight({ lease })
     )
     readKeys(read.source, o.entry, keys, {
       keysPerRequest: limits.keysPerRequest,
@@ -1442,29 +1449,28 @@ export function createCore(options: {
   session.onFlush(() => {
     written.length = 0
     const closing = closed !== undefined
-    // Хвостове читання не стартує з flush пачки закриття (токен недійсний
-    // із `closing`, а `closed` сесії ще не виставлено).
-    if (!closing && session.token().valid) {
-      for (const o of objects.values()) {
-        const keys = o.rows.drainTail()
-        if (keys.length > 0) scheduleTail(o, keys)
-      }
-      // `hide` (права): види, що тримають сховані ключі, перечитуються після
-      // `commit`, з епохою старту не меншою за позначку.
-      const barredNow = [...barredSections]
-      barredSections.clear()
-      rereadBarred(barredNow)
-      const hiddenNow = [...hiddenKeys]
-      hiddenKeys.clear()
-      for (const [name, keys] of hiddenNow) {
-        // Несумісний об'єкт не перечитується: його значення не повертаються.
-        if (staleObjects.has(name)) continue
-        revalidateHolders(writerContext, name, keys, {
-          reason: "requirement",
-          requirement: "value-hidden",
-          site: "R10",
-        }).catch((error: unknown) => log({ kind: "listener-failed", error }))
-      }
+    // Пачка закриття теж доходить сюди: хвіст, тримачі схованих значень і ТЧ
+    // за бар'єром питають шлюз, і `closed` (токен недійсний із `closing`)
+    // відмовляє їм без запиту; черги, які це лишає, чистить `onClose`.
+    for (const o of objects.values()) {
+      const keys = o.rows.drainTail()
+      if (keys.length > 0) scheduleTail(o, keys)
+    }
+    // `hide` (права): види, що тримають сховані ключі, перечитуються після
+    // `commit`, з епохою старту не меншою за позначку.
+    const barredNow = [...barredSections]
+    barredSections.clear()
+    rereadBarred(barredNow)
+    const hiddenNow = [...hiddenKeys]
+    hiddenKeys.clear()
+    for (const [name, keys] of hiddenNow) {
+      // Несумісний об'єкт не перечитується: його значення не повертаються.
+      if (staleObjects.has(name)) continue
+      revalidateHolders(writerContext, name, keys, {
+        reason: "requirement",
+        requirement: "value-hidden",
+        site: "R10",
+      }).catch((error: unknown) => log({ kind: "listener-failed", error }))
     }
     const notify = registry.afterCommit(closing)
     // Ревізії й кеш `RowView` — лише для рядків, що є в сховищі.
@@ -1529,14 +1535,15 @@ export function createCore(options: {
       if (!wanted.has(`${s.form.object.name}\u0000${spec.owner}`)) continue
       groups.set(s.form.object, [...(groups.get(s.form.object) ?? []), s])
     }
+    const why = {
+      reason: "requirement",
+      requirement: "target-behind-header",
+      site: "R12",
+    } as const
     for (const [o, views] of groups)
-      singleFlight(writerContext, o, views, {
+      singleFlight(writerContext, o, admitViews(writerContext, views, why), {
         visibleOnly: false,
-        why: {
-          reason: "requirement",
-          requirement: "target-behind-header",
-          site: "R12",
-        },
+        why,
       }).done.catch(catchNarrow)
   }
 
@@ -1615,7 +1622,9 @@ export function createCore(options: {
   function fireWave() {
     const fired = wave
     wave = undefined
-    if (fired === undefined || !session.token().valid) return
+    // Закриття знімає хвилю (`onClose`), а `resume()` у вікні закриття не
+    // доходить сюди: `closed` читань хвилі судить шлюз.
+    if (fired === undefined) return
     const token = session.token()
     lastWaveAt = now()
     // Наступна епоха: читання хвилі стартують з неї, а ті, що вже в польоті, —
@@ -1697,10 +1706,13 @@ export function createCore(options: {
         const cause = held.retry.cause
         held.retry = undefined
         // Повтор іде тим самим single-flight шляхом, що й явний `revalidate`.
-        const flight = singleFlight(writerContext, objectOf(name), views, {
-          visibleOnly: false,
-          why: { ...cause, site: "R3" },
-        })
+        const why = { ...cause, site: "R3" } as const
+        const flight = singleFlight(
+          writerContext,
+          objectOf(name),
+          admitViews(writerContext, views, why),
+          { visibleOnly: false, why }
+        )
         if (flight.started > 0) ran = true
         flight.done.catch(catchLog)
       }
@@ -1794,14 +1806,20 @@ export function createCore(options: {
     if (!s.alive || s.purged || !s.loaded) return
     if (staleObjects.has(s.form.object.name)) return
     if (!requirementPending(s, requirementEnv)) return
-    singleFlight(writerContext, s.form.object, [s], {
-      visibleOnly: false,
-      why: {
-        reason: "requirement",
-        requirement: "composition-unconfirmed",
-        site: "R13",
-      },
-    }).done.catch((error: unknown) => log({ kind: "listener-failed", error }))
+    const why = {
+      reason: "requirement",
+      requirement: "composition-unconfirmed",
+      site: "R13",
+    } as const
+    singleFlight(
+      writerContext,
+      s.form.object,
+      admitViews(writerContext, [s], why),
+      {
+        visibleOnly: false,
+        why,
+      }
+    ).done.catch((error: unknown) => log({ kind: "listener-failed", error }))
   }
 
   function readHydrated(s: Subset) {
@@ -2035,18 +2053,11 @@ export function createCore(options: {
   // під час польоту — один хвіст.
   let versionFlying = false
   let versionTail = false
-  function startVersion() {
+  function startVersion(permit: Permit) {
     versionFlying = true
     const token = session.token()
     source
-      .read(
-        [{ type: "version" }],
-        source.admit(
-          { reason: "requirement", requirement: "version-unconfirmed" },
-          { kind: "service", service: "version" },
-          "S1"
-        )
-      )
+      .read([{ type: "version" }], permit.flight())
       .then(
         () => {
           // Значення застосував збирач синхронно з відповіддю (бар'єр Р3).
@@ -2065,15 +2076,17 @@ export function createCore(options: {
 
   // `cause` — чому знімок потрібен: вимога чи строк такту (рядок S2).
   function requestRightsFor(cause: ReadCause) {
-    if (!rightsEnabled || !session.token().valid) return
+    if (!rightsEnabled) return
+    // `closed` судить шлюз до `promised` (польоту й хвоста), як на `main`.
+    const admitted = source.admit(
+      cause,
+      { kind: "service", service: "rights" },
+      "S2"
+    )
+    if (!isPermit(admitted)) return
     if (!rightsFlying) {
       // Збій частини вже в журналі (`rights-failed`) — повтору немає (Р8).
-      source
-        .read(
-          [{ type: "rights" }],
-          source.admit(cause, { kind: "service", service: "rights" }, "S2")
-        )
-        .catch(() => {})
+      source.read([{ type: "rights" }], admitted.flight()).catch(() => {})
     } else if (!batcher.hasQueuedRights()) rightsTail ??= cause
   }
 
@@ -2147,8 +2160,14 @@ export function createCore(options: {
       )
     },
     requestVersion() {
-      if (!session.token().valid) return
-      if (!versionFlying) startVersion()
+      // `closed` судить шлюз до `promised` (польоту й хвоста), як на `main`.
+      const admitted = source.admit(
+        { reason: "requirement", requirement: "version-unconfirmed" },
+        { kind: "service", service: "version" },
+        "S1"
+      )
+      if (!isPermit(admitted)) return
+      if (!versionFlying) startVersion(admitted)
       else if (!batcher.hasQueuedVersion()) versionTail = true
     },
     requestRights: () => requestRightsFor(RIGHTS_UNCONFIRMED),
@@ -2222,7 +2241,8 @@ export function createCore(options: {
     endHydration() {
       if (hydration !== "hydrated") return
       hydration = "ended"
-      if (!session.token().valid) return
+      // `closed` звірки й службових частин судить шлюз; таймери звільнення,
+      // які поставив би реєстр у вікні закриття, знімає його `close()`.
       // Вигляди знімка — те, що показав SSR: звірка читає їх усі, зокрема ті,
       // на які ще ніхто не підписався, одним пакетом з `version`. Вигляд, на
       // який ніхто не підпишеться, звільняється як і раніше: читання

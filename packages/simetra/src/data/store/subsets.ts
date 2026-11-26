@@ -35,9 +35,11 @@ import {
   type RowViews,
 } from "./snapshot"
 import { ReadLimiterClosed, settle, type StoreSource } from "./source"
+import { isPermit, type Permit } from "./sync/flight"
 import type {
   AdmissionCondition,
   ReadCause,
+  ReadTarget,
   ReadWhy,
   SettleOutcome,
 } from "./sync/vocabulary"
@@ -410,6 +412,7 @@ const CHECK_AFTER_COMMIT: ReadWhy = {
   site: "M4",
 }
 const USER_LOAD: ReadWhy = { reason: "user", site: "M5" }
+const USER_PAGE: ReadWhy = { reason: "user", site: "P1" }
 
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
 
@@ -442,6 +445,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   // Кеш знімка картки без утримання — на хендл мемо; закриття його чистить.
   const idleCaches = new Map<string, { snapshot?: ViewSnapshot }>()
   const isClosed = () => ctx.closedSnapshot() !== undefined
+  // Рішення читати вигляд чи сторінку — шлюзу (§5.3), не шляху.
+  const admitView = (why: ReadWhy, target: ReadTarget) => {
+    const { site, ...cause } = why
+    return ctx.source.admit(cause, target, site)
+  }
 
   // ------------------------------------------------------------ завантаження
 
@@ -499,7 +507,16 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   }
 
   function load(s: Subset, why: ReadWhy) {
-    if (!s.alive || isClosed() || s.purged) return
+    if (!s.alive || s.purged) return
+    const target = {
+      kind: "view",
+      object: s.form.object.name,
+      id: s.targetId,
+    } as const
+    // Рішення читати — шлюзу (§5.3): закрита сесія відмовляє тут, до черги
+    // `trailing` і до будь-якого запису стану.
+    const admitted = admitView(why, target)
+    if (!isPermit(admitted)) return
     if (s.flight !== undefined) {
       queueTrailing(s, why)
       return
@@ -525,7 +542,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     )
     // Відкинута відповідь — те саме завантаження з паузою, що зростає:
     // покоління й політ не змінюються, тож це й далі дія, що його почала.
-    const attempt = (why: ReadWhy): Promise<void> => {
+    // Повтор тієї самої дії питає шлюз у мить рішення, після дочірнього токена.
+    const retry = (site: "M7" | "M8") => {
+      const again = admitView({ reason: "retry", site }, target)
+      return isPermit(again) ? attempt(again) : undefined
+    }
+    const attempt = (permit: Permit): Promise<void> => {
+      const { why } = permit
       const readEpoch = session.epochs.now()
       s.flightEpoch = readEpoch
       const startedAt = ctx.now()
@@ -536,28 +559,18 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       let discarded = false
       let again = false
       const lease = ctx.source.lease()
-      const target = {
-        kind: "view",
-        object: s.form.object.name,
-        id: s.targetId,
-      } as const
       const number = ctx.attempts.start("load", target, why)
       // Наслідок осідання (§5.5); `commit` не пройшов — токен недійсний.
       let outcome: SettleOutcome = "applied"
       let detail: SettleDetail | undefined
       const lost = (): SettleOutcome =>
         !session.token().valid ? "closed" : !s.alive ? "evicted" : "after-purge"
-      const { site, ...cause } = why
       return readForm(
         ctx,
         s,
         readEpoch,
         token,
-        ctx.source.admit(cause, target, site, {
-          attempt: number,
-          caller: s,
-          lease,
-        })
+        permit.flight({ attempt: number, caller: s, lease })
       ).then(
         (apply) => {
           settle(lease, () => {
@@ -608,8 +621,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             )
           })
           // Вимога стала, поки летіло читання (M7): повтор тієї самої дії.
-          if (again && token.valid)
-            return attempt({ reason: "retry", site: "M7" })
+          if (again && token.valid) return retry("M7")
           if (!discarded || !token.valid) return
           // Цей прохід вичерпав межу (лічильник рухається після commit):
           // повтору не буде, вигляд — `command.unavailable`.
@@ -636,9 +648,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             : session.sleep(pause)
           return slept.then(() => {
             s.retryAt = undefined
-            return token.valid
-              ? attempt({ reason: "retry", site: "M8" })
-              : undefined
+            return token.valid ? retry("M8") : undefined
           })
         },
         (error: unknown) =>
@@ -674,7 +684,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
-    void attempt(why).finally(() => {
+    void attempt(admitted).finally(() => {
       if (s.flight !== gen) return
       s.flight = undefined
       s.flightCause = undefined
@@ -685,7 +695,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       s.settled = true
       resolveWaiters(s)
       const queued = s.trailing
-      if (queued !== undefined && s.alive && !isClosed()) {
+      // Закриття гасить `alive` (`close()` реєстру), а `closed` наступного
+      // завантаження судить шлюз у `load`.
+      if (queued !== undefined && s.alive) {
         s.trailing = undefined
         load(s, { ...queued, site: "M6" })
       }
@@ -699,7 +711,6 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         s.recheck = undefined
         if (
           s.alive &&
-          !isClosed() &&
           (s.listeners.size > 0 || !ctx.defects.has("recheck-needs-listeners"))
         )
           queueCheck(s, true, rechecked)
@@ -755,7 +766,14 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
    */
   function loadMore(s: Subset, direction: "after" | "before") {
     const w = s.window
-    if (w === undefined || !s.alive || isClosed() || s.purged) return
+    if (w === undefined || !s.alive || s.purged) return
+    const target = {
+      kind: "page",
+      object: s.form.object.name,
+      id: s.targetId,
+    } as const
+    const admitted = admitView(USER_PAGE, target)
+    if (!isPermit(admitted)) return
     if (direction === "after" ? s.atEnd : w.atStart) return
     if (s.paging.has(direction)) return
     const edge = edgeCursor(s, direction)
@@ -782,32 +800,28 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     // Сторінка, яку записала попередня спроба цього читання: повтор за
     // вимогою «склад не підтверджено» (П15) стає на її місце.
     let written: number | undefined
-    const attempt = (why: ReadWhy): Promise<void> => {
+    // Повтор сторінки питає шлюз у мить рішення, після дочірнього токена.
+    const retry = (site: "P2" | "P3") => {
+      const again = admitView({ reason: "retry", site }, target)
+      return isPermit(again) ? attempt(again) : undefined
+    }
+    const attempt = (permit: Permit): Promise<void> => {
+      const { why } = permit
       const readEpoch = session.epochs.now()
       let discarded = false
       let again = false
       const lease = ctx.source.lease()
-      const target = {
-        kind: "page",
-        object: s.form.object.name,
-        id: s.targetId,
-      } as const
       const number = ctx.attempts.start("page", target, why)
       let outcome: SettleOutcome = "applied"
       let detail: SettleDetail | undefined
       const lost = (): SettleOutcome =>
         !session.token().valid ? "closed" : !s.alive ? "evicted" : "after-purge"
-      const { site, ...cause } = why
       return gated(
         ctx,
         readEpoch,
         (c) =>
           readWindowMore(c, s, readEpoch, token, direction, cursor, written),
-        ctx.source.admit(cause, target, site, {
-          attempt: number,
-          caller: s,
-          lease,
-        })
+        permit.flight({ attempt: number, caller: s, lease })
       ).then(
         (apply) => {
           settle(lease, () => {
@@ -863,7 +877,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           })
           if (again) {
             // Вимогу поставила власна відповідь сторінки (П15): P3.
-            if (token.valid) return attempt({ reason: "retry", site: "P3" })
+            if (token.valid) {
+              const repeated = retry("P3")
+              if (repeated !== undefined) return repeated
+            }
             release()
             return
           }
@@ -882,9 +899,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           return session
             .sleep(pause)
-            .then(() =>
-              token.valid ? attempt({ reason: "retry", site: "P2" }) : undefined
-            )
+            .then(() => (token.valid ? retry("P2") : undefined))
         },
         (error: unknown) =>
           settle(lease, () => {
@@ -913,7 +928,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
-    void attempt({ reason: "user", site: "P1" })
+    void attempt(admitted)
   }
 
   /** Mounted card: lazy fields absent or read with an older row version. */
@@ -1353,7 +1368,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       try {
         // `why` — виклику, що поставив перевірку в чергу: наступні виклики до
         // мікрозадачі вже вийшли на `checkQueued`.
-        if (!isClosed()) check(s, heldCheck, why)
+        // Закриття гасить `alive` раніше, ніж біжить мікрозадача: `closed`
+        // завантаження судить шлюз у `load`.
+        check(s, heldCheck, why)
       } finally {
         // Хвіст `revalidate` чекав цю перевірку як продовження польоту: без
         // нового читання його будимо тут (#312), зокрема й після винятку.
@@ -1570,7 +1587,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         if (s.listeners.size === 0) continue
         const before = s.snapshot
         if (snapshotOf(s) !== before) notify.push(s)
-        if (!closing) queueCheck(s, false, CHECK_AFTER_COMMIT)
+        // Пачка закриття теж ставить перевірку: її мікрозадача біжить уже
+        // після `close()` реєстру й бачить `alive === false`; `closed`
+        // дочитування судить шлюз у `load`.
+        queueCheck(s, false, CHECK_AFTER_COMMIT)
       }
       return notify
     },

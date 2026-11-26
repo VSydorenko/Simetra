@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
 import type { MetadataRef } from "simetra/model"
 import { coreInternals } from "../core"
-import type { CorePart } from "../source"
-import { issueTestFlight, type Flight } from "../sync/flight"
+import type { CorePart, StoreSource, WriteLease } from "../source"
+import { isPermit, issueTestFlight, type Flight } from "../sync/flight"
 import { TEST_SITE, type ReadCause, type ReadTarget } from "../sync/vocabulary"
 import { TASK, key, seed, settle, setup } from "./core-support"
 
@@ -19,6 +19,13 @@ const parts: readonly CorePart[] = [
   { type: "query", query: { object: TASK_REF, id: key(1) } },
 ]
 
+/** Політ шлюзу відкритої сесії: дозвіл одразу видає його. */
+function flightOf(source: StoreSource, lease: WriteLease): Flight {
+  const admitted = source.admit(cause, target, "R7")
+  if (!isPermit(admitted)) throw new Error("an open session refused a read")
+  return admitted.flight({ lease })
+}
+
 function armed() {
   const h = setup()
   seed(h.fake, 1, 1)
@@ -29,7 +36,7 @@ describe("read of the core takes only a flight of its own gate", () => {
   it("reads with a flight the gate issued (control)", async () => {
     const h = armed()
     const lease = h.source.lease()
-    await h.source.read(parts, h.source.admit(cause, target, "R7", { lease }))
+    await h.source.read(parts, flightOf(h.source, lease))
     expect(h.fake.log).toHaveLength(1)
     // Читання видало оренду на об'єкти частин; знімаємо її, як осідання польоту.
     lease.release()
@@ -55,7 +62,7 @@ describe("read of the core takes only a flight of its own gate", () => {
     const h = armed()
     const other = armed()
     const lease = h.source.lease()
-    const foreign = other.source.admit(cause, target, "R7", { lease })
+    const foreign = flightOf(other.source, lease)
     await expect(h.source.read(parts, foreign)).rejects.toThrow(GATE)
     await settle()
     expect(h.fake.log).toHaveLength(0)
