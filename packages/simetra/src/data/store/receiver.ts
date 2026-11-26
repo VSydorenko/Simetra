@@ -73,8 +73,11 @@ export interface ReceiverContext {
   readonly index: CatalogIndex
   readonly writer: WriterContext
   rights(): RightsState | undefined
-  /** Whether the host shows the application: a hidden tab reads nothing. */
-  visible(): boolean
+  /**
+   * The gate's query of `tab-hidden` (Р-SK1-8): the batch on a hidden tab
+   * sends nothing and leaves its views to `resume()`.
+   */
+  tabHidden(): boolean
   /** The core's `commit`: the only way the receiver writes. */
   commit(fn: (writer: Writer) => void, token: GenerationToken): boolean
   /** The collator of the runtime's filter tests (one per runtime). */
@@ -911,7 +914,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
           })
         )
       // Прихована вкладка нічого не шле (Р8): вигляди чекають `resume()`.
-      if (!ctx.visible()) {
+      // Іменована перевірка (рішення архітекторки 25.11): вона береже не
+      // читання (K1, K2, R8, R9 відкладає шлюз), а не-читальні ефекти пачки
+      // на прихованій вкладці — діагностику, строк на `resume()` і вимогу
+      // складу виглядам.
+      if (ctx.tabHidden()) {
         if (stale) continue
         note([])
         requested.push(object)

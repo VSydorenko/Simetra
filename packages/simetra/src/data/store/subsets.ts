@@ -66,8 +66,11 @@ import type {
 
 export interface RegistryContext {
   readonly session: Session
-  /** The tab is visible (`suspend` / `resume`, §8.4). */
-  readonly tabVisible: () => boolean
+  /**
+   * The gate's query of `tab-hidden` (Р-SK1-8): the page settle point and the
+   * public `needsRefresh` ask it, not the tab state.
+   */
+  readonly tabHidden: () => boolean
   readonly source: StoreSource
   readonly index: CatalogIndex
   readonly limits: CoreLimits
@@ -314,47 +317,31 @@ function liftRequirement(s: Subset, readEpoch: number): void {
     s.unconfirmedSince = undefined
 }
 
-/** What the requirement rule reads of the session and the tab. */
-export interface RequirementEnv {
-  /** The tab is visible: on a hidden tab nothing is sent (§12, Р8). */
-  readonly tabVisible: () => boolean
-}
-
 /**
  * The view requirement stands and waits for a read nobody else promises
- * (P4-B spec §8.4, item 7): the view is visible on a visible tab, no read of
- * it started at the requirement's epoch or later is in flight or queued after
- * the current one (a `revalidate` tail, a trailing load), it is not in the
- * failure pause. The discard limit of the session is judged by the gate at
- * the read (§5.3).
+ * (P4-B spec §8.4, item 7): the view is visible, no read of it started at the
+ * requirement's epoch or later is in flight or queued after the current one
+ * (a `revalidate` tail, a trailing load), it is not in the failure pause. The
+ * hidden tab and the discard limit of the session are judged by the gate at
+ * the read (§5.3, Р-SK1-7, Р-SK1-8).
  */
-export function requirementPending(s: Subset, env: RequirementEnv): boolean {
-  return requirementHold(s, env) === undefined
+export function requirementPending(s: Subset): boolean {
+  return requirementHold(s) === undefined
 }
 
 /**
  * Why the view requirement «composition not confirmed» is not read now — the
  * one decision of `requirementPending` and of the settle point, named by the
  * condition of the gate (§5.3); `undefined` — it is pending: read it now.
- * `"absent"` — no requirement. Test diagnostics (`sync()`) read the same.
+ * `"absent"` — no requirement. Test diagnostics (`sync()`) combine it with the
+ * gate's `tab-hidden`.
  */
 export function requirementHold(
-  s: Subset,
-  env: RequirementEnv
+  s: Subset
 ):
   | "absent"
-  | Extract<
-      AdmissionCondition,
-      "tab-hidden" | "target-invisible" | "promised" | "paused"
-    >
+  | Extract<AdmissionCondition, "target-invisible" | "promised" | "paused">
   | undefined {
-  if (s.unconfirmedSince === undefined) return "absent"
-  if (!env.tabVisible()) return "tab-hidden"
-  return holdWithoutTab(s)
-}
-
-// Те саме без вкладки: вимога чекає читання, яке ніхто інший не обіцяє.
-function holdWithoutTab(s: Subset) {
   const since = s.unconfirmedSince
   if (since === undefined) return "absent"
   if (!(s.visible ?? s.listeners.size > 0)) return "target-invisible"
@@ -366,27 +353,22 @@ function holdWithoutTab(s: Subset) {
   // би другим читанням того самого.
   if (s.rereadTail !== undefined || s.trailing !== undefined) return "promised"
   // Збій читання повторює пауза збоїв (планувальник), не негайне коло.
-  // Межу відкинутих судить шлюз у мить читання (M7, R13, R18; Р-SK1-7).
+  // Межу відкинутих і вкладку судить шлюз у мить читання (M7, R13, R18;
+  // Р-SK1-7, Р-SK1-8).
   return s.failures > 0 ? "paused" : undefined
 }
-
-const waitsForRead = (s: Subset): boolean => holdWithoutTab(s) === undefined
 
 /**
  * The settle point of a read that confirms the whole view (its load or a
  * system re-read; P4-B spec §8.4, item 7): lifts the requirement when the
  * read started at its epoch or later; else, when it is pending, the caller
- * repeats the read (`true`). On a hidden tab the view takes the invisible
- * branch instead: no repeat, the snapshot derives `needsRefresh` from the
- * requirement, and `resume()` reads it.
+ * repeats the read (`true`). On a hidden tab the gate defers the repeat:
+ * the snapshot derives `needsRefresh` from the requirement, and `resume()`
+ * reads it.
  */
-export function settleRequirement(
-  s: Subset,
-  readEpoch: number,
-  env: RequirementEnv
-): boolean {
+export function settleRequirement(s: Subset, readEpoch: number): boolean {
   liftRequirement(s, readEpoch)
-  return waitsForRead(s) && env.tabVisible()
+  return requirementPending(s)
 }
 
 /**
@@ -477,9 +459,6 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   // не лічильник: кожна спроба стартує не раніше e, а нову вимогу з
   // відповіді ставить лише надгробок, новіший за її старт, — їх скінченно.
   // Збій читання сюди не доходить: його повторює пауза збоїв.
-  const requirementEnv: RequirementEnv = {
-    tabVisible: ctx.tabVisible,
-  }
   function confirm(s: Subset, readEpoch: number, lifts: boolean): boolean {
     if (!lifts) {
       if (
@@ -490,9 +469,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         return false
       // Прихована вкладка й тут — гілка невидимого (§12, Р8): без запиту;
       // `needsRefresh` знімок виводить із вимоги, а `resume()` читає вигляд.
-      return ctx.tabVisible()
+      // Іменована перевірка, наслідок осідання (рішення архітекторки 25.11):
+      // вона судить не читання (P3 відкладає шлюз), а мить зняття позначки
+      // сторінки — у цьому `commit`, до сповіщення.
+      return !ctx.tabHidden()
     }
-    return settleRequirement(s, readEpoch, requirementEnv)
+    return settleRequirement(s, readEpoch)
   }
 
   function resolveWaiters(s: Subset) {
@@ -1306,7 +1288,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       needsRefresh:
         s.needsRefresh ||
         (s.unconfirmedSince !== undefined &&
-          (!(s.visible ?? s.listeners.size > 0) || !ctx.tabVisible())),
+          (!(s.visible ?? s.listeners.size > 0) || ctx.tabHidden())),
       ...(ctx.isStale(o.name) ? { isStale: true } : {}),
       ...(staleComposition(s) ? { staleComposition: true } : {}),
       ...(section === undefined ? {} : { section }),

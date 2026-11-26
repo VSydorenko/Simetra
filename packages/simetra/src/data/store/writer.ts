@@ -80,8 +80,6 @@ export interface WriterContext extends ReaderHost {
    * pending (`requirementPending`, P4-B spec §8.4, item 7).
    */
   readonly readRequirement: (s: Subset) => void
-  /** The tab is visible (`suspend` / `resume`, §8.4). */
-  readonly tabVisible: () => boolean
   readonly registry: SubsetRegistry
   readonly rowViews: RowViews
   readonly objects: ReadonlyMap<ObjectName, ObjectState>
@@ -1491,11 +1489,8 @@ export async function revalidateViews(
                 s.status = "ready"
                 s.error = undefined
               }
-              if (
-                settleRequirement(s, startEpoch, {
-                  tabVisible: ctx.tabVisible,
-                })
-              )
+              // Повтор на прихованій вкладці відкладає шлюз (R18, Р-SK1-8).
+              if (settleRequirement(s, startEpoch))
                 again.set(s, { reason: "retry", site: "R18" })
             } catch (error) {
               outcomes.set(s, ["failed", failureOf(error)])

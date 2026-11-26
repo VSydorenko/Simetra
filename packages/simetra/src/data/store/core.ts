@@ -656,6 +656,9 @@ export function createCore(options: {
     token: () => session.token(),
     staleObject: (object) => staleObjects.has(object),
     discardBound: () => session.versions.unavailable(),
+    // `tab-hidden` — стан `visible` ядра (`suspend` / `resume`), один для ядра,
+    // приймача й вимоги складу (Р-SK1-8).
+    tabHidden: () => !visible,
     defects,
   })
   const batcher = createBatcher(options.source, {
@@ -1324,7 +1327,7 @@ export function createCore(options: {
   const collator = filterCollator()
   const registry = createRegistry({
     session,
-    tabVisible: () => visible,
+    tabHidden: () => gate.tabHidden(),
     source,
     index,
     limits,
@@ -1818,17 +1821,14 @@ export function createCore(options: {
       if (s.unconfirmedSince !== undefined) s.dirty = true
   }
 
-  const requirementEnv = {
-    tabVisible: () => visible,
-  }
-
-  // Одна умова з точками осідання (§8.4, п. 7): вимога стоїть, вигляд видимий
-  // на видимій вкладці, і її ніхто інший не прочитає — ні читання з епохи
-  // вимоги в польоті чи в черзі, ні пауза збоїв.
+  // Одна умова з точками осідання (§8.4, п. 7): вимога стоїть, вигляд видимий,
+  // і її ніхто інший не прочитає — ні читання з епохи вимоги в польоті чи в
+  // черзі, ні пауза збоїв.
   function readRequirement(s: Subset) {
     if (!s.alive || s.purged || !s.loaded) return
-    // `stale-object` і межу відкинутих судить шлюз (R13) в `admitViews` нижче.
-    if (!requirementPending(s, requirementEnv)) return
+    // `stale-object`, межу відкинутих і вкладку судить шлюз (R13) в
+    // `admitViews` нижче.
+    if (!requirementPending(s)) return
     const why = {
       reason: "requirement",
       requirement: "composition-unconfirmed",
@@ -1903,7 +1903,8 @@ export function createCore(options: {
   // частина не летить (інакше прострочений строк давав би такти з таймером
   // 0 мс) і сховище не порожнє.
   function rightsDueAt(): number | undefined {
-    if (!rightsEnabled || !visible || rightsFlying) return undefined
+    // Вкладка — запит шлюзу для таймера (Р-SK1-8, Р-SK1-9).
+    if (!rightsEnabled || gate.tabHidden() || rightsFlying) return undefined
     if (rightsSentAt === undefined) return undefined
     if (![...objects.values()].some((o) => o.rows.size > 0)) return undefined
     return rightsSentAt + limits.revalidateIntervalMs
@@ -1914,7 +1915,9 @@ export function createCore(options: {
   // `serverHash` (Р8).
   const scheduler = createScheduler({
     now,
-    visible: () => visible,
+    // Запит шлюзу для таймера (Р-SK1-8, Р-SK1-9): прихована вкладка таймера
+    // не ставить і не спрацьовує.
+    visible: () => !gate.tabHidden(),
     closed: () => closed !== undefined || !session.token().valid,
     dueAt: schedulerDue,
     tick() {
@@ -1964,7 +1967,6 @@ export function createCore(options: {
   const writerContext: WriterContext = {
     session,
     readRequirement: (s) => readRequirement(s),
-    tabVisible: () => visible,
     source,
     limits,
     strict: options.strict ?? false,
@@ -1996,7 +1998,7 @@ export function createCore(options: {
       index,
       writer: writerContext,
       rights: () => rights,
-      visible: () => visible,
+      tabHidden: () => gate.tabHidden(),
       commit: (fn, token) => core.commit(fn, token),
       filterCollator: collator,
       joinWave,
@@ -2283,8 +2285,9 @@ export function createCore(options: {
         reconcile(HYDRATION_TRUST)
       else reconcile(HYDRATION_TRUST, {}, fromSnapshot)
     },
+    // Публічна ознака — запит шлюзу (Р-SK1-9).
     get visible() {
-      return visible
+      return !gate.tabHidden()
     },
     stopSignals: () => receiver?.stop(),
     suspend() {
@@ -2427,7 +2430,7 @@ export function createCore(options: {
   // Таймери `main` читають об'єкт лише на видимій вкладці, поки він сумісний
   // і сесія в межі відкинутих — ті самі умови, що в `schedulerDue` і такті.
   const timersRead = (object: ObjectName) =>
-    visible &&
+    !gate.tabHidden() &&
     !staleObjects.has(object) &&
     (!session.versions.unavailable() ||
       defects.has("scheduler-reads-unavailable"))
@@ -2533,17 +2536,23 @@ export function createCore(options: {
       const readable =
         isVisible && (s.form.spec.kind !== "section" || s.listeners.size > 0)
       const inRetry = scheduled.get(object)?.retry?.views.has(s) === true
-      // Вимогу складу судить те саме місце, що й `main` (`requirementPending`).
-      const composition = requirementHold(s, requirementEnv)
+      // Вимогу складу судить те саме місце, що й `main` (`requirementPending`),
+      // а вкладку — шлюз (Р-SK1-8), у тому самому порядку: спершу «вимоги
+      // немає», тоді вкладка, тоді решта.
+      const composition = requirementHold(s)
       const conditionOf = (r: SyncRequirement): SyncDeferral | undefined => {
-        // Вимогу складу судить те саме місце, що й `main`.
         if (r.kind === "composition-unconfirmed")
-          return composition === "absent" ? undefined : composition
+          return composition === "absent"
+            ? undefined
+            : gate.tabHidden()
+              ? "tab-hidden"
+              : composition
         // До `endHydration` довіру після гідратації не читає ніхто: її
         // читання — сам виклик (умова `hydrating`, рішення архітекторки).
         if (r.kind === "hydration-trust" && hydration === "hydrated")
           return "hydrating"
-        if (!visible && (TAB_GATED.has(r.kind) || inRetry)) return "tab-hidden"
+        if (gate.tabHidden() && (TAB_GATED.has(r.kind) || inRetry))
+          return "tab-hidden"
         if (!readable && VISIBILITY_GATED.has(r.kind)) return "target-invisible"
         if (promised([r], flights, queued)) return "promised"
         return inRetry ? "paused" : undefined
@@ -2661,7 +2670,7 @@ export function createCore(options: {
           () =>
             deferralOf(
               requirements.map((r) =>
-                !visible && tabGated(r)
+                gate.tabHidden() && tabGated(r)
                   ? "tab-hidden"
                   : promised([r], flights, queued)
                     ? "promised"

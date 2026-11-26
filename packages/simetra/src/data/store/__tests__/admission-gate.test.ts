@@ -101,7 +101,13 @@ const SITES: Record<SiteCode, { cause: ReadCause; target: ReadTarget }> = {
     cause: req({ reason: "requirement", requirement: "hydration-trust" }),
     target: VIEW,
   },
-  R15: { cause: { reason: "user" }, target: VIEW },
+  // Хвіст бере причину виклику, що його поставив; тут — звірка гідратації
+  // (R5), вимога, яку ціль відкладає на прихованій вкладці (рішення
+  // архітекторки 25.11).
+  R15: {
+    cause: req({ reason: "requirement", requirement: "hydration-trust" }),
+    target: VIEW,
+  },
   R16: { cause: { reason: "retry" }, target: VIEW },
   R17: { cause: { reason: "retry" }, target: VIEW },
   R18: { cause: { reason: "retry" }, target: VIEW },
@@ -463,6 +469,40 @@ describe("discard-bound: the discard limit of the session (Р-SK1-7)", () => {
       expect(gate.settledPastBound()).toBe(true)
     }
   )
+})
+
+describe("tab-hidden: the tab state of the core (Р-SK1-8)", () => {
+  it("judges the tab at the moment of admit; the query asks the same predicate", () => {
+    let hidden = false
+    const gate = createGate({ token: () => OPEN, tabHidden: () => hidden })
+    const { cause, target } = SITES.R13
+    expect(isPermit(gate.admit(cause, target, "R13"))).toBe(true)
+    expect(gate.tabHidden()).toBe(false)
+    hidden = true
+    expect(gate.admit(cause, target, "R13")).toEqual({ deferred: "tab-hidden" })
+    expect(gate.tabHidden()).toBe(true)
+    // Без функції стану умова не настає й для запиту.
+    expect(createGate({ token: () => OPEN }).tabHidden()).toBe(false)
+  })
+
+  // Мутація самотесту сягає рішення шлюзу лише для кодів, які читає такт.
+  it("the defect scheduler-fires-hidden admits only the codes of the tick", () => {
+    const own: readonly SiteCode[] = ["R1", "R2", "R3", "R4"]
+    const gate = createGate({
+      token: () => OPEN,
+      tabHidden: () => true,
+      defects: new Set(["scheduler-fires-hidden"]),
+    })
+    for (const code of SITE_CODES) {
+      const { cause, target } = SITES[code]
+      const want: Verdict = own.includes(code)
+        ? P
+        : EFFECTIVE[code]["tab-hidden"]
+      expect(verdictOf(gate.admit(cause, target, code)), code).toBe(want)
+    }
+    // Запит вкладки прапорець не чіпає: видимість вимикає сам планувальник.
+    expect(gate.tabHidden()).toBe(true)
+  })
 })
 
 describe("the permit issues one flight (рішення архітекторки 25.11)", () => {

@@ -87,8 +87,9 @@ export const isPermit = (admission: Admission): admission is Permit =>
 /**
  * Стан умов, які судить шлюз; шлюз отримує його функціями при створенні
  * (§5.1). `closed` — токен сесії недійсний, закрито чи закривається
- * (Р-SK1-5), а не знімок `closedSnapshot`. Решту умов ядро передає задачами
- * 4–6; умова без функції не настає.
+ * (Р-SK1-5), а не знімок `closedSnapshot`; `tabHidden` — стан `visible` ядра,
+ * один для ядра, приймача й вимоги складу (Р-SK1-8). Умова без функції не
+ * настає.
  */
 export interface GateState {
   readonly token: () => GenerationToken
@@ -107,6 +108,23 @@ const DISCARD_DEFECTS: readonly (readonly [DefectFlag, readonly SiteCode[]])[] =
     ["scheduler-reads-unavailable", ["R1", "R2", "R3"]],
     ["receiver-reads-unavailable", ["K1", "K2", "R8", "R9"]],
   ]
+
+// Мутація «такт на прихованій вкладці» (`scheduler-fires-hidden`) вимикає
+// видимість планувальника — і відповідь шлюзу, але лише для кодів, які читає
+// такт (R1, R3 — `runDue`, R2 — звірка, R4 — `fireWave`): інакше прапорець
+// не мав би читання, що його червонить (рішення архітекторки 25.11).
+const HIDDEN_DEFECTS: readonly (readonly [DefectFlag, readonly SiteCode[]])[] =
+  [["scheduler-fires-hidden", ["R1", "R2", "R3", "R4"]]]
+
+/** Прапорець самотесту відкриває умову для цього коду. */
+const opened = (
+  state: GateState,
+  scoped: readonly (readonly [DefectFlag, readonly SiteCode[]])[],
+  site: SiteCode
+) =>
+  scoped.some(
+    ([flag, codes]) => state.defects?.has(flag) === true && codes.includes(site)
+  )
 
 /**
  * Шлюз допуску. `admit` судить таблицю допуску (`admission.ts`); `issued` —
@@ -136,6 +154,14 @@ export interface Gate {
    * предикат, що судить `admit`.
    */
   settledPastBound(): boolean
+  /**
+   * Запит умови `tab-hidden` поза `admit` (Р-SK1-8, Р-SK1-9): таймери
+   * (планувальник, строк знімка прав), діагностика, публічні ознаки
+   * (`needsRefresh`, `core.visible`) та іменовані перевірки, що стережуть
+   * не-читальні ефекти на прихованій вкладці. Той самий предикат, що судить
+   * `admit`.
+   */
+  tabHidden(): boolean
 }
 
 function issue(
@@ -178,14 +204,12 @@ function holds(
       )
     case "discard-bound":
       return (
-        state.discardBound?.() === true &&
-        !DISCARD_DEFECTS.some(
-          ([flag, codes]) =>
-            state.defects?.has(flag) === true && codes.includes(site)
-        )
+        state.discardBound?.() === true && !opened(state, DISCARD_DEFECTS, site)
       )
     case "tab-hidden":
-      return state.tabHidden?.() === true
+      return (
+        state.tabHidden?.() === true && !opened(state, HIDDEN_DEFECTS, site)
+      )
   }
 }
 
@@ -215,6 +239,7 @@ export function createGate(state: GateState): Gate {
     staleObject: (object) => state.staleObject?.(object) === true,
     discardBound: () => state.discardBound?.() === true,
     settledPastBound: () => state.discardBound?.() === true,
+    tabHidden: () => state.tabHidden?.() === true,
   }
   return gate
 }
