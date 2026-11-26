@@ -37,7 +37,13 @@ import {
   loginUrl,
   withSessionOptions,
 } from "../../../simetra/test/support"
-import { asSuperuser, dropRoles, outboxSql, query } from "./support/db"
+import {
+  asSuperuser,
+  dropRoles,
+  outboxSql,
+  projectPlatformSql,
+  query,
+} from "./support/db"
 import {
   call,
   ENV,
@@ -585,8 +591,10 @@ const withoutSequence = (model: CompiledModel): string =>
 async function applyComplete(url: string, model: CompiledModel): Promise<void> {
   await query(url, renderApplyState(model))
   await query(url, sequenceSql(model))
-  // Повне застосування створює й outbox сигналів, що є в кожному проєкті
+  // Повне застосування створює й outbox сигналів та платформний шар проєкту
+  // (функцію порожності `RichText` з грантами), що є в кожному проєкті
   await query(url, outboxSql(model))
+  await query(url, projectPlatformSql(model))
 }
 
 const diffData = async (
