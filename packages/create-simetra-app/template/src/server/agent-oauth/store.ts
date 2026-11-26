@@ -40,6 +40,14 @@ const GRANT_ID: Record<
 const hashId = (id: string): string =>
   createHash("sha256").update(id, "utf8").digest("hex")
 
+// Спільний порядок блокувань відкликання й прибирання: спершу записи гранту
+// в `models` — одним і тим самим запитом, тож тим самим планом і порядком
+// рядків, — потім рядок `agent_grants`. Тоді відкликання й прибирання того
+// самого гранту одне одного лише чекають, а не дають 40P01, у якому жертвою
+// могло б стати відкликання користувача
+const DELETE_GRANT_RECORDS =
+  "DELETE FROM agent_oauth.models WHERE grant_id = $1"
+
 /**
  * Відкликання гранту — одна функція (спека П4-F §5.4), одна транзакція: записи
  * гранту (сам `Grant`, токени, коди) і позначка в `agent_grants`. Ідемпотентне.
@@ -50,9 +58,7 @@ export async function revokeGrant(pool: Pool, grantId: string): Promise<void> {
   const client = await pool.connect()
   try {
     await client.query("BEGIN")
-    await client.query("DELETE FROM agent_oauth.models WHERE grant_id = $1", [
-      grantId,
-    ])
+    await client.query(DELETE_GRANT_RECORDS, [grantId])
     await client.query(
       "UPDATE agent_oauth.agent_grants SET revoked_at = $2 WHERE grant_id = $1 AND revoked_at IS NULL",
       [grantId, new Date()]
@@ -132,7 +138,8 @@ export interface SweepOptions {
  * прострочені записи `models`, а також гранти, відкликані чи після свого
  * `expires_at`, — їхні записи `models` і сам рядок `agent_grants` (список їх і
  * так не показує). Кроками по `batch` рядків, доки крок не короткий;
- * `SKIP LOCKED` робить паралельні прибирання кількох екземплярів безпечними.
+ * `SKIP LOCKED` у кроці записів і повторна перевірка гранту під блокуванням
+ * роблять паралельні прибирання кількох екземплярів безпечними.
  */
 export async function sweepExpired(
   pool: Pool,
@@ -155,42 +162,69 @@ export async function sweepExpired(
     if ((done.rowCount ?? 0) < batch) break
   }
   for (;;) {
-    const client = await pool.connect()
-    let gone: number
-    try {
-      await client.query("BEGIN")
-      const { rows } = await client.query(
-        `SELECT grant_id FROM agent_oauth.agent_grants
-         WHERE revoked_at IS NOT NULL OR expires_at <= $1
-         LIMIT $2 FOR UPDATE SKIP LOCKED`,
-        [before, batch]
-      )
-      const ids = (rows as { grant_id: string }[]).map((r) => r.grant_id)
-      // Порядок блокувань зворотний до `revokeGrant` (там записи, потім
-      // рядок): рядок тут уже взято `FOR UPDATE`. Одночасне відкликання того
-      // самого гранту може зрідка дати 40P01, як і в munin-mcp; прибирання
-      // повториться наступним тіком
-      const swept = await client.query(
-        "DELETE FROM agent_oauth.models WHERE grant_id = ANY($1)",
-        [ids]
-      )
-      const deleted = await client.query(
-        "DELETE FROM agent_oauth.agent_grants WHERE grant_id = ANY($1)",
-        [ids]
-      )
-      await client.query("COMMIT")
-      models += swept.rowCount ?? 0
-      gone = deleted.rowCount ?? 0
-    } catch (e) {
-      await client.query("ROLLBACK").catch(() => {})
-      throw e
-    } finally {
-      client.release()
+    // Кандидати — без блокування: рядок гранту береться лише після його
+    // записів (`DELETE_GRANT_RECORDS`), як у `revokeGrant`
+    const { rows } = await pool.query(
+      `SELECT grant_id FROM agent_oauth.agent_grants
+       WHERE revoked_at IS NOT NULL OR expires_at <= $1
+       ORDER BY grant_id LIMIT $2`,
+      [before, batch]
+    )
+    let gone = 0
+    for (const { grant_id: grantId } of rows as { grant_id: string }[]) {
+      const done = await sweepGrant(pool, grantId, before)
+      models += done.models
+      gone += done.grant
     }
     grants += gone
     if (gone < batch) break
   }
   return { models, grants }
+}
+
+// Один грант — одна коротка транзакція в порядку блокувань `revokeGrant`.
+// Кінець гранту не скасовується (відкликання лишається, `expires_at` ніхто не
+// змінює, id не перевикористовується), тож умова кандидата ще правдива; її
+// повтор у видаленні рядка лише рахує гранти, які паралельне прибирання не
+// видалило раніше
+async function sweepGrantOnce(
+  pool: Pool,
+  grantId: string,
+  before: Date
+): Promise<{ models: number; grant: number }> {
+  const client = await pool.connect()
+  try {
+    await client.query("BEGIN")
+    const swept = await client.query(DELETE_GRANT_RECORDS, [grantId])
+    const deleted = await client.query(
+      `DELETE FROM agent_oauth.agent_grants
+       WHERE grant_id = $1 AND (revoked_at IS NOT NULL OR expires_at <= $2)`,
+      [grantId, before]
+    )
+    await client.query("COMMIT")
+    return { models: swept.rowCount ?? 0, grant: deleted.rowCount ?? 0 }
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {})
+    throw e
+  } finally {
+    client.release()
+  }
+}
+
+// Порядок той самий, але порядок рядків усередині `models` тримає план
+// запиту, а не гарантія Postgres: на 40P01 повторюється лише крок прибирання,
+// один раз, — відкликання користувача не повторюється й не стає жертвою двічі
+async function sweepGrant(
+  pool: Pool,
+  grantId: string,
+  before: Date
+): Promise<{ models: number; grant: number }> {
+  try {
+    return await sweepGrantOnce(pool, grantId, before)
+  } catch (e) {
+    if ((e as { code?: unknown }).code !== "40P01") throw e
+    return sweepGrantOnce(pool, grantId, before)
+  }
 }
 
 /**

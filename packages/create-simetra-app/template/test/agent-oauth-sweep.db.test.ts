@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto"
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest"
 import { SWEEP_MARGIN_MS, sweepExpired } from "../src/server/agent-oauth/store"
 import { startStand, type Stand } from "./agent-oauth-helpers"
 
@@ -150,6 +158,53 @@ describe("the expiry sweep of the authorization server store", () => {
       results[0]!.models + results[1]!.models + rest.models,
       "every row is counted by exactly one sweep"
     ).toBe(20)
+    expect(await modelIds()).toEqual([])
+  }, 60_000)
+
+  // Порядок блокувань відкликання: записи гранту, потім його рядок. Прибирання,
+  // що чекає на записи, рядка ще не тримає — тож відкликання доходить до
+  // рядка без очікування, і взаємного блокування (40P01) немає
+  it("a sweep waiting on a revocation holds no lock on the grant row", async () => {
+    const g = `racing-${randomUUID()}`
+    await grant(g, { expiresAt: ago(SWEEP_MARGIN_MS + MIN) })
+    await model(`${g}-rt`, {
+      model: "RefreshToken",
+      grantId: g,
+      expiresAt: later(MIN),
+    })
+    const revoke = await stand.pool.connect()
+    try {
+      await revoke.query("BEGIN")
+      // Перший крок `revokeGrant`: записи гранту під блокуванням до кінця транзакції
+      await revoke.query("DELETE FROM agent_oauth.models WHERE grant_id = $1", [
+        g,
+      ])
+      const sweep = sweepExpired(stand.pool, { now: NOW })
+      await vi.waitFor(
+        async () => {
+          const { rows } = await stand.admin.query(
+            "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+          )
+          expect((rows[0] as { n: number }).n).toBeGreaterThan(0)
+        },
+        { timeout: 10_000 }
+      )
+      // `NOWAIT`: рядок, узятий прибиранням, дав би 55P03 замість очікування
+      await revoke.query(
+        "SELECT 1 FROM agent_oauth.agent_grants WHERE grant_id = $1 FOR UPDATE NOWAIT",
+        [g]
+      )
+      await revoke.query(
+        "UPDATE agent_oauth.agent_grants SET revoked_at = $2 WHERE grant_id = $1",
+        [g, NOW]
+      )
+      await revoke.query("COMMIT")
+      expect(await sweep).toEqual({ models: 0, grants: 1 })
+    } finally {
+      await revoke.query("ROLLBACK").catch(() => {})
+      revoke.release()
+    }
+    expect(await grantIds()).toEqual([])
     expect(await modelIds()).toEqual([])
   }, 60_000)
 })
