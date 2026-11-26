@@ -25,6 +25,7 @@ import {
   acceptDebt,
   attribute,
   catalog,
+  isRichTextEmptinessUnit,
   metaFiles,
   project,
   uuid,
@@ -1041,9 +1042,13 @@ describe("EXECUTE of a policy function (І3)", () => {
         d.params?.reason,
       ])
     ).toEqual([["sql.policy-helper-correlated", "public", "f", "policyRoles"]])
+    // Гранти функції порожності `RichText` є в кожному проєкті
+    // (platform-layer.test.ts) — не предмет тесту.
     expect(
       result
-        .model!.sqlUnits.filter((u) => /^GRANT EXECUTE\b/.test(u.sql))
+        .model!.sqlUnits.filter(
+          (u) => /^GRANT EXECUTE\b/.test(u.sql) && !isRichTextEmptinessUnit(u)
+        )
         .map((u) => u.sql)
     ).toEqual([])
   })

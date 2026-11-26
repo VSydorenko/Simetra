@@ -338,6 +338,7 @@ const sortable = (column: FilterColumn) =>
   column.attribute?.array !== true &&
   column.attribute?.pair === undefined &&
   column.type !== "Json" &&
+  column.type !== "RichText" &&
   column.type !== "Bytes" &&
   column.type !== "Raw"
 

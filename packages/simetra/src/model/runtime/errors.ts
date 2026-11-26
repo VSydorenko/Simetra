@@ -53,6 +53,17 @@ export const LIMIT_REASONS = {
 } as const
 
 /**
+ * `reason` values a `command.invalid` carries for a value its attribute's
+ * type refuses beyond the type itself (multilingual data spec §5.7). The place
+ * inside the value stays out of the error: the client gets it from the T0
+ * check itself (`checkRichText`).
+ */
+export const VALUE_REASONS = {
+  /** A `RichText` value outside `RICH_TEXT_PROFILE`, or nested too deep. */
+  richTextProfile: "rich-text-profile",
+} as const
+
+/**
  * `reason` values of `command.privileged-login`: the fact through which the
  * login role of the runtime (`session_user`, itself or through any
  * membership) reaches a power the runtime must not hold (postgres profile

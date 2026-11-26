@@ -60,7 +60,11 @@ import {
   testDatabaseUrl,
   testProvider,
 } from "../../../../simetra/test/support"
-import { inTarget as loadTarget, outboxSql } from "../../__tests__/support/db"
+import {
+  inTarget as loadTarget,
+  outboxSql,
+  projectPlatformSql,
+} from "../../__tests__/support/db"
 import {
   leftoverShadows,
   provisionedShadows,
@@ -341,12 +345,13 @@ async function extractWithFacts(target: DbConnection, scope: EngineScope) {
 }
 
 /**
- * Послідовність версій і outbox сигналів компілятор видає завжди, тож межа з
+ * Послідовність версій, outbox сигналів і платформний шар проєкту (функція
+ * порожності `RichText` з грантами) компілятор видає завжди, тож межа з
  * метаданих завжди містить `simetra`, а застосована база їх має. Фікстури
  * класів — сирий SQL без платформного шару, тому ціль доповнюється так, як її
  * доповнило б перше застосування: інакше звірка бачила б їх як різницю, а не
  * як втрачену чи збережену одиницю. Ціль, розгорнута з бажаного стану, outbox
- * уже має — тоді його не створюємо вдруге.
+ * уже має — тоді його не створюємо вдруге; шар проєкту ідемпотентний.
  */
 const withPlatformSequence = (target: DbConnection) =>
   withClient(target, async (c) => {
@@ -358,11 +363,13 @@ const withPlatformSequence = (target: DbConnection) =>
       "SELECT to_regclass($1) IS NOT NULL AS present",
       [`${SIGNAL_OUTBOX.schema}.${SIGNAL_OUTBOX.name}`]
     )
-    if (rows[0]?.present !== true) await c.query(await outboxOfProfile())
+    const empty = await emptyOfProfile()
+    if (rows[0]?.present !== true) await c.query(outboxSql(empty))
+    await c.query(projectPlatformSql(empty))
   })
 
-/** Outbox сигналів профілю прогону — з бажаного стану порожнього проєкту. */
-async function outboxOfProfile(): Promise<string> {
+/** Бажаний стан порожнього проєкту профілю прогону — джерело доповнення. */
+async function emptyOfProfile(): Promise<CompiledModel> {
   const compiled = await compile(
     new Map([
       [
@@ -375,7 +382,7 @@ async function outboxOfProfile(): Promise<string> {
     ])
   )
   expect(errors(compiled.diagnostics)).toEqual([])
-  return outboxSql(compiled.model!)
+  return compiled.model!
 }
 
 const dropTrigger = (t: Loss["triggers"][number]) =>

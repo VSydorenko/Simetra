@@ -12,6 +12,7 @@ import {
   refineUniqueWithin,
   refineValueChecks,
   refineValueType,
+  refuseRichText,
   valueTypeShape,
 } from "./value-type"
 
@@ -84,22 +85,23 @@ const attributeShape = {
   }),
   load: z.enum(["eager", "lazy"]).optional().meta({
     description:
-      'Whether list reads omit the attribute ("lazy"; a card read returns it); default lazy for Bytes of the header, eager otherwise. Not allowed on a polymorphic Ref, a tabular section attribute, a register attribute or a rights carrier.',
+      'Whether list reads omit the attribute ("lazy"; a card read returns it); default lazy for Bytes and RichText of the header, eager otherwise. Not allowed on a polymorphic Ref, a tabular section attribute, a register attribute or a rights carrier.',
   }),
   maxBytes: z.int().positive().optional().meta({
     description:
-      "Most UTF-8 bytes of the JSON wire value a command may write; Text, Json, Bytes or an array only (the whole array counts). Default 1 MiB for Json and Bytes, 64 KiB for Text and arrays. Not allowed on a register attribute.",
+      "Most UTF-8 bytes of the JSON wire value a command may write; Text, Json, RichText, Bytes or an array only (the whole array counts). Default 1 MiB for Json, RichText and Bytes, 64 KiB for Text and arrays. Not allowed on a register attribute.",
   }),
 }
 
 /**
- * Типові `maxBytes` (спека П4-B Рд26): `Json` і `Bytes` несуть документи й
+ * Типові `maxBytes` (спека П4-B Рд26): `Json`, `RichText` і `Bytes` несуть документи й
  * файли, `Text` і масиви — довгий текст; більше — лише явним `maxBytes`, щоб
  * важке значення не проходило мовчки крізь бюджет відповіді.
  */
 const MAX_BYTES_DEFAULTS = {
   Json: 1024 * 1024,
   Bytes: 1024 * 1024,
+  RichText: 1024 * 1024,
   Text: 64 * 1024,
 } as const
 const ARRAY_MAX_BYTES = 64 * 1024
@@ -135,7 +137,7 @@ function refineMaxBytes(
   }
   ctx.addIssue({
     code: "custom",
-    message: "maxBytes applies only to Text, Json, Bytes or an array",
+    message: "maxBytes applies only to Text, Json, RichText, Bytes or an array",
     path: ["maxBytes"],
     params: { rule: "type.max-bytes-type" satisfies SchemaRule },
   })
@@ -223,6 +225,7 @@ export const registerFieldSchema = z
     refineValueType(value, ctx)
     refineUnique(value, ctx)
     refineValueChecks(value, ctx)
+    refuseRichText(value, ctx)
   })
 
 export type Attribute = z.infer<typeof attributeSchema>
@@ -238,6 +241,7 @@ export const registerAttributesSchema = z
   .array(attributeSchema)
   .superRefine((attributes, ctx) => {
     attributes.forEach((attribute, index) => {
+      refuseRichText(attribute, ctx, [index, "type"])
       if (attribute.load !== undefined) {
         ctx.addIssue({
           code: "custom",

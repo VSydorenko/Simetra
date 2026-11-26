@@ -10,7 +10,12 @@ import { localizedStringSchema } from "./localized-string"
 import { metadataRefSchema } from "./metadata-ref"
 import { objectHeaderShape } from "./object-header"
 import type { SchemaRule } from "./rules"
-import { LOGICAL_TYPES, refineValueType, valueTypeShape } from "./value-type"
+import {
+  LOGICAL_TYPES,
+  refineValueType,
+  refuseRichText,
+  valueTypeShape,
+} from "./value-type"
 
 const IDENTITY_TYPES: readonly string[] = ["SmallInt", "Integer", "BigInt"]
 
@@ -181,6 +186,7 @@ export const customTableColumnSchema = z
         )
       }
       refineValueType({ ...column, type: column.type }, ctx)
+      refuseRichText(column, ctx)
     }
 
     if (

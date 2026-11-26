@@ -26,6 +26,7 @@ const PARAMETERS: Record<(typeof LOGICAL_TYPES)[number], Partial<ValueType>[]> =
     DateTime: [{}],
     Bytes: [{}],
     Json: [{}],
+    RichText: [{}],
     Ref: [{}],
   }
 
@@ -44,6 +45,14 @@ describe("logicalTypeOf", () => {
       expect(back.form, pg).toBe("logical")
       if (back.form === "logical") expect(pgTypeOf(back.value)).toBe(pg)
     }
+  })
+
+  it("RichText is jsonb, and jsonb reads back as Json", () => {
+    expect(pgTypeOf({ type: "RichText" })).toBe("jsonb")
+    expect(logicalTypeOf("jsonb", NO_ENUMS)).toEqual({
+      form: "logical",
+      value: { type: "Json" },
+    })
   })
 
   it("uuid is UUID", () => {

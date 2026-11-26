@@ -20,6 +20,7 @@ import {
   acceptDebt,
   catalog,
   customTable,
+  isRichTextEmptinessUnit,
   metaFiles,
   organization,
   project,
@@ -77,13 +78,16 @@ async function compileWith(
 async function order(entries: Record<string, unknown>): Promise<string[]> {
   const result = await compileWith(entries)
   expectClean(result, { allow: ["rights.scope-kind-unread"] })
-  // Outbox сигналів є в кожному проєкті; його порядок звіряє
-  // signal-outbox.test.ts.
+  // Outbox сигналів і функція порожності `RichText` є в кожному проєкті; їх
+  // звіряють signal-outbox.test.ts і platform-layer.test.ts.
   const outbox = new Set([
     `table:${SIGNAL_OUTBOX.schema}.${SIGNAL_OUTBOX.name}`,
     ...result
       .model!.sqlUnits.filter(
-        (u) => u.generator === "signalOutbox" || u.generator === "storage"
+        (u) =>
+          u.generator === "signalOutbox" ||
+          u.generator === "storage" ||
+          isRichTextEmptinessUnit(u)
       )
       .map((u) => u.identity),
   ])

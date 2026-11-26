@@ -182,6 +182,7 @@
               "DateTime",
               "Bytes",
               "Json",
+              "RichText",
               "Ref",
               "PgEnum",
               "Raw"

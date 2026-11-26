@@ -15,6 +15,7 @@ import { tableGrants } from "../access-units"
 import { platformSchemaGrants } from "../platform/units"
 import { readReferenceDomain } from "./fixtures/reference-domain"
 import supabaseGrants from "./fixtures/reference-supabase-grants.json"
+import { isRichTextEmptinessUnit } from "./helpers"
 
 /** Референсний домен, перекомпільований під профіль `provider`. */
 async function compileReference(provider: DatabaseProvider) {
@@ -138,7 +139,8 @@ describe("supabase grants are unchanged", () => {
   // Гранти outbox сигналів і оракула сигналу з'явилися пізніше за базу; їх
   // точний перелік звіряють signal-outbox.test.ts і signal-units.test.ts;
   // гранти знімка прав — rights-client-snapshot.test.ts; тригерів сигналу
-  // прав — rights-signal-triggers.test.ts.
+  // прав — rights-signal-triggers.test.ts; функції порожності `RichText` —
+  // platform-layer.test.ts.
   it("reference domain: the GRANT/REVOKE statements equal the baseline", async () => {
     const { units } = await compileReference("supabase")
     const grants = units
@@ -148,7 +150,8 @@ describe("supabase grants are unchanged", () => {
           u.generator !== "storage" &&
           u.generator !== "signal" &&
           u.generator !== "rightsClientSnapshot" &&
-          u.generator !== "rightsSignal"
+          u.generator !== "rightsSignal" &&
+          !isRichTextEmptinessUnit(u)
       )
       .map((u) => u.sql.trim())
       .filter(isGrant)

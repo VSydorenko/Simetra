@@ -79,6 +79,28 @@ export function outboxSql(model: CompiledModel): string {
     .join("\n")
 }
 
+/**
+ * SQL of the project-level platform layer of `model`: the `platformLayer`
+ * units without an owner object, which the compiler puts into every project.
+ * The filter is structural on purpose: it takes every such unit the project
+ * has (the emptiness function `simetra.rich_text_is_empty(jsonb)` and, when
+ * the project has them, the subject functions), not one named function. Every
+ * statement is idempotent (`CREATE OR REPLACE`, `GRANT`, `REVOKE`).
+ */
+export function projectPlatformSql(model: CompiledModel): string {
+  const units = new Set(
+    model.sqlUnits
+      .filter(
+        (u) => u.generator === "platformLayer" && u.ownerObjectId === undefined
+      )
+      .map((u) => u.identity)
+  )
+  return renderDesiredState(model)
+    .statements.filter((s) => s.kind === "unit" && units.has(s.object))
+    .map((s) => s.sql)
+    .join("\n")
+}
+
 /** One query (or several statements) on a connection of its own. */
 export async function query<R extends pg.QueryResultRow>(
   url: string,
