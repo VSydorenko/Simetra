@@ -440,14 +440,17 @@ describe("the rejoin wave", () => {
   })
 
   // Об'єкт, що став несумісним, поки хвиля чекала, `markStale` виймає з неї
-  // (рішення архітекторки 25.11): ефекти хвилі — як у `main`, де його
-  // пропускав `fireWave`. Контроль — та сама хвиля без позначки.
+  // (рішення архітекторки 25.11), а несумісного до приєднання `joinWave` не
+  // бере (запит умови шлюзу): ефекти хвилі — як у `main`, де його пропускав
+  // `fireWave`. Контроль — та сама хвиля без позначки.
   it.each([
-    ["live", false],
-    ["marked stale-client after the join", true],
-  ])(
+    ["live", "live"],
+    ["marked stale-client after the join", "after"],
+    ["marked stale-client before the join", "before"],
+  ] as const)(
     "a wave over an object %s: marks, the signal read and the burst follow the object",
-    async (_, stale) => {
+    async (_, mark) => {
+      const stale = mark !== "live"
       const h = await open(full)
       const seen: string[] = []
       h.inspect.watchSignalReads((object, signal) => {
@@ -458,8 +461,9 @@ describe("the rejoin wave", () => {
           .sync()
           .filter((t) => t.target.kind === "view")
           .map((t) => t.requirements)
+      if (mark === "before") h.core.staleClient(TASK)
       h.transport.join(channel, false)
-      if (stale) h.core.staleClient(TASK)
+      if (mark === "after") h.core.staleClient(TASK)
       await settle()
       const before = requirementsOf()
       const logged = h.log.length

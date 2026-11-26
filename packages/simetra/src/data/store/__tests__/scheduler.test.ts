@@ -573,6 +573,16 @@ describe("scheduler: the seam of the rights block (B5b)", () => {
     expect(readsAt(h)).toBe(base)
   })
 
+  // Строк — таймер: несумісному об'єкту його не ставить запит умови шлюзу
+  // (Р-SK1-9), а не відмова читання, коли строк настане.
+  it("requestReread of a stale-client object keeps no due time while the jitter runs", async () => {
+    const h = await threeObjects()
+    h.core.staleClient(TASK)
+    await settle()
+    h.core.freshness.requestReread([TASK, ORG], { jitterMs: 60_000 })
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(1)
+  })
+
   it("lastTickAt: the start of the last tick that read; a tick without targets leaves it", async () => {
     const h = await threeObjects()
     expect(h.core.freshness.lastTickAt()).toBeUndefined()
