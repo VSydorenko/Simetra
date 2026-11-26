@@ -769,6 +769,11 @@ describe("conditional publicRead: the mark unpublishes, a marked row is not publ
     }
     const region = plain.get("function:public.region_simetra_effects()")!
     expect(region).toBeDefined()
-    expect(region).not.toMatch(/IF NEW\.\w+ IS DISTINCT FROM/)
+    // Позитивний контроль: той самий вираз знаходить перевірку в умовного.
+    const coupledCheck = /IF NEW\.\w+ IS DISTINCT FROM/
+    expect(
+      withCondition.get("function:public.region_simetra_effects()")
+    ).toMatch(coupledCheck)
+    expect(region).not.toMatch(coupledCheck)
   })
 })
