@@ -1622,9 +1622,10 @@ export function createCore(options: {
   function fireWave() {
     const fired = wave
     wave = undefined
-    // Закриття знімає хвилю (`onClose`), а `resume()` у вікні закриття не
-    // доходить сюди: `closed` читань хвилі судить шлюз.
-    if (fired === undefined) return
+    // Токен тут стереже не читання (їх судить шлюз), а ефекти хвилі поза ним:
+    // `lastWaveAt`, епоху, журнал сплеску, слухача діагностики й `commit`
+    // позначок — у вікні закриття вони не діють.
+    if (fired === undefined || !session.token().valid) return
     const token = session.token()
     lastWaveAt = now()
     // Наступна епоха: читання хвилі стартують з неї, а ті, що вже в польоті, —
@@ -2274,7 +2275,7 @@ export function createCore(options: {
       visible = true
       touchRequirements()
       scheduler.request()
-      if (!session.token().valid) return
+      // `closed` строків, хвилі, вимог і звірки судить шлюз (§5.3).
       // Строки, що настали на прихованій вкладці (перемикання епохи, повтор
       // відкинутої відповіді), беруться незалежно від `minAgeMs`: їхні рядки
       // вже `stale`, а свіжість тут не міра.
