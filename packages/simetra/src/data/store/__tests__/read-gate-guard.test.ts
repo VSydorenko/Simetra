@@ -1019,6 +1019,51 @@ const PLACES: readonly Group[] = [
   },
 ]
 
+/**
+ * Сирі читання в самій функції Додатка Б (§3 SK-1, «Готово, коли»): лише
+ * іменовані перевірки не-читальних ефектів, іншого об'єкта чи продовження
+ * польоту — корінь, вид і рішення, на якому кожна стоїть (рішення
+ * архітекторки 26.11). Кількість входжень тримає {@link PLACES}.
+ */
+const ROOT_READS: readonly (readonly [site: string, reason: string])[] = [
+  [
+    "core.ts::createCore.fireWave token",
+    "Іменована перевірка не-читальних ефектів хвилі (`lastWaveAt`, епоха, журнал, `commit` позначок), варіант (в) 25.11",
+  ],
+  [
+    "core.ts::createCore.fireWave staleObjects",
+    "Іменована перевірка не-читальних ефектів хвилі для несумісного об'єкта (`commit` позначок, діагностика, сплеск), варіант (в) 25.11",
+  ],
+  [
+    "core.ts::createCore.onFlush staleObjects",
+    "Іменована перевірка іншого об'єкта: схований об'єкт R10, а не ціль-тримач (рішення 25.11)",
+  ],
+  [
+    "core.ts::createCore.onFlush closed",
+    "Іменована перевірка не-читальних ефектів пачки закриття: сповістити всі вигляди (`afterCommit(closing)`) і не сповіщати після закриття слухачем",
+  ],
+  [
+    "receiver.ts::createReceiver.run staleObjects via ReaderContextBase.isStale",
+    "Іменована перевірка не-читальних ефектів пачки для несумісного об'єкта (гілки `stale`, Р-SK1-8, рішення 25.11)",
+  ],
+  [
+    "subsets.ts::createRegistry.preload isClosed",
+    "Відмова виклику закритого ядра до утримання (публічний знімок закриття, Р-SK1-5). Не прибрано, бо поведінка інша: без неї `preload` після закриття створює вигляд, ставить таймер TTL, а `load` відмовляє шлюзом без осідання, тож обіцянка не виконується ніколи",
+  ],
+  [
+    "core.ts::createCore.dispatch token",
+    "Токен продовження польоту (родина «поховано з початку», SK-5): журнал `rights-failed` лише живої сесії",
+  ],
+  [
+    "core.ts::createCore.startVersion token",
+    "Токен продовження польоту (родина «поховано з початку», SK-5): журнал збою версії лише живої сесії",
+  ],
+  [
+    "writer.ts::rereadKey token",
+    "Токен продовження польоту (родина «поховано з початку», SK-5): `commit` після таймауту й у `settle` відповіді лише живої сесії",
+  ],
+]
+
 const isQuery = (site: string) => / gate\.\w+( |$)/.test(site)
 
 function realProgram() {
@@ -1107,6 +1152,21 @@ describe("read gate guard on the store", () => {
         (site) => isQuery(site) && inventory.roots.includes(site.split(" ")[0]!)
       )
     expect(atRoot).toEqual([])
+  })
+
+  it("raw reads at an inventory function itself are only the named decisions", () => {
+    const raw = new Set(
+      analysis.sites
+        .filter(
+          (f) => !f.kind.startsWith("gate.") && inventory.roots.includes(f.key)
+        )
+        .map(render)
+    )
+    const named = ROOT_READS.map(([site]) => site)
+    expect([...raw].filter((s) => !named.includes(s)).sort()).toEqual([])
+    expect(named.filter((s) => !raw.has(s))).toEqual([])
+    for (const [, reason] of ROOT_READS)
+      expect(reason.length).toBeGreaterThan(0)
   })
 
   it("every listed place is named once, with a reason", () => {
