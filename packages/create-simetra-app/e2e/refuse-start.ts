@@ -15,6 +15,13 @@ export async function refusesToStart(
     PORT: String(port),
     HOST: "127.0.0.1",
     NITRO_HOST: "127.0.0.1",
+    // Ключі сервера авторизації агентів дійсні за замовчуванням: інакше їхня
+    // відмова спрацює раніше за діагностику, яку перевіряє випадок. Випадок
+    // без ключів задає обидві змінні як `undefined`
+    SIMETRA_AGENT_OAUTH_COOKIE_KEYS:
+      app.serverEnv.SIMETRA_AGENT_OAUTH_COOKIE_KEYS,
+    SIMETRA_AGENT_OAUTH_SIGNING_KEY:
+      app.serverEnv.SIMETRA_AGENT_OAUTH_SIGNING_KEY,
     ...env,
   })
   // Порт має відмовляти весь час до виходу процесу, а не лише після нього:

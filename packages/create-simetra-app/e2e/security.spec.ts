@@ -572,6 +572,20 @@ test.describe("server start (spec 4.1)", () => {
     )
   })
 
+  test("production without agent AS keys stops the server", async ({ app }) => {
+    await refusesToStart(
+      app,
+      {
+        NODE_ENV: "production",
+        SIMETRA_APP_ORIGIN: app.origin,
+        BETTER_AUTH_SECRET: app.secret,
+        SIMETRA_AGENT_OAUTH_COOKIE_KEYS: undefined,
+        SIMETRA_AGENT_OAUTH_SIGNING_KEY: undefined,
+      },
+      "SIMETRA_AGENT_OAUTH_COOKIE_KEYS and SIMETRA_AGENT_OAUTH_SIGNING_KEY are required in production"
+    )
+  })
+
   // Невідповідні `x`/`d` видно лише порту: форма ключа правильна, тож це
   // перевіряє саме асинхронна частина старту (Р3)
   test("a signing key with x not matching d stops the server", async ({
