@@ -108,6 +108,118 @@ export async function grantTenant(
   return (rows[0] as { tenant: string | null } | undefined)?.tenant ?? null
 }
 
+/**
+ * Запас прибирання: рядок видаляється лише через 5 хв після свого строку за
+ * годинником цього процесу — екземпляр, чий годинник поспішає, не видаляє
+ * запис, який інший екземпляр ще вважає живим (рішення архітекторки).
+ */
+export const SWEEP_MARGIN_MS = 5 * 60_000
+
+/** Рядків за крок: короткі транзакції без довгих блокувань. */
+export const SWEEP_BATCH = 500
+
+/** Період таймера прибирання (як у munin-mcp). */
+export const SWEEP_EVERY_MS = 600_000
+
+export interface SweepOptions {
+  /** Годинник JS, як у кожній перевірці строку F4 (Р-F4-11). */
+  now?: Date
+  batch?: number
+}
+
+/**
+ * Прибирання сховища сервера авторизації за строком (спека П4-F §5.4):
+ * прострочені записи `models`, а також гранти, відкликані чи після свого
+ * `expires_at`, — їхні записи `models` і сам рядок `agent_grants` (список їх і
+ * так не показує). Кроками по `batch` рядків, доки крок не короткий;
+ * `SKIP LOCKED` робить паралельні прибирання кількох екземплярів безпечними.
+ */
+export async function sweepExpired(
+  pool: Pool,
+  o: SweepOptions = {}
+): Promise<{ models: number; grants: number }> {
+  const before = new Date((o.now ?? new Date()).getTime() - SWEEP_MARGIN_MS)
+  const batch = o.batch ?? SWEEP_BATCH
+  let models = 0
+  let grants = 0
+  // Кінець циклу — за кількістю видалених, а не вибраних рядків: рядок, який
+  // вибрано, але не видалено, не крутить цикл безкінечно
+  for (;;) {
+    const done = await pool.query(
+      `DELETE FROM agent_oauth.models WHERE (model, id_hash) IN (
+         SELECT model, id_hash FROM agent_oauth.models
+         WHERE expires_at <= $1 LIMIT $2 FOR UPDATE SKIP LOCKED)`,
+      [before, batch]
+    )
+    models += done.rowCount ?? 0
+    if ((done.rowCount ?? 0) < batch) break
+  }
+  for (;;) {
+    const client = await pool.connect()
+    let gone: number
+    try {
+      await client.query("BEGIN")
+      const { rows } = await client.query(
+        `SELECT grant_id FROM agent_oauth.agent_grants
+         WHERE revoked_at IS NOT NULL OR expires_at <= $1
+         LIMIT $2 FOR UPDATE SKIP LOCKED`,
+        [before, batch]
+      )
+      const ids = (rows as { grant_id: string }[]).map((r) => r.grant_id)
+      // Спершу записи гранту, потім рядок — той самий порядок, що в `revokeGrant`
+      const swept = await client.query(
+        "DELETE FROM agent_oauth.models WHERE grant_id = ANY($1)",
+        [ids]
+      )
+      const deleted = await client.query(
+        "DELETE FROM agent_oauth.agent_grants WHERE grant_id = ANY($1)",
+        [ids]
+      )
+      await client.query("COMMIT")
+      models += swept.rowCount ?? 0
+      gone = deleted.rowCount ?? 0
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {})
+      throw e
+    } finally {
+      client.release()
+    }
+    grants += gone
+    if (gone < batch) break
+  }
+  return { models, grants }
+}
+
+/**
+ * Таймер прибирання процесу: `unref()`, тож процес він не тримає; прогін, що
+ * ще йде, наступний тік пропускає; збій лише пишеться в журнал, бо необроблене
+ * відхилення зупинило б процес. Повертає зупинку.
+ */
+export function startSweepTimer(
+  sweep: () => Promise<unknown>,
+  everyMs: number = SWEEP_EVERY_MS
+): () => void {
+  let running = false
+  const timer = setInterval(() => {
+    if (running) return
+    running = true
+    sweep()
+      .catch((error: unknown) => {
+        console.error("[simetra] agent oauth: sweep failed", error)
+      })
+      .finally(() => {
+        running = false
+      })
+  }, everyMs)
+  timer.unref()
+  const stop = () => {
+    clearInterval(timer)
+    process.off("exit", stop)
+  }
+  process.once("exit", stop)
+  return stop
+}
+
 type Row = {
   payload: AdapterPayload
   consumed_at: Date | null

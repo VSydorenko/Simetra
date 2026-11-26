@@ -19,6 +19,8 @@ import {
   GRANT_TTL_SECONDS,
   grantTenant,
   markGrantRevoked,
+  startSweepTimer,
+  sweepExpired,
 } from "./store"
 
 const DAY = 86_400
@@ -251,11 +253,20 @@ export function createAgentOauthProvider(o: AgentOauthOptions): Provider {
 
 let singleton: Provider | undefined
 
-/** Сервер авторизації процесу: ліниво, з оточення й пула Better Auth. */
+/**
+ * Сервер авторизації процесу: ліниво, з оточення й пула Better Auth. Разом із
+ * ним стартує таймер прибирання сховища за строком: модуль поза статичним
+ * графом entry, тож таймер з'являється з першим запитом агента.
+ */
 export function agentOauthProvider(): Provider {
-  return (singleton ??= createAgentOauthProvider({
-    origin: appOrigin(),
-    pool: getAuthPool(),
-    keys: agentOauthKeys(),
-  }))
+  if (singleton === undefined) {
+    const pool = getAuthPool()
+    singleton = createAgentOauthProvider({
+      origin: appOrigin(),
+      pool,
+      keys: agentOauthKeys(),
+    })
+    startSweepTimer(() => sweepExpired(pool))
+  }
+  return singleton
 }

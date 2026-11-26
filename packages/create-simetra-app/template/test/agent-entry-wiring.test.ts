@@ -1,5 +1,5 @@
 import { runtimeCatalogSchema } from "simetra/model"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import generatedCatalog from "../generated/runtime-catalog.json"
 import { stubAgentOauthKeys } from "./agent-oauth-keys"
 
@@ -27,6 +27,13 @@ beforeEach(async () => {
   vi.stubEnv("SIMETRA_APP_ORIGIN", ORIGIN)
   // Пул створюється, але з'єднання не відкривається: до порту запит не доходить
   vi.stubEnv("SIMETRA_AUTH_DATABASE_URL", "postgres://auth@127.0.0.1:1/none")
+  // Сервер авторизації процесу стартує таймер прибирання: підроблений, щоб
+  // тест його бачив і не лишав після себе
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] })
+})
+afterEach(() => {
+  vi.clearAllTimers()
+  vi.useRealTimers()
 })
 
 async function entry() {
@@ -64,6 +71,8 @@ describe("the MCP entry of the server entry", () => {
       })
     )
     expect(response.status).toBe(401)
+    // Перший запит агента підняв сервер авторизації процесу з таймером прибирання
+    expect(vi.getTimerCount()).toBe(1)
     expect(response.headers.get("www-authenticate")).toBe(
       'Bearer resource_metadata="https://app.test/.well-known/oauth-protected-resource/mcp", scope="mcp"'
     )

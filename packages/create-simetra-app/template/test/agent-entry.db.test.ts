@@ -24,6 +24,7 @@ import { withAgentEntry } from "../src/server/agent-entry"
 import { agentInputHashKey } from "../src/server/agent-oauth/keys"
 import {
   createPgAdapter,
+  sweepExpired,
   type AdapterHooks,
 } from "../src/server/agent-oauth/store"
 import { createVerifyAgentToken } from "../src/server/agent-oauth/verify-token"
@@ -575,6 +576,36 @@ describe("401 on both eras (invariants 17, 18)", () => {
     // запитом, тож відмову дає саме порт, а не відсутність токена
     expect(await app.provider.AccessToken.find(winner)).toBeDefined()
     await expectRefused(winner)
+    await expectRefused(at(l))
+  }, 60_000)
+})
+
+describe("after the expiry sweep (P4-F §5.4)", () => {
+  it("a grant past its row expiry is swept with its records; the next call is 401", async () => {
+    const l = await login()
+    await expectAccepted(at(l))
+    events.length = 0
+    // Рядок закінчився давніше за запас прибирання; записи бібліотеки ще живі
+    await stand.pool.query(
+      "UPDATE agent_oauth.agent_grants SET expires_at = $2 WHERE grant_id = $1",
+      [l.grantId, new Date(Date.now() - 10 * 60_000)]
+    )
+    await sweepExpired(stand.pool)
+    expect(await grantRow(stand.pool, l.grantId)).toBeUndefined()
+    expect(await app.provider.Grant.find(l.grantId)).toBeUndefined()
+    await expectRefused(at(l))
+  }, 60_000)
+
+  it("a deleted agent_grants row is a refusal while the token and the Grant live", async () => {
+    const l = await login()
+    await expectAccepted(at(l))
+    events.length = 0
+    await stand.pool.query(
+      "DELETE FROM agent_oauth.agent_grants WHERE grant_id = $1",
+      [l.grantId]
+    )
+    expect(await app.provider.AccessToken.find(at(l))).toBeDefined()
+    expect(await app.provider.Grant.find(l.grantId)).toBeDefined()
     await expectRefused(at(l))
   }, 60_000)
 })

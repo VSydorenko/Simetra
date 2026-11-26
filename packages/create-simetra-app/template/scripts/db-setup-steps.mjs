@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS agent_oauth.models (
 );
 CREATE INDEX IF NOT EXISTS models_grant_id ON agent_oauth.models (grant_id);
 CREATE INDEX IF NOT EXISTS models_uid ON agent_oauth.models (uid);
+CREATE INDEX IF NOT EXISTS models_expires_at ON agent_oauth.models (expires_at);
 CREATE TABLE IF NOT EXISTS agent_oauth.agent_grants (
   grant_id     text        PRIMARY KEY,
   user_id      uuid        NOT NULL REFERENCES better_auth."user" (id) ON DELETE CASCADE,
