@@ -43,7 +43,6 @@ import {
   settle,
   tracked,
   type BoundSource,
-  type ReadOrigin,
 } from "./source"
 import {
   EPOCH_UNAVAILABLE,
@@ -54,6 +53,7 @@ import {
   type Subset,
   type SubsetRegistry,
 } from "./subsets"
+import { isPermit, type Flight, type Permit } from "./sync/flight"
 import type { ReadCause, ReadWhy, SettleOutcome } from "./sync/vocabulary"
 import type {
   ActiveView,
@@ -80,8 +80,6 @@ export interface WriterContext extends ReaderHost {
    * pending (`requirementPending`, P4-B spec §8.4, item 7).
    */
   readonly readRequirement: (s: Subset) => void
-  /** The tab is visible (`suspend` / `resume`, §8.4). */
-  readonly tabVisible: () => boolean
   readonly registry: SubsetRegistry
   readonly rowViews: RowViews
   readonly objects: ReadonlyMap<ObjectName, ObjectState>
@@ -138,7 +136,7 @@ export interface WriterContext extends ReaderHost {
   }
 }
 
-/** The context a flight's readers get: its source carries the flight's origin. */
+/** The context a flight's readers get: its source carries the flight. */
 type BoundWriter = WithSource<WriterContext, BoundSource>
 
 /** The longest wait for a re-read the journal settles a mutation by (§7.2 step 4). */
@@ -919,13 +917,13 @@ function readAgain(
   s: Subset,
   startEpoch: number,
   token: GenerationToken,
-  origin: ReadOrigin
+  flight: Flight
 ): Promise<Apply> {
   return gated(
     ctx,
     startEpoch,
     (c) => writeAgain(c, s, startEpoch, token),
-    origin
+    flight
   )
 }
 
@@ -1011,27 +1009,27 @@ export async function revalidate(
   options: RevalidateOptions
 ): Promise<void> {
   const o = ctx.objectOf(object)
-  // Єдина ознака закриття — токен сесії: він недійсний уже з `closing`, коли
-  // слухач purge-пачки ще бачить `closed === undefined`.
-  if (!ctx.session.token().valid) return
-  const targets = revalidateTargets(ctx, object, options)
+  // Закриття судить шлюз (§5.3, `closed` — токен сесії недійсний): закрита
+  // сесія відмовляє кожному вигляду, і прохід порожній.
+  const reads = admitViews(
+    ctx,
+    revalidateTargets(ctx, object, options),
+    options.why
+  )
   if (options.minAgeMs !== undefined) {
     // Такт і звірка вигляд у польоті не беруть (§6.3, single-flight).
     await revalidateViews(
       ctx,
       o,
-      readsOf(
-        targets.filter(
-          (s) =>
-            !inFlight(s) &&
-            (!unavailable(s) || ctx.defects.has("scheduler-reads-unavailable"))
-        ),
-        options.why
+      reads.filter(
+        ([s]) =>
+          !inFlight(s) &&
+          (!unavailable(s) || ctx.defects.has("scheduler-reads-unavailable"))
       )
     )
     return
   }
-  await singleFlight(ctx, o, targets, options).done
+  await singleFlight(ctx, o, reads, options).done
 }
 
 /** The views `revalidate` of the object takes with these options. */
@@ -1055,29 +1053,32 @@ export function revalidateTargets(
 export function singleFlight(
   ctx: WriterContext,
   o: ObjectState,
-  targets: readonly Subset[],
+  reads: readonly Read[],
   options: RevalidateOptions
 ): { started: number; done: Promise<void> } {
   // Явний виклик: вигляд у польоті отримує один хвіст — ще один прохід після
   // осідання з новою епохою старту; наступні виклики чекають той самий хвіст.
-  const tails = targets.filter(inFlight).map((s) => {
-    // Хвіст, що вже чекає, бере суму викликів: `visibleOnly: false` перемагає,
-    // `alsoViews` об'єднуються (інакше пізній виклик міг би загубитися).
-    const pending = tailOptions.get(s)
-    tailOptions.set(
-      s,
-      pending === undefined ? options : mergeOptions(pending, options)
-    )
-    s.rereadTail ??= tailPass(ctx, o, s, options.why)
-    return s.rereadTail
-  })
-  const fresh = targets.filter((s) => !inFlight(s))
+  // Дозвіл вигляду в польоті не використовується: хвіст питає шлюз сам (R15).
+  const tails = reads
+    .map(([s]) => s)
+    .filter(inFlight)
+    .map((s) => {
+      // Хвіст, що вже чекає, бере суму викликів: `visibleOnly: false` перемагає,
+      // `alsoViews` об'єднуються (інакше пізній виклик міг би загубитися).
+      const pending = tailOptions.get(s)
+      tailOptions.set(
+        s,
+        pending === undefined ? options : mergeOptions(pending, options)
+      )
+      s.rereadTail ??= tailPass(ctx, o, s, options.why)
+      return s.rereadTail
+    })
+  const fresh = reads.filter(([s]) => !inFlight(s))
   return {
     started: fresh.length,
-    done: Promise.all([
-      revalidateViews(ctx, o, readsOf(fresh, options.why)),
-      ...tails,
-    ]).then(() => undefined),
+    done: Promise.all([revalidateViews(ctx, o, fresh), ...tails]).then(
+      () => undefined
+    ),
   }
 }
 
@@ -1234,12 +1235,9 @@ async function tailPass(
     // розбудило очікувачів, і хвіст, що прокинувся між ними, пропустив би
     // його (#312). Тому вона рахується польотом, а сама будить очікувачів,
     // коли нового читання не почала.
-    while (
-      (inFlight(s) || s.checkQueued) &&
-      s.alive &&
-      !s.purged &&
-      ctx.session.token().valid
-    ) {
+    // Закриття гасить `alive` (`close()` реєстру) і будить очікувачів:
+    // окремої перевірки закриття цикл не має.
+    while ((inFlight(s) || s.checkQueued) && s.alive && !s.purged) {
       await new Promise<void>((resolve) =>
         (s.flight !== undefined || !inFlight(s)
           ? s.waiters
@@ -1252,15 +1250,22 @@ async function tailPass(
   }
   const options = tailOptions.get(s) ?? { visibleOnly: false, why }
   tailOptions.delete(s)
+  // Позначка вигляду `EPOCH_UNAVAILABLE` — стан відмови цілі, не межа сесії
+  // (Р-SK1-7): вигляд, чий політ упав збоєм, хвіст читає й за межею, тож
+  // шлюз R15 за межею допускає (рядок 16 §5.14).
   if (
-    !ctx.session.token().valid ||
     unavailable(s) ||
     !eligible(ctx, s, options) ||
     ctx.defects.has("revalidate-no-tail")
   )
     return
-  // Хвіст — читання, яке поставив виклик `options.why`, під кодом R15.
-  await revalidateViews(ctx, o, readsOf([s], { ...options.why, site: "R15" }))
+  // Хвіст — читання, яке поставив виклик `options.why`, під кодом R15; його
+  // `closed` судить шлюз у мить старту.
+  await revalidateViews(
+    ctx,
+    o,
+    admitViews(ctx, [s], { ...options.why, site: "R15" })
+  )
 }
 
 /**
@@ -1273,10 +1278,11 @@ export async function revalidateHydrated(
   s: Subset,
   why: ReadWhy
 ): Promise<void> {
-  if (!ctx.session.token().valid) return
+  const reads = admitViews(ctx, [s], why)
+  if (reads.length === 0) return
   if (!s.alive || s.purged || !s.loaded || s.flight !== undefined) return
   if (s.form.spec.kind === "section" && s.listeners.size === 0) return
-  await revalidateViews(ctx, s.form.object, readsOf([s], why))
+  await revalidateViews(ctx, s.form.object, reads)
 }
 
 /**
@@ -1293,8 +1299,7 @@ export async function revalidateHolders(
   keys: ReadonlySet<Key>,
   why: ReadWhy
 ): Promise<void> {
-  if (!ctx.session.token().valid) return
-  const groups = new Map<ObjectState, Subset[]>()
+  const groups = new Map<ObjectState, Read[]>()
   for (const s of ctx.registry.subsets()) {
     if (!s.alive || s.purged || !s.loaded) continue
     // ТЧ-підмножину перечитує сам вигляд за правилом свіжості
@@ -1307,22 +1312,42 @@ export async function revalidateHolders(
         [...keys].some((k) => s.owned.has(k))) ||
       (included !== undefined && [...keys].some((k) => included.has(k)))
     if (!holds) continue
+    // Закриття судить шлюз: відмовлений вигляд у прохід не йде.
+    const read = admitViews(ctx, [s], why)
+    if (read.length === 0) continue
     const group = groups.get(s.form.object) ?? []
-    group.push(s)
+    group.push(...read)
     groups.set(s.form.object, group)
   }
   await Promise.all(
-    [...groups].map(([o, targets]) =>
-      revalidateViews(ctx, o, readsOf(targets, why))
-    )
+    [...groups].map(([o, reads]) => revalidateViews(ctx, o, reads))
   )
 }
 
-/** A view with the row of the inventory it is read under; no view without one. */
-type Read = readonly [Subset, ReadWhy]
+/**
+ * A view with the permit of the gate it is read under (§5.3): no view of a
+ * pass without one. The permit issues the flight in {@link revalidateViews},
+ * synchronously after the decision; it is never kept.
+ */
+export type Read = readonly [Subset, Permit]
 
-const readsOf = (views: readonly Subset[], why: ReadWhy): Read[] =>
-  views.map((s) => [s, why])
+/** The gate's answer for each view; a view refused or deferred is left out. */
+export function admitViews(
+  ctx: Pick<WriterContext, "source">,
+  views: readonly Subset[],
+  why: ReadWhy
+): Read[] {
+  const { site, ...cause } = why
+  const out: Read[] = []
+  for (const s of views) {
+    const admitted = ctx.source.admit(cause, viewTarget(s), site)
+    if (isPermit(admitted)) out.push([s, admitted])
+  }
+  return out
+}
+
+const viewTarget = (s: Subset) =>
+  ({ kind: "view", object: s.form.object.name, id: s.targetId }) as const
 
 /**
  * One two-phase pass over `reads`; views dropped by a purge get another
@@ -1336,7 +1361,8 @@ export async function revalidateViews(
 ): Promise<void> {
   const targets = reads.map(([s]) => s)
   const { session } = ctx
-  if (targets.length === 0 || !session.token().valid) return
+  // `closed` кожного вигляду вже судив шлюз: прохід бере лише дозволені.
+  if (targets.length === 0) return
   const startEpoch = session.epochs.now()
   const token = session.token()
   // Завантаження, що стартувало чи завершилось після старту, свіжіше за це
@@ -1350,7 +1376,7 @@ export async function revalidateViews(
   const numbers = new Map<Subset, number>()
   const attemptTarget = (s: Subset) =>
     ({ kind: "view", object: o.name, id: s.targetId }) as const
-  for (const [s, why] of reads) {
+  for (const [s, { why }] of reads) {
     s.rereads++
     s.rereadEpochs.push(startEpoch)
     numbers.set(s, ctx.attempts.start("reread", attemptTarget(s), why))
@@ -1363,18 +1389,19 @@ export async function revalidateViews(
   // Одна оренда на прохід: усі відповіді пише один `commit` нижче.
   const lease = ctx.source.lease()
   const results = await Promise.all(
-    reads.map(([s, why]) =>
-      readAgain(ctx, s, startEpoch, token, {
-        ...why,
-        target: attemptTarget(s),
-        attempt: numbers.get(s),
-        caller: s,
-        lease,
-      }).then(
+    reads.map(([s, permit]) => {
+      const { why } = permit
+      return readAgain(
+        ctx,
+        s,
+        startEpoch,
+        token,
+        permit.flight({ attempt: numbers.get(s), caller: s, lease })
+      ).then(
         (apply) => ({ s, why, apply }) as const,
         (error: unknown) => ({ s, why, error }) as const
       )
-    )
+    })
   )
   for (const s of targets) {
     const at = s.rereadEpochs.indexOf(startEpoch)
@@ -1462,12 +1489,8 @@ export async function revalidateViews(
                 s.status = "ready"
                 s.error = undefined
               }
-              if (
-                settleRequirement(s, startEpoch, {
-                  versions: session.versions,
-                  tabVisible: ctx.tabVisible,
-                })
-              )
+              // Повтор на прихованій вкладці відкладає шлюз (R18, Р-SK1-8).
+              if (settleRequirement(s, startEpoch))
                 again.set(s, { reason: "retry", site: "R18" })
             } catch (error) {
               outcomes.set(s, ["failed", failureOf(error)])
@@ -1503,8 +1526,9 @@ export async function revalidateViews(
   // тепер ніхто не прочитає, читає те саме правило, що й після сторінки.
   for (const s of skipped) ctx.readRequirement(s)
   // Цей прохід вичерпав межу (лічильник рухається після commit): повтору
-  // не буде, відкинуті вигляди — `command.unavailable`.
-  if (discarded.length > 0 && session.versions.unavailable()) {
+  // не буде, відкинуті вигляди — `command.unavailable`. Наслідок осідання за
+  // межею (Р-SK1-7): «помилка чи строк повтору R3», не допуск.
+  if (discarded.length > 0 && ctx.source.settledPastBound()) {
     session.commit(
       () => {
         for (const s of discarded) {
@@ -1533,10 +1557,13 @@ export async function revalidateViews(
   }
   // Вигляд із власним завантаженням у польоті (П12: його перезапускає purge)
   // оновить те завантаження; решта — новий прохід з новою епохою старту.
+  // Повтор (R16, R17, R18) питає шлюз у мить старту.
   await revalidateViews(
     ctx,
     o,
-    [...again].filter(([s]) => s.alive && !s.purged && s.flight === undefined)
+    [...again]
+      .filter(([s]) => s.alive && !s.purged && s.flight === undefined)
+      .flatMap(([s, why]) => admitViews(ctx, [s], why))
   )
 }
 
@@ -1564,7 +1591,13 @@ export async function rereadKey(
 ): Promise<void> {
   const { form, unconfirmed, onCommit } = options
   const { session } = ctx
-  if (!session.token().valid) return
+  // Закриття судить шлюз (§5.3) до будь-якого стану читання.
+  const admitted = ctx.source.admit(
+    { reason: "write-confirm" },
+    { kind: "keys", object },
+    "K4"
+  )
+  if (!isPermit(admitted)) return
   const o = ctx.objectOf(object)
   const startEpoch = session.epochs.now()
   const token = session.token()
@@ -1591,12 +1624,7 @@ export async function rereadKey(
     )
   })
   const lease = ctx.source.lease()
-  const read = tracked(ctx.source, {
-    reason: "write-confirm",
-    target: { kind: "keys", object },
-    site: "K4",
-    lease,
-  })
+  const read = tracked(ctx.source, admitted.flight({ lease }))
   let rows: readonly ServerRow[] | undefined
   try {
     rows = await readKeys(
@@ -1719,18 +1747,20 @@ export function revalidateNarrowed(
   views: Iterable<Subset>,
   why: ReadWhy
 ): Promise<void> {
-  if (!ctx.session.token().valid) return Promise.resolve()
-  const groups = new Map<ObjectState, Subset[]>()
+  const groups = new Map<ObjectState, Read[]>()
   for (const s of new Set(views)) {
     if (!eligible(ctx, s, { visibleOnly: false })) continue
+    // Закриття судить шлюз: відмовлений вигляд у прохід не йде.
+    const read = admitViews(ctx, [s], why)
+    if (read.length === 0) continue
     const group = groups.get(s.form.object) ?? []
-    group.push(s)
+    group.push(...read)
     groups.set(s.form.object, group)
   }
   return Promise.all(
     [...groups].map(
-      ([o, targets]) =>
-        singleFlight(ctx, o, targets, { visibleOnly: false, why }).done
+      ([o, reads]) =>
+        singleFlight(ctx, o, reads, { visibleOnly: false, why }).done
     )
   ).then(() => undefined)
 }

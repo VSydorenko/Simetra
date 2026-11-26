@@ -34,10 +34,12 @@ import type {
   Writer,
 } from "./types"
 import type { Subset } from "./subsets"
+import { isPermit } from "./sync/flight"
 import {
   activeViews,
   revalidate,
   revalidateTargets,
+  admitViews,
   singleFlight,
   type WriterContext,
 } from "./writer"
@@ -71,8 +73,11 @@ export interface ReceiverContext {
   readonly index: CatalogIndex
   readonly writer: WriterContext
   rights(): RightsState | undefined
-  /** Whether the host shows the application: a hidden tab reads nothing. */
-  visible(): boolean
+  /**
+   * The gate's query of `tab-hidden` (Р-SK1-8): the batch on a hidden tab
+   * sends nothing and leaves its views to `resume()`.
+   */
+  tabHidden(): boolean
   /** The core's `commit`: the only way the receiver writes. */
   commit(fn: (writer: Writer) => void, token: GenerationToken): boolean
   /** The collator of the runtime's filter tests (one per runtime). */
@@ -383,9 +388,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   // тож читання за сигналом — запит без шансу, як і такт планувальника. Одна
   // перевірка для всіх шляхів читання приймача: сигнали не збираються, а
   // пачка, що чекає (зокрема дочитування мінімальної версії), відкидається.
-  // Самотест (`receiver-reads-unavailable`) вимикає зупинку.
+  // Наслідок осідання за межею (Р-SK1-7), до будь-якого `admit` і без коду
+  // й цілі: питає шлюз. Самотест (`receiver-reads-unavailable`) вимикає
+  // зупинку, а шлюз під ним допускає читання приймача (K1, K2, R8, R9).
   const halted = () =>
-    session.versions.unavailable() &&
+    writer.source.settledPastBound() &&
     !writer.defects.has("receiver-reads-unavailable")
 
   const scopesOfRows = (entry: CatalogEntry): string[] => {
@@ -672,8 +679,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     o: ObjectState,
     plan: Plan,
     signals: ObjectBatch
-  ): Job => {
-    const lease = writer.source.lease()
+  ): Job | undefined => {
     // Пачка з самих дочитувань мінімальної версії — K2; щойно в ній є сигнал,
     // це читання сигналу (K1): зливаючись, пачка бере менший `attempt`.
     // Порожнього плану тут не буває (`classify` без ключів дає `whole`, і це
@@ -682,14 +688,17 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const retried =
       planned.length > 0 &&
       planned.every((key) => (signals.keys.get(key)?.attempt ?? 0) > 0)
-    const read = tracked(writer.source, {
-      ...(retried
+    // Рішення читати ключі — шлюзу (§5.3).
+    const admitted = writer.source.admit(
+      retried
         ? { reason: "requirement", requirement: "min-version" }
-        : { reason: "signal" }),
-      target: { kind: "keys", object },
-      site: retried ? "K2" : "K1",
-      lease,
-    })
+        : { reason: "signal" },
+      { kind: "keys", object },
+      retried ? "K2" : "K1"
+    )
+    if (!isPermit(admitted)) return undefined
+    const lease = writer.source.lease()
+    const read = tracked(writer.source, admitted.flight({ lease }))
     const owned = new Set(plan.stored)
     return {
       object,
@@ -881,7 +890,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const requested: ObjectName[] = []
     const burstObjects: ObjectName[] = []
     for (const [object, signals] of batch) {
-      if (writer.isStale(object)) continue
+      // Несумісний об'єкт (§10): читання ключів судить шлюз (K1, K2) у
+      // `startJob`; гілки прихованої вкладки й цілого об'єкта стереже
+      // іменована перевірка — вона береже не читання, а позначки виглядів,
+      // строк, сплеск і діагностику (рішення архітекторки 25.11).
+      const stale = writer.isStale(object)
       const o = writer.objectOf(object)
       const views = activeViews(writer, object)
       const plan = classify(o, signals, views.length > 0)
@@ -901,13 +914,19 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
           })
         )
       // Прихована вкладка нічого не шле (Р8): вигляди чекають `resume()`.
-      if (!ctx.visible()) {
+      // Іменована перевірка (рішення архітекторки 25.11): вона береже не
+      // читання (K1, K2, R8, R9 відкладає шлюз), а не-читальні ефекти пачки
+      // на прихованій вкладці — діагностику, строк на `resume()` і вимогу
+      // складу виглядам.
+      if (ctx.tabHidden()) {
+        if (stale) continue
         note([])
         requested.push(object)
         unconfirmed.push(object)
         continue
       }
       if (plan.whole) {
+        if (stale) continue
         if (watcher !== undefined)
           note(revalidateTargets(writer, object, { visibleOnly: true }))
         burstObjects.push(object)
@@ -923,6 +942,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         continue
       }
       const job = startJob(object, o, plan, signals)
+      if (job === undefined) continue
       jobs.push(job)
       // Нова версія шапки власника з видимою ТЧ веде до перечитування ТЧ
       // (§6.2, правило 2): її читання йде в тому самому пакеті, що й шапка, а
@@ -938,10 +958,16 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       })
       note(sections)
       if (sections.length > 0) {
-        const flight = singleFlight(writer, o, sections, {
-          visibleOnly: false,
-          why: { reason: "signal", site: "R9" },
-        }).done.catch((error: unknown) =>
+        const why = { reason: "signal", site: "R9" } as const
+        const flight = singleFlight(
+          writer,
+          o,
+          admitViews(writer, sections, why),
+          {
+            visibleOnly: false,
+            why,
+          }
+        ).done.catch((error: unknown) =>
           writer.log({ kind: "listener-failed", error })
         )
         flights.push(flight)

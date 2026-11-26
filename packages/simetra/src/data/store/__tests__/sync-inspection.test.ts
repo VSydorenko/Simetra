@@ -560,6 +560,22 @@ describe("sync(): every due it shows is read by then", () => {
     await settle()
     await expectReadByDue(h, RIGHTS)
   })
+
+  // Строк знімка прав, як і строки решти таймерів, на прихованій вкладці
+  // не показують: планувальник не спрацює, отже строку немає.
+  it("tab-hidden: no due of the rights snapshot on a hidden tab", async () => {
+    const h = setup({
+      now: () => Date.now(),
+      rightsSnapshot: true,
+      limits: { revalidateIntervalMs: INTERVAL },
+    })
+    seed(h.fake, 1, 2)
+    watch(h.core.view(keysView(1, 2)))
+    await settle()
+    expect(stateOf(h, RIGHTS)!.due).toBeDefined()
+    h.core.suspend()
+    expect(stateOf(h, RIGHTS)!.due).toBeUndefined()
+  })
 })
 
 describe("sync(): the pause before the retry of a discarded load", () => {
