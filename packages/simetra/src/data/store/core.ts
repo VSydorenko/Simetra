@@ -1435,7 +1435,6 @@ export function createCore(options: {
           token: required(flight.token, "its token"),
           what: `tail ${o.name}`,
           refused: () => true,
-          lost: () => (tail.gen === gen ? "closed" : "after-purge"),
           // Відкинута відповідь не пише нічого; без автоповтору (§6.3) ключі
           // перечитує вигляд.
           gate: () =>

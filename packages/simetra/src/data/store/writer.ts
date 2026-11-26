@@ -114,7 +114,7 @@ export interface WriterContext extends ReaderHost {
   /**
    * Write leases on rows of the object (§8.4, rule 2): a read issues one at
    * dispatch by its parts (own rows, `include` targets, receiver keys,
-   * pages); the flight's `settle` releases it after the answer's `commit`.
+   * pages); the settle pass releases it after the answer's `commit`.
    */
   readonly pendingWrites: (object: ObjectName) => number
   /**
@@ -297,7 +297,7 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
   // його рядка І жоден живий вигляд об'єкта не лишається ним непідтвердженим:
   // порожній вигляд, що пропустив створення в розриві, інакше став би свіжим.
   // Запис тримається і поки існує оренда на запис рядків об'єкта: її видає
-  // читання за своїми частинами, а знімає `settle` польоту вже після `commit`
+  // читання за своїми частинами, а знімає прохід осідання польоту вже після `commit`
   // відповіді, тож між відповіддю й записом проміжку немає. Інакше рядок із
   // читання до відпускання проживе період без нагляду, а повторна підписка
   // нічого не позначить (§8.4, правило 2).

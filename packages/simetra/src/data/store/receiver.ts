@@ -74,7 +74,10 @@ export interface ReceiverContext {
    * sends nothing and leaves its views to `resume()`.
    */
   tabHidden(): boolean
-  /** The core's `commit`: the only way the receiver writes. */
+  /**
+   * The core's `commit` for the receiver's own events; the answers of its
+   * reads settle through `settleAfter` with `createWriter` over the session.
+   */
   commit(fn: (writer: Writer) => void, token: GenerationToken): boolean
   /** The collator of the runtime's filter tests (one per runtime). */
   readonly filterCollator: Intl.Collator
