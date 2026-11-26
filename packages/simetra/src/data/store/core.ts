@@ -2236,8 +2236,9 @@ export function createCore(options: {
       core.requestVersion()
     },
     dehydrate() {
-      if (closed !== undefined || !session.token().valid)
-        throw new TypeError("the core is closed")
+      // Запит умови шлюзу (Р-SK1-5): знімок закриття ставить `core.close`
+      // разом із недійсним токеном.
+      if (gate.closed()) throw new TypeError("the core is closed")
       // SSR-рантайм нічого не пише: знімок після запису — помилка host-а, а
       // журнал мутацій у знімок не переходить.
       if (overlay.size() > 0)
@@ -2245,7 +2246,7 @@ export function createCore(options: {
       return dehydrate(ssr)
     },
     hydrate(snapshot) {
-      if (closed !== undefined || !session.token().valid) return
+      if (gate.closed()) return
       if (hydration !== "none" || [...registry.subsets()].length > 0)
         throw new TypeError("the core is hydrated or already holds views")
       const parsed = parseSnapshot(ssr, snapshot)
