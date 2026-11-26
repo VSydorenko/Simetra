@@ -1,6 +1,6 @@
 # Публічна частина застосунку: гостьове читання, умовний `publicRead`, кеш гостя, способи входу, публічні файли
 
-> **Статус:** чернетка на аудит, 2026-11-25; issue #418; milestone М5d №11.
+> **Статус:** погоджено власником 2026-11-26; issue #418; milestone М5d №11.
 
 Issue: #418 — статус у GitHub (`track`), не в цьому файлі
 Glossary: [GLOSSARY](../../GLOSSARY.md) § «Публічна частина застосунку» · ADR: [ADR-0118](../../adr/0118-public-app-part-platform-capability.md), [ADR-0119](../../adr/0119-conditional-public-read-published-column.md), [ADR-0120](../../adr/0120-public-routes-guest-read-via-t3.md), [ADR-0121](../../adr/0121-guest-shared-cache-tag-invalidation.md), [ADR-0122](../../adr/0122-app-client-every-user-own-sign-in-methods.md), [ADR-0123](../../adr/0123-public-file-route-under-rls.md), [ADR-0102](../../adr/0102-client-rights-predicate-as-data.md), [ADR-0074](../../adr/0074-session-scoped-core-no-server-cache.md), [ADR-0060](../../adr/0060-files-row-plus-store-port.md)
@@ -339,7 +339,7 @@ Promise<void> }` — порт host-а. Шаблон дає транспорт р
 (`template/metadata/roles/ClientOwner/ClientOwner.meta.json`) стає рівня
 `everyUser` з обсягом `own` на нескоуплених об'єктах; `assignClientOwner`
 (`packages/create-simetra-app/scripts/lib/app-database.mts`, виклики в
-`scripts/lib/demo.mts` і `e2e/fixtures.ts`) прибирається, `e2e/signals.spec.ts`
+`packages/create-simetra-app/scripts/lib/demo.mts` і `packages/create-simetra-app/e2e/fixtures.ts`) прибирається, `e2e/signals.spec.ts`
 переходить на `everyUser`. `everyUser` обсягу `any` не дає, тож грант `read`
 `any` на `Country` стає `publicRead: "authenticated"` цього довідника. Перший
 запис клієнта застосунку — вхід кодом при `signUp: "open"` і звичайна команда
