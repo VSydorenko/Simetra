@@ -230,6 +230,7 @@ export {
   checkPermissions,
   classifySteps,
   comparePermissionItems,
+  conditionalToPlain,
   DRIFT_PERMISSION,
   foreignChanges,
   intentStep,

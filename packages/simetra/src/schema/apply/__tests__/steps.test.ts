@@ -4,6 +4,7 @@ import type { CatalogModel, CatalogTable } from "simetra/model"
 import {
   checkPermissions,
   classifySteps,
+  conditionalToPlain,
   foreignChanges,
   lintSteps,
   requiredPermissions,
@@ -1198,5 +1199,131 @@ describe("checkPermissions", () => {
         params: { items: "drift" },
       },
     ])
+  })
+})
+
+// Р-D1-14: умовний `publicRead` → рядковий — окремий дозвіл за id кроку
+describe("conditionalToPlain", () => {
+  const policyRef = {
+    kind: "policy",
+    schema: "app",
+    table: "items",
+    name: "items_public_read",
+  }
+  const column = (name: string) => ({
+    name,
+    type: "boolean",
+    notNull: true,
+  })
+  const itemsTable = (...names: string[]): CatalogTable => ({
+    ...UNIQUE.tables[0]!,
+    name: "items",
+    columns: names.map(column),
+    indexes: [],
+  })
+  const appliedWith = (using: string): CatalogModel => ({
+    tables: [itemsTable("published", "deleted")],
+    enumTypes: [],
+    units: [
+      {
+        class: "policy",
+        identity: "policy:app.items.items_public_read",
+        schema: "app",
+        name: "items_public_read",
+        sql: `CREATE POLICY items_public_read ON app.items AS PERMISSIVE FOR SELECT TO anon USING (${using});`,
+      },
+    ],
+  })
+  const CONDITIONAL = appliedWith("published AND NOT deleted")
+  const alter = (using: string) =>
+    action(`ALTER POLICY items_public_read ON app.items USING (${using})`, {
+      consumes: ["policy:app.items.items_public_read"],
+      consumed: [policyRef],
+    })
+  const dropColumn = (name: string) =>
+    action(`ALTER TABLE app.items DROP COLUMN ${name}`, {
+      destroys: [`column:app.items.${name}`],
+      destroyed: [{ kind: "column", schema: "app", table: "items", name }],
+      dataLoss: true,
+    })
+
+  it("flags the step that leaves the policy without the condition", () => {
+    expect(conditionalToPlain([alter("true")], CONDITIONAL, 0)).toEqual(
+      new Set(["s1"])
+    )
+  })
+
+  it("flags a re-created policy (drop and create) and numbers through the offset", () => {
+    const create = action(
+      "CREATE POLICY items_public_read ON app.items AS PERMISSIVE FOR SELECT TO anon USING (true);",
+      {
+        verb: "create",
+        produces: ["policy:app.items.items_public_read"],
+        produced: [policyRef],
+      }
+    )
+    expect(conditionalToPlain([create], CONDITIONAL, 2)).toEqual(
+      new Set(["s3"])
+    )
+  })
+
+  it("flags it when an attribute physically named `published` appears in the same change", () => {
+    // Колонка лишається (жодного DROP COLUMN), а умова зникає лише з політики
+    const add = action("ALTER TABLE app.items ADD COLUMN published boolean", {
+      produces: ["column:app.items.published"],
+      produced: [
+        { kind: "column", schema: "app", table: "items", name: "published" },
+      ],
+    })
+    expect(conditionalToPlain([add, alter("true")], CONDITIONAL, 0)).toEqual(
+      new Set(["s2"])
+    )
+  })
+
+  it("does not flag a policy that keeps a condition, an open policy, or a table without one", () => {
+    expect(conditionalToPlain([alter("published")], CONDITIONAL, 0)).toEqual(
+      new Set()
+    )
+    expect(conditionalToPlain([alter("true")], appliedWith("true"), 0)).toEqual(
+      new Set()
+    )
+    expect(conditionalToPlain([alter("true")], undefined, 0)).toEqual(new Set())
+  })
+
+  it("gives a permission separate from the column drop", () => {
+    const actions = [alter("true"), dropColumn("published")]
+    const conditional = conditionalToPlain(actions, CONDITIONAL, 0)
+    const steps = classifySteps(actions, CONDITIONAL, parse, 0, {
+      conditionalToPlain: conditional,
+    })
+    expect(steps.map((s) => [s.id, s.class])).toEqual([
+      ["s1", "relaxation"],
+      ["s2", "destructive"],
+    ])
+    expect(steps[1]!.dataLoss).toBe(true)
+    const subject = { steps, drift: null, promotion: null }
+    expect(requiredPermissions(subject)).toEqual(["s1", "s2"])
+    // Дозвіл на видалення колонки не відкриває кроку політики
+    expect(checkPermissions(subject, ["s2"])).toMatchObject([
+      {
+        code: "apply.permission-required",
+        severity: "error",
+        params: { items: "s1" },
+      },
+    ])
+    expect(checkPermissions(subject, ["s1", "s2"])).toEqual([])
+  })
+
+  it("keeps disabling the condition by dropping the column a destructive step with data loss", () => {
+    const [step] = classifySteps(
+      [dropColumn("published")],
+      CONDITIONAL,
+      parse,
+      0
+    )
+    expect(step).toMatchObject({ class: "destructive", dataLoss: true })
+    expect(
+      requiredPermissions({ steps: [step!], drift: null, promotion: null })
+    ).toEqual(["s1"])
   })
 })
