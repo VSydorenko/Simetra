@@ -316,7 +316,9 @@ export interface WriteLease {
 /**
  * The one settle point of a flight: `apply` writes its answer by one
  * `commit` (or discards it), then the write lease is released — also when
- * `apply` throws.
+ * `apply` throws. This is step 9 of the settle pass (`sync/settle-pass.ts`,
+ * which releases the leases of its flights itself); the points that have not
+ * moved onto the pass yet keep calling it, and the last one to move deletes it.
  */
 export function settle(lease: WriteLease, apply: () => void): void {
   try {
