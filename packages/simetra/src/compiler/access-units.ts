@@ -151,6 +151,7 @@ export function accessContracts(
                     published.stateColumn,
                     attributeCase
                   ),
+                  publishedState: published.publishedState,
                   guestColumns: published.guestColumns.map((name) =>
                     physicalOf(table, object, name, attributeCase)
                   ),
@@ -253,8 +254,11 @@ export function publicReadUsing(
  * Умова політики `<t>_published_read` (Р-B2-5) над виразом колонки стану:
  * одне місце для політики й рядка пояснення прав (права §5.1).
  */
-export function publishedReadUsing(stateColumn: string): string {
-  return `${stateColumn} = 'published'`
+export function publishedReadUsing(
+  stateColumn: string,
+  publishedState: string
+): string {
+  return `${stateColumn} = ${sqlLiteral(publishedState)}`
 }
 
 /** Гість бачить не більше за користувача: `anon` відкриває обидві ролі запиту. */
@@ -657,7 +661,8 @@ export function buildAccessUnits(
             [apiRoles.anonymous, apiRoles.user, PLATFORM_ROLES.command],
             {
               using: publishedReadUsing(
-                quoteIdent(contract.publishedRead.stateColumn)
+                quoteIdent(contract.publishedRead.stateColumn),
+                contract.publishedRead.publishedState
               ),
             }
           )

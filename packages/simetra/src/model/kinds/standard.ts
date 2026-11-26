@@ -354,6 +354,8 @@ export interface RoleFixedColumns {
  */
 export interface RolePublishedRead {
   stateColumn: string
+  /** Значення стану, яке читають (одне джерело з `RoleLanguageState`). */
+  publishedState: string
   guestColumns: readonly string[]
 }
 
@@ -378,6 +380,8 @@ export interface RoleLanguageState {
   states: readonly string[]
   /** Стан, у якому вставляють не основну мову. */
   insertState: string
+  /** Опублікований стан: лише в ньому основна мова й читання гостем. */
+  publishedState: string
   transitions: readonly { from: string; to: string }[]
 }
 

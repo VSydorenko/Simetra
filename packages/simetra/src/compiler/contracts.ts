@@ -318,7 +318,11 @@ export interface AccessContract {
    * Політика `<t>_published_read` незалежна від функцій прав і від
    * `publicRead`, а політики прав читання лишаються.
    */
-  publishedRead?: { stateColumn: string; guestColumns: string[] }
+  publishedRead?: {
+    stateColumn: string
+    publishedState: string
+    guestColumns: string[]
+  }
 }
 
 /** Обсяг, яким грант може обмежити дію (спека прав §3). */

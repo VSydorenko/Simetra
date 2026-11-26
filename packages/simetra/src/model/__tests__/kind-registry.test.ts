@@ -1184,6 +1184,7 @@ describe("catalog role languages", () => {
     })
     expect(def.publishedRead!(languages)).toEqual({
       stateColumn: "state",
+      publishedState: "published",
       guestColumns: ["ref", "state", "code", "description"],
     })
     expect(def.predefinedSeed!(languages)).toEqual({
@@ -1198,6 +1199,7 @@ describe("catalog role languages", () => {
       { from: "disabled", to: "published" },
     ])
     expect(def.languageState!(languages)!.insertState).toBe("draft")
+    expect(def.languageState!(languages)!.publishedState).toBe("published")
     for (const fact of [
       def.languagesCatalog,
       def.requiredScope,

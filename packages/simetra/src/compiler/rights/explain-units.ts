@@ -390,7 +390,10 @@ function explainRows(
       kind: "permissive",
       extent: null,
       hasRight: "TRUE",
-      carrierMatch: publishedReadUsing(row(access.publishedRead.stateColumn)),
+      carrierMatch: publishedReadUsing(
+        row(access.publishedRead.stateColumn),
+        access.publishedRead.publishedState
+      ),
       roles: NO_ROLES,
     })
   }

@@ -391,6 +391,9 @@ export const RIGHTS_COLUMNS = Object.fromEntries(
 >
 
 const LANGUAGE_STATES = ["draft", "published", "disabled"] as const
+// Одне джерело опублікованого стану для CHECK основної, політики читання,
+// пояснення прав і тригера стану.
+const PUBLISHED_STATE = LANGUAGE_STATES[1]
 
 /**
  * Колонки «Мов» (Р-B2-1): стан мови й ознака основної. CHECK-и тримають те, що
@@ -414,7 +417,7 @@ function languageColumns(): StandardColumnDef[] {
       type: { type: "Boolean" },
       notNull: true,
       default: "false",
-      check: "NOT is_primary OR state = 'published'",
+      check: `NOT is_primary OR state = '${PUBLISHED_STATE}'`,
       partialUnique: "is_primary",
       title: { uk: "Основна мова", en: "Primary language" },
     },
@@ -510,6 +513,7 @@ const CATALOG_ROLES: Record<
     },
     publishedRead: {
       stateColumn: "state",
+      publishedState: PUBLISHED_STATE,
       guestColumns: ["ref", "state", "code", "description"],
     },
     predefinedSeed: {
@@ -522,6 +526,7 @@ const CATALOG_ROLES: Record<
       codeColumn: "code",
       states: LANGUAGE_STATES,
       insertState: "draft",
+      publishedState: PUBLISHED_STATE,
       // Матриця §5.2: `disabled ↔ draft` в обидва боки, `published → draft` ні.
       transitions: [
         { from: "draft", to: "published" },

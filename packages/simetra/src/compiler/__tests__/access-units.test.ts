@@ -1625,6 +1625,7 @@ describe("languages role: command grants and published read (Р-B2-3, Р-B2-5)",
           publicRead: [],
           publishedRead: {
             stateColumn: "state",
+            publishedState: "published",
             guestColumns: ["id", "state", "code", "description"],
           },
         },
