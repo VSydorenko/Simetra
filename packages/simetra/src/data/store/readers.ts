@@ -192,9 +192,31 @@ export type Write = (scope: Scope) => void
 export type Apply = (scope: Scope) => boolean
 
 /**
- * Runs `read` over a source that records the epoch of every answer; the
- * returned `Apply` writes only after the session accepted each of them and
- * none is abandoned (`acceptEpochs` — the single check before a write).
+ * The answer of one flight before the session judged it: the epochs of its
+ * parts and the write it prepared. The settle pass judges the epochs (step 4)
+ * and runs the write (step 5), so a point that settles through the pass
+ * reads through {@link readGated}.
+ */
+export interface GatedRead {
+  readonly epochs: ReadonlySet<string | null>
+  readonly write: Write
+}
+
+/** Runs `read` over a source that records the epoch of every answer. */
+export async function readGated<C extends ReaderHost>(
+  ctx: C,
+  read: (ctx: WithSource<C, BoundSource>) => Promise<Write>,
+  flight: Flight
+): Promise<GatedRead> {
+  const { source, epochs } = tracked(ctx.source, flight)
+  const write = await read({ ...ctx, source })
+  return { epochs, write }
+}
+
+/**
+ * {@link readGated} whose `Apply` judges the epochs itself: for the points
+ * that have not moved onto the settle pass yet (`acceptEpochs` — the single
+ * check before a write). The last of them to move deletes it.
  */
 export async function gated<C extends ReaderHost>(
   ctx: C,
@@ -202,11 +224,11 @@ export async function gated<C extends ReaderHost>(
   read: (ctx: WithSource<C, BoundSource>) => Promise<Write>,
   flight: Flight
 ): Promise<Apply> {
-  const { source, epochs } = tracked(ctx.source, flight)
-  const write = await read({ ...ctx, source })
+  const answer = await readGated(ctx, read, flight)
   return (scope) => {
-    if (ctx.session.acceptEpochs(epochs, readEpoch) === "discard") return false
-    write(scope)
+    if (ctx.session.acceptEpochs(answer.epochs, readEpoch) === "discard")
+      return false
+    answer.write(scope)
     return true
   }
 }
@@ -1082,8 +1104,8 @@ async function readSection(
 }
 
 /**
- * Reads the form of `s`; the result is applied by one `commit`, gated by the
- * epochs of its answers. A multi-request read stops once `token` is invalid.
+ * Reads the form of `s`; the answer is written by the settle pass after its
+ * epochs are judged. A multi-request read stops once `token` is invalid.
  */
 export function readForm(
   ctx: ReaderHost,
@@ -1091,13 +1113,8 @@ export function readForm(
   readEpoch: number,
   token: GenerationToken,
   flight: Flight
-): Promise<Apply> {
-  return gated(
-    ctx,
-    readEpoch,
-    (c) => readFormWrite(c, s, readEpoch, token),
-    flight
-  )
+): Promise<GatedRead> {
+  return readGated(ctx, (c) => readFormWrite(c, s, readEpoch, token), flight)
 }
 
 /** {@link readForm} without the epoch gate: the caller gates the whole read. */

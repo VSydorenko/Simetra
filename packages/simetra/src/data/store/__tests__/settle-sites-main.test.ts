@@ -1141,19 +1141,21 @@ describe("the kind table against the recorded behaviour of main", () => {
     lines(name).some((line) => pattern.test(line))
   const R = FLIGHT_KIND_RULES
 
-  it("failureCounts: the pause counts for a loaded view only (load), never (page), always (reread)", () => {
-    expect([
-      R.load.failureCounts,
-      R.page.failureCounts,
-      R.reread.failureCounts,
-    ]).toEqual(["if-loaded", "never", "always"])
+  it("failureCounts: the cells of load and page say what main recorded, reread says always", () => {
+    // Клітинки, які читають точки завантаження й сторінки, — з клітинки, а не
+    // з копії: запис `main` незмінний, тож зміна клітинки червонить і тест.
+    const countsFor = (cell: typeof R.load.failureCounts, loaded: boolean) =>
+      cell === "always" || (cell === "if-loaded" && loaded)
     expect(has("load failed: read refused, view loaded", /failures=1/)).toBe(
-      true
+      countsFor(R.load.failureCounts, true)
     )
     expect(
       has("load failed: read refused, view never loaded", /failures=/)
-    ).toBe(false)
-    expect(has("page failed: read refused", /failures=/)).toBe(false)
+    ).toBe(countsFor(R.load.failureCounts, false))
+    expect(has("page failed: read refused", /failures=/)).toBe(
+      countsFor(R.page.failureCounts, true)
+    )
+    expect(R.reread.failureCounts).toBe("always")
     expect(
       has(
         "reread failed: read refused (the pause counts for a loaded view)",
@@ -1163,15 +1165,13 @@ describe("the kind table against the recorded behaviour of main", () => {
   })
 
   it("liftsBanners and setsBanners: load lifts, page and reread leave, only reread sets", () => {
-    expect([
-      R.load.liftsBanners,
-      R.page.liftsBanners,
-      R.reread.liftsBanners,
-    ]).toEqual([true, false, false])
-    expect(has("load applied lifts the banners", /hasNewRows=false/)).toBe(true)
-    expect(has("page applied leaves the banners", /hasNewRows=false/)).toBe(
-      false
+    expect(has("load applied lifts the banners", /hasNewRows=false/)).toBe(
+      R.load.liftsBanners
     )
+    expect(has("page applied leaves the banners", /hasNewRows=false/)).toBe(
+      R.page.liftsBanners
+    )
+    expect(R.reread.liftsBanners).toBe(false)
     expect(has("reread applied leaves the banners", /hasNewRows=false/)).toBe(
       false
     )
@@ -1192,13 +1192,17 @@ describe("the kind table against the recorded behaviour of main", () => {
   })
 
   it("confirms: load and page write their composition, reread does not; a page keeps the requirement", () => {
-    expect([
-      R.load.confirms,
-      R.page.confirms,
-      R.reread.confirms,
-      R.keys.confirms,
-    ]).toEqual(["view-with-composition", "own-page", "view-stable", "rows"])
-    expect(has("load applied", /^ops\.own/)).toBe(true)
+    expect(has("load applied", /^ops\.own/)).toBe(
+      R.load.confirms === "view-with-composition"
+    )
+    // Сторінка теж пише рядки (`ops.own`), але лише власні.
+    expect(has("page applied", /^ops\.own/)).toBe(
+      R.page.confirms === "own-page"
+    )
+    expect([R.reread.confirms, R.keys.confirms]).toEqual([
+      "view-stable",
+      "rows",
+    ])
     expect(has("reread applied", /^ops\.own/)).toBe(false)
     expect(has("tail read", /^ops\.own/)).toBe(false)
     // Завантаження знімає вимогу власним польотом, сторінка — лише читанням,
@@ -1218,23 +1222,16 @@ describe("the kind table against the recorded behaviour of main", () => {
   })
 
   it("discarded: load and page pause then retry, reread moves the object deadline, keys do nothing", () => {
-    expect([
-      R.load.discarded,
-      R.page.discarded,
-      R.reread.discarded,
-      R.keys.discarded,
-    ]).toEqual([
-      "pause-then-retry",
-      "pause-then-retry",
+    expect([R.reread.discarded, R.keys.discarded]).toEqual([
       "pause-then-deadline",
       "nothing",
     ])
     expect(
       has("load discarded by epoch, pause, then M8", /^attempt\.start load M8/)
-    ).toBe(true)
+    ).toBe(R.load.discarded === "pause-then-retry")
     expect(
       has("page discarded by epoch, pause, then P2", /^attempt\.start page P2/)
-    ).toBe(true)
+    ).toBe(R.page.discarded === "pause-then-retry")
     const reread = lines(
       "reread discarded by epoch: pause in the object deadline, then retry"
     )
@@ -1324,11 +1321,11 @@ describe("the kind table against the recorded behaviour of main", () => {
    *   сценарії.
    */
   it("moves of the deadline: load moves it, page does not", () => {
-    expect([R.load.successMovesDeadline, R.page.successMovesDeadline]).toEqual([
-      true,
-      false,
-    ])
-    expect(has("load applied", /refreshedAt=set/)).toBe(true)
-    expect(has("page applied", /refreshedAt=set/)).toBe(false)
+    expect(has("load applied", /refreshedAt=set/)).toBe(
+      R.load.successMovesDeadline
+    )
+    expect(has("page applied", /refreshedAt=set/)).toBe(
+      R.page.successMovesDeadline
+    )
   })
 })
