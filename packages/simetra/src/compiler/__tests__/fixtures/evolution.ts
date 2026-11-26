@@ -71,6 +71,9 @@ async function catalogOf(files: Files): Promise<RuntimeCatalog> {
   return buildRuntimeCatalog(model!)
 }
 
+/** Ліміт хука `beforeAll`, що викликає {@link evolvedCatalogs} (замір ~8,5 с локально). */
+export const EVOLUTION_HOOK_TIMEOUT = 30_000
+
 /**
  * Catalogs before and after a compatible evolution of `Catalog.Ticket` of
  * the command-core domain: `aPrime` renames the object, a header attribute
