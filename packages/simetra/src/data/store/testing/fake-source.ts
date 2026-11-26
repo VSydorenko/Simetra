@@ -921,7 +921,6 @@ export function withSleep(
 ): StoreSource {
   return {
     close: () => source.close(),
-    refuse: source.refuse?.bind(source),
     run: (operation) => source.run(operation),
     admit: testGate.admit,
     read: (parts) => source.read(parts, { sleep }),

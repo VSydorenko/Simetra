@@ -647,10 +647,16 @@ export function createCore(options: {
   // Збирач (§6.7) стоїть під цим фільтром: через нього йдуть усі читання, а
   // значення `version` відповіді застосовується до видачі її частин даних.
   // Умову `closed` шлюз судить за токеном сесії (Р-SK1-5): він недійсний уже
-  // з `closing`, а `closedSnapshot` — лише публічний знімок.
-  const gate = createGate({ token: () => session.token() })
+  // з `closing`, а `closedSnapshot` — лише публічний знімок. `stale-object` —
+  // липка позначка `staleObjects` (Р-SK1-6): той самий предикат судить `admit`
+  // і пізню відмову `dispatch`, збирача й джерела.
+  const gate = createGate({
+    token: () => session.token(),
+    staleObject: (object) => staleObjects.has(object),
+  })
   const batcher = createBatcher(options.source, {
     ownFlight: gate.issued,
+    staleObject: gate.staleObject,
     // Сон сесії йде в кожне читання джерела: власного таймера джерело не має.
     sleep: session.sleep,
     // Строк знімка (Р2) — від справжньої відправки частини: пакет може
@@ -681,7 +687,6 @@ export function createCore(options: {
   const pendingWrites = new Map<ObjectName, number>()
   const source: StoreSource = {
     close: () => batcher.close(),
-    refuse: (object) => batcher.refuse?.(object),
     run: (operation) => batcher.run(operation),
     lease: () => {
       let held: ObjectName[] | undefined = []
@@ -757,11 +762,13 @@ export function createCore(options: {
     // Старт читання частин виклику: правило першого знімка (Р5а) порівнює
     // його з епохою застосування знімка.
     const startEpoch = session.epochs.now()
-    // Частина без об'єкта (`version`) несумісності не має.
+    // Пізня відмова — запит шлюзу (Р-SK1-6), до збирача: частина без запиту
+    // не займає місця в групі. Частина без об'єкта (`version`) несумісності
+    // не має.
     const isLive = (part: (typeof parts)[number]) => {
       if (part.type !== "query") return true
       const { kind, name } = part.query.object
-      return !staleObjects.has(`${kind}.${name}`)
+      return !gate.staleObject(`${kind}.${name}`)
     }
     const refused = (part: (typeof parts)[number]): CoreReadItem => {
       return {
@@ -790,7 +797,7 @@ export function createCore(options: {
       const { include, ...rest } = part.query
       const live = (include ?? []).filter((attribute) => {
         const target = targetOf(part, attribute)
-        return target === undefined || !staleObjects.has(target)
+        return target === undefined || !gate.staleObject(target)
       })
       return {
         ...part,
@@ -1464,7 +1471,10 @@ export function createCore(options: {
     const hiddenNow = [...hiddenKeys]
     hiddenKeys.clear()
     for (const [name, keys] of hiddenNow) {
-      // Несумісний об'єкт не перечитується: його значення не повертаються.
+      // Іменована перевірка «об'єкт не-цілі» (рішення архітекторки 25.11):
+      // несумісний тут — схований об'єкт, а не ціль; тримачі інших об'єктів
+      // шлюз допустив би, а значення несумісного об'єкта не повертаються.
+      // Несумісного тримача відмовляє пізня відмова (R10 × `stale-object`).
       if (staleObjects.has(name)) continue
       revalidateHolders(writerContext, name, keys, {
         reason: "requirement",
@@ -1566,8 +1576,9 @@ export function createCore(options: {
     cause: ReadCause,
     views?: ReadonlySet<Subset>
   ) {
-    // Несумісний об'єкт не читається (§10): строк йому не ставимо.
-    if (staleObjects.has(object)) return
+    // Несумісний об'єкт не читається (§10): строк йому не ставимо — запит
+    // умови шлюзу для таймера (Р-SK1-9).
+    if (gate.staleObject(object)) return
     const at = now() + delayMs
     const held = scheduled.get(object) ?? {}
     scheduled.set(object, held)
@@ -1593,7 +1604,9 @@ export function createCore(options: {
   let wave: { at: number; readonly objects: Set<ObjectName> } | undefined
   let lastWaveAt: number | undefined
   function joinWave(object: ObjectName) {
-    if (!session.token().valid || staleObjects.has(object)) return
+    // Хвиля — строк планувальника: несумісний об'єкт у неї не йде (запит
+    // умови шлюзу для таймера, Р-SK1-9).
+    if (!session.token().valid || gate.staleObject(object)) return
     // Мутація самотесту: хвилі немає — ні читання, ні вимоги, ні строку.
     if (defects.has("rejoin-wave-no-read")) return
     if (wave === undefined) {
@@ -1636,8 +1649,9 @@ export function createCore(options: {
     const marked: ObjectName[] = []
     let reads = 0
     let readViews = 0
+    // Несумісного об'єкта в хвилі немає: `joinWave` його не бере, а
+    // `markStale` виймає з хвилі, що чекає (рішення архітекторки 25.11).
     for (const object of fired.objects) {
-      if (staleObjects.has(object)) continue
       const views = activeViews(writerContext, object)
       marked.push(object)
       if (views.some((v) => v.visible)) {
@@ -1805,7 +1819,7 @@ export function createCore(options: {
   // вимоги в польоті чи в черзі, ні пауза збоїв, ні межа відкинутих.
   function readRequirement(s: Subset) {
     if (!s.alive || s.purged || !s.loaded) return
-    if (staleObjects.has(s.form.object.name)) return
+    // `stale-object` судить шлюз (R13) в `admitViews` нижче.
     if (!requirementPending(s, requirementEnv)) return
     const why = {
       reason: "requirement",
@@ -1826,7 +1840,7 @@ export function createCore(options: {
   function readHydrated(s: Subset) {
     if (hydration !== "ended") return
     if (defects.has("late-hydrated-not-reread")) return
-    if (staleObjects.has(s.form.object.name)) return
+    // `stale-object` судить шлюз (R14) у `revalidateHydrated`.
     if (!(s.visible ?? s.listeners.size > 0)) return
     if (defects.has("hydrated-row-not-reread") && !heldBySnapshot.has(s)) return
     if (!overHydratedRows(s)) return
@@ -2011,8 +2025,10 @@ export function createCore(options: {
     // Строк перемикання епохи не перечитає несумісний об'єкт: `revalidate` у
     // ньому перевів би вигляди в `error` замість `isStale`.
     scheduled.delete(o.name)
-    // Частини, що вже стоять у черзі обмежувача, теж не підуть.
-    source.refuse?.(o.name)
+    // Хвиля, що чекає, його вже не бере: позначки її вигляди не отримують.
+    wave?.objects.delete(o.name)
+    // Частини, що вже стоять у черзі збирача й обмежувача, не підуть: їх
+    // відмовляє той самий предикат шлюзу на скиданні й на старті задачі.
     // Власник із рядками ТЧ може не мати шапки в сховищі (`disown`).
     createWriter(writerContext, scope).hide(o.name, [
       ...new Set([...o.rows.keys(), ...o.sections.owners()]),
@@ -2106,9 +2122,9 @@ export function createCore(options: {
     if (services.includes("version")) core.requestVersion()
     if (services.includes("rights")) requestRightsFor(rightsCause)
     for (const o of objects.values()) {
-      // Несумісний об'єкт не читається (§10): перечитування перевело б його
-      // вигляди в `error` замість показати `isStale`.
-      if (staleObjects.has(o.name)) continue
+      // Несумісний об'єкт не читається (§10): шлюз відмовляє кожному його
+      // вигляду в `revalidate` (R2, R5, R6), тож вигляди лишаються `isStale`,
+      // а не переходять в `error`.
       if (
         !activeViews(writerContext, o.name).some((v) => v.visible) &&
         !(snapshotViews !== undefined && holdsAny(o, snapshotViews))

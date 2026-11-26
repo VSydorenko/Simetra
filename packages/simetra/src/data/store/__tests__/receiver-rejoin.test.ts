@@ -439,6 +439,51 @@ describe("the rejoin wave", () => {
     expect(requestsSince(h)).toHaveLength(1)
   })
 
+  // Об'єкт, що став несумісним, поки хвиля чекала, `markStale` виймає з неї
+  // (рішення архітекторки 25.11): ефекти хвилі — як у `main`, де його
+  // пропускав `fireWave`. Контроль — та сама хвиля без позначки.
+  it.each([
+    ["live", false],
+    ["marked stale-client after the join", true],
+  ])(
+    "a wave over an object %s: marks, the signal read and the burst follow the object",
+    async (_, stale) => {
+      const h = await open(full)
+      const seen: string[] = []
+      h.inspect.watchSignalReads((object, signal) => {
+        if (signal.by === "wave") seen.push(object)
+      })
+      const requirementsOf = () =>
+        h.inspect
+          .sync()
+          .filter((t) => t.target.kind === "view")
+          .map((t) => t.requirements)
+      h.transport.join(channel, false)
+      if (stale) h.core.staleClient(TASK)
+      await settle()
+      const before = requirementsOf()
+      const logged = h.log.length
+      const from = h.fake.log.length
+      await advance(REJOIN_JITTER_MS)
+      const bursts = h.log
+        .slice(logged)
+        .filter((e) => e.kind === "revalidate-burst")
+      const taskReads = h.fake.log
+        .slice(from)
+        .filter((r) => r.query?.object.name === "Task")
+      if (stale) {
+        expect(seen).toEqual([])
+        expect(bursts).toEqual([])
+        expect(taskReads).toEqual([])
+        expect(requirementsOf()).toEqual(before)
+      } else {
+        expect(seen).toEqual([TASK])
+        expect(bursts).toHaveLength(1)
+        expect(taskReads).toHaveLength(1)
+      }
+    }
+  )
+
   it("sends nothing and leaves no timer when the core closes during the jitter", async () => {
     const h = await open(keysView(key(1)))
     h.transport.join(channel, false)

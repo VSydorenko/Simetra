@@ -104,6 +104,13 @@ export interface GateState {
 export interface Gate {
   admit(cause: ReadCause, target: ReadTarget, site: SiteCode): Admission
   issued(flight: Flight): boolean
+  /**
+   * Запит умови `stale-object` поза `admit` (Р-SK1-9): пізня відмова частин
+   * уже допущеного польоту (`dispatch`, збирач, джерело, Р-SK1-6) і таймери,
+   * що не ставлять строку несумісному об'єкту. Той самий предикат, що судить
+   * `admit`.
+   */
+  staleObject(object: ObjectName): boolean
 }
 
 function issue(
@@ -173,6 +180,7 @@ export function createGate(state: GateState): Gate {
       } as Permit
     },
     issued: (flight) => registry.get(flight)?.gate === gate,
+    staleObject: (object) => state.staleObject?.(object) === true,
   }
   return gate
 }

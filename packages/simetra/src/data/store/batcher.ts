@@ -52,10 +52,11 @@ const isMappingRefusal = (error: unknown): boolean =>
  * The window is one microtask and there is no timer: a read of the next tick
  * is the next call.
  *
- * `run`, `refuse` and `close` go past the queue without a delay. `close()` is
+ * `run` and `close` go past the queue without a delay. `close()` is
  * synchronous: the parts still queued reject with {@link ReadLimiterClosed}
- * and never reach the source. A part of an object refused while it queued
- * comes out as `command.stale-client` without a request.
+ * and never reach the source. A part of an object the gate's late refusal
+ * (`staleObject`) names at the flush comes out as `command.stale-client`
+ * without a request; the same query goes to the source for its limiter.
  *
  * `onVersion` gets the value of every `version` part of an answer
  * synchronously, before any caller of that answer resumes: the core marks an
@@ -73,6 +74,8 @@ export function createBatcher(
     onRightsSent?: ReadOptions["onRightsSent"]
     onRead?: ReadOptions["onRead"]
     ownFlight?: ReadOptions["ownFlight"]
+    /** The late refusal of the gate (Р-SK1-6), asked at the flush and passed to the source. */
+    staleObject?: ReadOptions["staleObject"]
     onVersion?: (version: VersionValue) => void
     onRights?: (item: CoreReadItem) => void
   }
@@ -80,13 +83,17 @@ export function createBatcher(
   let queue: Call[] = []
   let scheduled = false
   let closed = false
-  const refused = new Set<string>()
 
   const objectOf = (part: CorePart) =>
     part.type === "query" ? part.query.object : undefined
+  // Пізня відмова — предикат шлюзу на скиданні (Р-SK1-6): власної множини
+  // збирач не тримає, липкість дає позначка ядра.
   const isRefused = (part: CorePart): boolean => {
     const object = objectOf(part)
-    return object !== undefined && refused.has(`${object.kind}.${object.name}`)
+    return (
+      object !== undefined &&
+      options.staleObject?.(`${object.kind}.${object.name}`) === true
+    )
   }
 
   const run = async (calls: readonly Call[]): Promise<void> => {
@@ -105,6 +112,7 @@ export function createBatcher(
               onRightsSent: options.onRightsSent,
               onRead: options.onRead,
               ownFlight: options.ownFlight,
+              staleObject: options.staleObject,
               // Походження за слотом відправлених частин: злиття викликів і
               // відмова без запиту зсувають слоти, походження йде з ними.
               origins: sent.map(({ at, slot }) => calls[at]!.origins[slot]),
@@ -161,10 +169,6 @@ export function createBatcher(
     hasQueuedRights: () =>
       queue.some((call) => call.parts.some((part) => part.type === "rights")),
     run: (operation) => source.run(operation),
-    refuse(object) {
-      refused.add(object)
-      source.refuse?.(object)
-    },
     close() {
       closed = true
       const waiting = queue

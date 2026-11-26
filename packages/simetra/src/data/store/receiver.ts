@@ -885,7 +885,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const requested: ObjectName[] = []
     const burstObjects: ObjectName[] = []
     for (const [object, signals] of batch) {
-      if (writer.isStale(object)) continue
+      // Несумісний об'єкт (§10): читання ключів судить шлюз (K1, K2) у
+      // `startJob`; гілки прихованої вкладки й цілого об'єкта стереже
+      // іменована перевірка — вона береже не читання, а позначки виглядів,
+      // строк, сплеск і діагностику (рішення архітекторки 25.11).
+      const stale = writer.isStale(object)
       const o = writer.objectOf(object)
       const views = activeViews(writer, object)
       const plan = classify(o, signals, views.length > 0)
@@ -906,12 +910,14 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         )
       // Прихована вкладка нічого не шле (Р8): вигляди чекають `resume()`.
       if (!ctx.visible()) {
+        if (stale) continue
         note([])
         requested.push(object)
         unconfirmed.push(object)
         continue
       }
       if (plan.whole) {
+        if (stale) continue
         if (watcher !== undefined)
           note(revalidateTargets(writer, object, { visibleOnly: true }))
         burstObjects.push(object)

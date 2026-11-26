@@ -286,7 +286,9 @@ const EFFECTIVE: Record<SiteCode, Record<JudgedCondition, Verdict>> = {
   R7: { closed: R, "stale-object": P, "discard-bound": P, "tab-hidden": P },
   R8: { closed: R, "stale-object": R, "discard-bound": R, "tab-hidden": D },
   R9: { closed: R, "stale-object": P, "discard-bound": R, "tab-hidden": D },
-  R10: { closed: R, "stale-object": R, "discard-bound": P, "tab-hidden": P },
+  // R10 судить схований об'єкт, а не ціль: несумісного тримача відмовляє
+  // пізня відмова (рішення архітекторки 25.11).
+  R10: { closed: R, "stale-object": P, "discard-bound": P, "tab-hidden": P },
   R11: { closed: R, "stale-object": P, "discard-bound": P, "tab-hidden": P },
   R12: { closed: R, "stale-object": P, "discard-bound": P, "tab-hidden": P },
   R13: { closed: R, "stale-object": R, "discard-bound": R, "tab-hidden": D },
@@ -368,6 +370,46 @@ describe("closed: the session token is invalid (Р-SK1-5)", () => {
       const { cause, target } = SITES[code]
       expect(isPermit(gate.admit(cause, target, code)), code).toBe(true)
     }
+  })
+})
+
+describe("stale-object: the sticky mark of the object (Р-SK1-6)", () => {
+  it("judges the object of the target at the moment of admit", () => {
+    const stale = new Set<string>()
+    const gate = createGate({
+      token: () => OPEN,
+      staleObject: (object) => stale.has(object),
+    })
+    const { cause, target } = SITES.M5
+    expect(isPermit(gate.admit(cause, target, "M5"))).toBe(true)
+    stale.add(OBJECT)
+    expect(gate.admit(cause, target, "M5")).toEqual({
+      refused: "stale-object",
+    })
+    // Інший об'єкт тієї самої сесії не зачеплено.
+    expect(
+      isPermit(
+        gate.admit(
+          cause,
+          { kind: "view", object: "Catalog.Other", id: 1 },
+          "M5"
+        )
+      )
+    ).toBe(true)
+  })
+
+  it("the late refusal asks the same predicate, at the moment of the question", () => {
+    const stale = new Set<string>()
+    const gate = createGate({
+      token: () => OPEN,
+      staleObject: (object) => stale.has(object),
+    })
+    expect(gate.staleObject(OBJECT)).toBe(false)
+    stale.add(OBJECT)
+    expect(gate.staleObject(OBJECT)).toBe(true)
+    expect(gate.staleObject("Catalog.Other")).toBe(false)
+    // Без функції стану умова не настає й для пізньої відмови.
+    expect(createGate({ token: () => OPEN }).staleObject(OBJECT)).toBe(false)
   })
 })
 

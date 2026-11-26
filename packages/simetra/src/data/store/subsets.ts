@@ -1448,14 +1448,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           if (s.alive && idle(s) && !isClosed()) scheduleRelease(s)
         }
       },
+      // Несумісний об'єкт не читається (§10): `load` питає шлюз (M5), і
+      // вигляд лишається `isStale`.
       refresh() {
-        // Несумісний об'єкт не читається (§10): вигляд лишається `isStale`.
-        if (ctx.isStale(form.object.name)) return
         const s = live()
         if (s !== undefined) load(s, USER_LOAD)
       },
       showNew() {
-        if (ctx.isStale(form.object.name)) return
         const s = live()
         if (s !== undefined) load(s, USER_LOAD)
       },

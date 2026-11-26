@@ -225,6 +225,13 @@ export interface ReadOptions {
    * directly by a test) every flight with a registry record gives an event.
    */
   readonly ownFlight?: (flight: Flight) => boolean
+  /**
+   * The late refusal of the gate (`stale-object`, P4-B spec §10): asked for
+   * each part at the start of its limiter task, after grouping. A part of an
+   * object it names goes out as `command.stale-client` without a request.
+   * Without it (a source called directly by a test) no part is refused.
+   */
+  readonly staleObject?: (object: ObjectName) => boolean
 }
 
 /**
@@ -285,7 +292,6 @@ export interface BoundSource extends Omit<StoreSource, "read"> {
 export function bound(source: StoreSource, flight: Flight): BoundSource {
   return {
     close: () => source.close(),
-    refuse: source.refuse?.bind(source),
     run: (operation) => source.run(operation),
     admit: source.admit,
     lease: () => source.lease(),
@@ -347,13 +353,6 @@ export interface CoreSource {
    * `command.internal`; a refused request is its error.
    */
   run(operation: Operation): Promise<CoreRunResult>
-  /**
-   * Closes reads of the object (`"<kind>.<name>"`) until the source dies: a
-   * part of it that waits in the limiter goes out as `command.stale-client`
-   * without a request (P4-B spec §10). Optional: a source that never queues
-   * reads has nothing to stop.
-   */
-  refuse?(object: string): void
   /**
    * Closes the read limiter of the source (session close): a read still
    * queued never goes out and rejects with {@link ReadLimiterClosed}.
@@ -502,12 +501,18 @@ export function createCoreSource(
   const objectOf = (part: CorePart): MetadataRef | undefined =>
     part.type === "query" ? part.query.object : undefined
 
-  // Об'єкти, яким ядро закрило читання (`stale-client`, §10): частина, що
-  // вже стоїть у черзі обмежувача, не йде на сервер, коли дійде черга.
-  const refused = new Set<string>()
-  const isRefused = (part: CorePart): boolean => {
+  // Пізня відмова шлюзу (`stale-client`, §10, Р-SK1-6): частина, що вже
+  // стоїть у черзі обмежувача, не йде на сервер, коли дійде черга. Липкість
+  // дає позначка ядра, власної множини джерело не тримає.
+  const isRefused = (
+    part: CorePart,
+    staleObject: ReadOptions["staleObject"]
+  ): boolean => {
     const object = objectOf(part)
-    return object !== undefined && refused.has(`${object.kind}.${object.name}`)
+    return (
+      object !== undefined &&
+      staleObject?.(`${object.kind}.${object.name}`) === true
+    )
   }
   const refusal = (part: CorePart): CoreReadItem => ({
     ok: false,
@@ -534,7 +539,7 @@ export function createCoreSource(
     queries: readonly CorePart[],
     wires: readonly WireReadPart[],
     origins: readonly (Flight | undefined)[],
-    { onRightsSent, onRead, ownFlight }: ReadOptions
+    { onRightsSent, onRead, ownFlight, staleObject }: ReadOptions
   ): Promise<CoreReadItem[]> => {
     let answer: WireReadParts | undefined
     // Частини, що справді пішли: добираються на старті задачі, не при постановці.
@@ -542,7 +547,9 @@ export function createCoreSource(
     let request = 0
     try {
       answer = await limiter.run(() => {
-        live = queries.flatMap((part, i) => (isRefused(part) ? [] : [i]))
+        live = queries.flatMap((part, i) =>
+          isRefused(part, staleObject) ? [] : [i]
+        )
         request = ++requests
         // Подія — на кожну живу частину, у мить номера запиту: частину,
         // відмовлену без запиту (`stale-object`, закритий обмежувач), задача
@@ -689,9 +696,6 @@ export function createCoreSource(
 
   return {
     close: () => limiter.close(),
-    refuse: (object) => {
-      refused.add(object)
-    },
     async run(operation) {
       const entry = index.byRef.get(
         `${operation.object.kind}.${operation.object.name}`

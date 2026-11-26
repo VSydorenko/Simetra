@@ -385,3 +385,61 @@ describe("Writer.hide", () => {
     expect(lineView.getSnapshot().section?.lines).toHaveLength(1)
   })
 })
+
+// R10 судить схований об'єкт, а не ціль (рішення архітекторки 25.11, Р-SK1-6):
+// несумісного тримача відмовляє пізня відмова, схований несумісний об'єкт
+// не перечитує тримачів інших об'єктів — обидва як на `main`.
+describe("hide of an include target and the stale-client mark (R10)", () => {
+  const orgKey = key(10_001)
+  const spec: ViewSpec = { kind: "full", object: TASK, include: ["org"] }
+
+  async function holder() {
+    const h = setup()
+    h.fake.insert(ORG, { ref: orgKey })
+    h.fake.insert(TASK, taskValues(1, { org: orgKey }))
+    const handle = h.core.view(spec)
+    watch(handle)
+    await settle()
+    const attempts: unknown[] = []
+    h.inspect.watchAttempts((event) => attempts.push(event))
+    return { ...h, handle, attempts }
+  }
+
+  it("a stale holder of a hidden live target: the late refusal answers it stale-client, the view goes to error", async () => {
+    const h = await holder()
+    h.core.staleClient(TASK)
+    await settle()
+    const before = h.fake.log.length
+    write(h.core, (w) => w.hide(ORG, [orgKey]))
+    await settle()
+    expect(
+      h.fake.log.slice(before).filter((l) => l.query?.object.name === "Task")
+    ).toEqual([])
+    expect(h.attempts).toMatchObject([
+      { phase: "started", kind: "reread", site: "R10" },
+      {
+        phase: "settled",
+        outcome: "failed",
+        skip: "stale-object",
+        error: "command.stale-client",
+      },
+    ])
+    expect(h.handle.getSnapshot()).toMatchObject({
+      status: "error",
+      error: { code: "command.stale-client" },
+      isStale: true,
+    })
+  })
+
+  it("a stale hidden target: its live holders of another object are not re-read", async () => {
+    const h = await holder()
+    const before = h.fake.log.length
+    h.core.staleClient(ORG)
+    await settle()
+    expect(
+      h.fake.log.slice(before).filter((l) => l.query !== undefined)
+    ).toEqual([])
+    expect(h.attempts).toEqual([])
+    expect(h.handle.getSnapshot().status).toBe("ready")
+  })
+})

@@ -144,7 +144,9 @@ export const HIDDEN_TAB: Readonly<Record<RequirementKind, Answer>> = {
 }
 
 // Коди, у яких колонка «Умови» Додатка Б не називає `stale-object`: їх
-// відмовляє пізня відмова (Р-SK1-6).
+// відмовляє пізня відмова (Р-SK1-6). R10 перевіряє схований об'єкт, а не
+// ціль (тримача): несумісного тримача, як на `main`, відмовляє пізня відмова
+// (рішення архітекторки 25.11).
 const LATE_STALE: readonly SiteCode[] = [
   "M1",
   "M2",
@@ -159,6 +161,7 @@ const LATE_STALE: readonly SiteCode[] = [
   "R3",
   "R7",
   "R9",
+  "R10",
   "R11",
   "R12",
   "R15",
