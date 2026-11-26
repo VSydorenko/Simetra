@@ -1,5 +1,7 @@
 import { createHmac, randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
+import { revokeTriple } from "../src/server/agent-oauth/interaction"
+import { insertAgentGrant } from "../src/server/agent-oauth/store"
 import {
   authorize,
   Browser,
@@ -10,6 +12,7 @@ import {
   ORIGIN,
   postInteraction,
   refresh,
+  RESOURCE,
   resume,
   startStand,
   type Flow,
@@ -318,6 +321,60 @@ describe("re-authorisation of the (client, user, tenant) triple", () => {
     await expectAlive(other)
     await expectAlive(fresh)
   }, 60_000)
+})
+
+describe("concurrent consents of one triple", () => {
+  /** Грант так, як його записує `submitConsent`, з заданим `created_at`. */
+  async function consentGrant(userId: string, createdAt: Date) {
+    const grant = new provider.Grant({ accountId: userId, clientId: CLIENT })
+    grant.addOIDCScope("offline_access")
+    grant.addResourceScope(RESOURCE, "mcp")
+    const grantId = await grant.save()
+    await insertAgentGrant(stand.pool, {
+      grantId,
+      userId,
+      clientId: CLIENT,
+      tenant: null,
+      expiresAt: new Date(Date.now() + 86_400_000),
+    })
+    await stand.pool.query(
+      "UPDATE agent_oauth.agent_grants SET created_at = $2 WHERE grant_id = $1",
+      [grantId, createdAt]
+    )
+    return grantId
+  }
+
+  it.each([
+    ["created_at differs", 1000],
+    ["created_at is equal: grant_id decides", 0],
+  ])(
+    "%s: the newer grant's revoke runs first, the older one's after; the newer lives",
+    async (_name, gapMs) => {
+      const { userId } = await stand.signUp()
+      const at = Date.now()
+      const first = await consentGrant(userId, new Date(at - gapMs))
+      const second = await consentGrant(userId, new Date(at))
+      // Порядок — як його бачить Postgres: за рівного `created_at` вирішує
+      // `grant_id` у колації бази, а не порівняння рядків JS
+      const { rows } = await stand.pool.query(
+        `SELECT grant_id FROM agent_oauth.agent_grants
+         WHERE grant_id = ANY($1) ORDER BY created_at, grant_id`,
+        [[first, second]]
+      )
+      const [older, newer] = (rows as { grant_id: string }[]).map(
+        (r) => r.grant_id
+      ) as [string, string]
+      if (gapMs > 0) expect([older, newer]).toEqual([first, second])
+      // Обидві згоди вже записали рядок; відкликання трійки — у зворотному порядку
+      await revokeTriple(stand.pool, newer, userId, CLIENT, null)
+      await revokeTriple(stand.pool, older, userId, CLIENT, null)
+      expect(await provider.Grant.find(newer)).toBeDefined()
+      expect((await grantRow(stand.pool, newer))?.revoked_at).toBeNull()
+      expect(await provider.Grant.find(older)).toBeUndefined()
+      expect((await grantRow(stand.pool, older))?.revoked_at).not.toBeNull()
+    },
+    60_000
+  )
 })
 
 describe("listAgentGrants and revokeAgentGrant", () => {

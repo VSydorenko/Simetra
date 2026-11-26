@@ -93,6 +93,30 @@ function csrfValid(
   })
 }
 
+// Повторна авторизація трійки (клієнт, користувач, тенант) відкликає
+// попередні гранти; «без тенанта» — теж значення трійки, звідси `IS NOT DISTINCT FROM`.
+// Лише старші за власний (`created_at`, за рівності — `grant_id`): дві згоди
+// трійки одночасно інакше відкликали б одна одну; так лишається новіша, без блокувань
+export async function revokeTriple(
+  pool: Pool,
+  grantId: string,
+  userId: string,
+  clientId: string,
+  tenant: string | null
+): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT g.grant_id
+     FROM agent_oauth.agent_grants g
+     JOIN agent_oauth.agent_grants own ON own.grant_id = $4
+     WHERE g.user_id = $1 AND g.client_id = $2 AND g.tenant IS NOT DISTINCT FROM $3::uuid
+       AND g.revoked_at IS NULL
+       AND (g.created_at, g.grant_id) < (own.created_at, own.grant_id)`,
+    [userId, clientId, tenant, grantId]
+  )
+  for (const row of rows as { grant_id: string }[])
+    await revokeGrant(pool, row.grant_id)
+}
+
 export function createAgentInteraction(o: AgentInteractionOptions) {
   const { provider, pool } = o
 
@@ -253,7 +277,7 @@ export function createAgentInteraction(o: AgentInteractionOptions) {
           { login: { accountId }, consent: { grantId } },
           { mergeWithLastSubmission: false }
         )
-        await revokeTriple(grantId, accountId, clientId, tenant)
+        await revokeTriple(pool, grantId, accountId, clientId, tenant)
       } catch (e) {
         // Грант не дійшов до клієнта: відкат тією ж функцією відкликання
         await revokeGrant(pool, grantId)
@@ -261,24 +285,6 @@ export function createAgentInteraction(o: AgentInteractionOptions) {
       }
       return redirect(returnTo)
     })
-  }
-
-  // Повторна авторизація трійки (клієнт, користувач, тенант) відкликає
-  // попередні гранти; «без тенанта» — теж значення трійки, звідси `IS NOT DISTINCT FROM`
-  async function revokeTriple(
-    grantId: string,
-    userId: string,
-    clientId: string,
-    tenant: string | null
-  ): Promise<void> {
-    const { rows } = await pool.query(
-      `SELECT grant_id FROM agent_oauth.agent_grants
-       WHERE user_id = $1 AND client_id = $2 AND tenant IS NOT DISTINCT FROM $3::uuid
-         AND revoked_at IS NULL AND grant_id <> $4`,
-      [userId, clientId, tenant, grantId]
-    )
-    for (const row of rows as { grant_id: string }[])
-      await revokeGrant(pool, row.grant_id)
   }
 
   /** Відмова від підключення: клієнт отримує `access_denied`. */
