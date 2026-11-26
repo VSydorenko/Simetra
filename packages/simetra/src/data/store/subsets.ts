@@ -316,7 +316,6 @@ function liftRequirement(s: Subset, readEpoch: number): void {
 
 /** What the requirement rule reads of the session and the tab. */
 export interface RequirementEnv {
-  readonly versions: Pick<Session["versions"], "unavailable">
   /** The tab is visible: on a hidden tab nothing is sent (§12, Р8). */
   readonly tabVisible: () => boolean
 }
@@ -326,7 +325,8 @@ export interface RequirementEnv {
  * (P4-B spec §8.4, item 7): the view is visible on a visible tab, no read of
  * it started at the requirement's epoch or later is in flight or queued after
  * the current one (a `revalidate` tail, a trailing load), it is not in the
- * failure pause and the session is not out of the discard limit.
+ * failure pause. The discard limit of the session is judged by the gate at
+ * the read (§5.3).
  */
 export function requirementPending(s: Subset, env: RequirementEnv): boolean {
   return requirementHold(s, env) === undefined
@@ -345,20 +345,16 @@ export function requirementHold(
   | "absent"
   | Extract<
       AdmissionCondition,
-      | "tab-hidden"
-      | "target-invisible"
-      | "promised"
-      | "paused"
-      | "discard-bound"
+      "tab-hidden" | "target-invisible" | "promised" | "paused"
     >
   | undefined {
   if (s.unconfirmedSince === undefined) return "absent"
   if (!env.tabVisible()) return "tab-hidden"
-  return holdWithoutTab(s, env)
+  return holdWithoutTab(s)
 }
 
 // Те саме без вкладки: вимога чекає читання, яке ніхто інший не обіцяє.
-function holdWithoutTab(s: Subset, env: RequirementEnv) {
+function holdWithoutTab(s: Subset) {
   const since = s.unconfirmedSince
   if (since === undefined) return "absent"
   if (!(s.visible ?? s.listeners.size > 0)) return "target-invisible"
@@ -370,13 +366,11 @@ function holdWithoutTab(s: Subset, env: RequirementEnv) {
   // би другим читанням того самого.
   if (s.rereadTail !== undefined || s.trailing !== undefined) return "promised"
   // Збій читання повторює пауза збоїв (планувальник), не негайне коло.
-  if (s.failures > 0) return "paused"
-  // Після межі відкинутих жодне читання не має шансу (§6.2).
-  return env.versions.unavailable() ? "discard-bound" : undefined
+  // Межу відкинутих судить шлюз у мить читання (M7, R13, R18; Р-SK1-7).
+  return s.failures > 0 ? "paused" : undefined
 }
 
-const waitsForRead = (s: Subset, env: RequirementEnv): boolean =>
-  holdWithoutTab(s, env) === undefined
+const waitsForRead = (s: Subset): boolean => holdWithoutTab(s) === undefined
 
 /**
  * The settle point of a read that confirms the whole view (its load or a
@@ -392,7 +386,7 @@ export function settleRequirement(
   env: RequirementEnv
 ): boolean {
   liftRequirement(s, readEpoch)
-  return waitsForRead(s, env) && env.tabVisible()
+  return waitsForRead(s) && env.tabVisible()
 }
 
 /**
@@ -484,7 +478,6 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   // відповіді ставить лише надгробок, новіший за її старт, — їх скінченно.
   // Збій читання сюди не доходить: його повторює пауза збоїв.
   const requirementEnv: RequirementEnv = {
-    versions: session.versions,
     tabVisible: ctx.tabVisible,
   }
   function confirm(s: Subset, readEpoch: number, lifts: boolean): boolean {
@@ -624,8 +617,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           if (again && token.valid) return retry("M7")
           if (!discarded || !token.valid) return
           // Цей прохід вичерпав межу (лічильник рухається після commit):
-          // повтору не буде, вигляд — `command.unavailable`.
-          if (session.versions.unavailable()) {
+          // повтору не буде, вигляд — `command.unavailable`. Наслідок осідання
+          // за межею (Р-SK1-7); повтор M8 після паузи судить шлюз.
+          if (ctx.source.settledPastBound()) {
             session.commit(
               () => {
                 s.status = "error"

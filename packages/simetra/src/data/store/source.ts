@@ -274,6 +274,8 @@ export interface StoreSource extends Omit<CoreSource, "read"> {
   read(parts: readonly CorePart[], flight: Flight): Promise<CoreReadResult>
   /** The admission gate of the session: every flight of a read comes from it. */
   readonly admit: Gate["admit"]
+  /** The settle consequence past the discard limit, asked of the gate. */
+  readonly settledPastBound: Gate["settledPastBound"]
   /** A new write lease for one flight; only {@link settle} releases it. */
   lease(): WriteLease
 }
@@ -294,6 +296,7 @@ export function bound(source: StoreSource, flight: Flight): BoundSource {
     close: () => source.close(),
     run: (operation) => source.run(operation),
     admit: source.admit,
+    settledPastBound: source.settledPastBound,
     lease: () => source.lease(),
     read: (parts) => source.read(parts, flight),
   }

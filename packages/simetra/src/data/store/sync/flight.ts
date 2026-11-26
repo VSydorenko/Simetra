@@ -1,3 +1,4 @@
+import type { DefectFlag } from "../defects"
 import type { WriteLease } from "../source"
 import type { Subset } from "../subsets"
 import type { GenerationToken, ObjectName } from "../types"
@@ -94,7 +95,18 @@ export interface GateState {
   readonly staleObject?: (object: ObjectName) => boolean
   readonly discardBound?: () => boolean
   readonly tabHidden?: () => boolean
+  /** Прапорці самотесту (`defects.ts`): мутація шляху сягає й рішення шлюзу. */
+  readonly defects?: ReadonlySet<DefectFlag>
 }
+
+// Мутації «читання після межі відкинутих» вимикають і перевірку шляху, і
+// відповідь шлюзу — але лише для кодів свого шляху: прапорець, що відкрив би
+// межу всім, ловився б чужою перевіркою (рішення архітекторки 25.11).
+const DISCARD_DEFECTS: readonly (readonly [DefectFlag, readonly SiteCode[]])[] =
+  [
+    ["scheduler-reads-unavailable", ["R1", "R2", "R3"]],
+    ["receiver-reads-unavailable", ["K1", "K2", "R8", "R9"]],
+  ]
 
 /**
  * Шлюз допуску. `admit` судить таблицю допуску (`admission.ts`); `issued` —
@@ -111,6 +123,19 @@ export interface Gate {
    * `admit`.
    */
   staleObject(object: ObjectName): boolean
+  /**
+   * Запит умови `discard-bound` для таймерів (Р-SK1-9): строк планувальника й
+   * такт не ставлять читань після межі відкинутих. Той самий предикат, що
+   * судить `admit`.
+   */
+  discardBound(): boolean
+  /**
+   * Наслідок осідання за межею (Р-SK1-7): після запису відповіді шлях обирає
+   * «`EPOCH_UNAVAILABLE` чи повтор», а строки й збір сигналів гаснуть. Не
+   * допуск і не таймер — окремий символ, щоб страж відрізняв його. Той самий
+   * предикат, що судить `admit`.
+   */
+  settledPastBound(): boolean
 }
 
 function issue(
@@ -141,7 +166,8 @@ function issue(
 function holds(
   state: GateState,
   condition: JudgedCondition,
-  target: ReadTarget
+  target: ReadTarget,
+  site: SiteCode
 ): boolean {
   switch (condition) {
     case "closed":
@@ -151,7 +177,13 @@ function holds(
         target.kind !== "service" && state.staleObject?.(target.object) === true
       )
     case "discard-bound":
-      return state.discardBound?.() === true
+      return (
+        state.discardBound?.() === true &&
+        !DISCARD_DEFECTS.some(
+          ([flag, codes]) =>
+            state.defects?.has(flag) === true && codes.includes(site)
+        )
+      )
     case "tab-hidden":
       return state.tabHidden?.() === true
   }
@@ -163,7 +195,7 @@ export function createGate(state: GateState): Gate {
       // Умови в порядку переліку §5.3: `closed` — перша, тож закрита сесія
       // відмовляє незалежно від решти.
       for (const condition of JUDGED_CONDITIONS) {
-        if (!holds(state, condition, target)) continue
+        if (!holds(state, condition, target, site)) continue
         const answer = answerOf(cause, target.kind, site, condition)
         if (answer === "refuse") return { refused: condition }
         if (answer === "defer") return { deferred: condition }
@@ -181,6 +213,8 @@ export function createGate(state: GateState): Gate {
     },
     issued: (flight) => registry.get(flight)?.gate === gate,
     staleObject: (object) => state.staleObject?.(object) === true,
+    discardBound: () => state.discardBound?.() === true,
+    settledPastBound: () => state.discardBound?.() === true,
   }
   return gate
 }

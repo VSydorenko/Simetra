@@ -1252,6 +1252,9 @@ async function tailPass(
   }
   const options = tailOptions.get(s) ?? { visibleOnly: false, why }
   tailOptions.delete(s)
+  // Позначка вигляду `EPOCH_UNAVAILABLE` — стан відмови цілі, не межа сесії
+  // (Р-SK1-7): вигляд, чий політ упав збоєм, хвіст читає й за межею, тож
+  // шлюз R15 за межею допускає (рядок 16 §5.14).
   if (
     unavailable(s) ||
     !eligible(ctx, s, options) ||
@@ -1490,7 +1493,6 @@ export async function revalidateViews(
               }
               if (
                 settleRequirement(s, startEpoch, {
-                  versions: session.versions,
                   tabVisible: ctx.tabVisible,
                 })
               )
@@ -1529,8 +1531,9 @@ export async function revalidateViews(
   // тепер ніхто не прочитає, читає те саме правило, що й після сторінки.
   for (const s of skipped) ctx.readRequirement(s)
   // Цей прохід вичерпав межу (лічильник рухається після commit): повтору
-  // не буде, відкинуті вигляди — `command.unavailable`.
-  if (discarded.length > 0 && session.versions.unavailable()) {
+  // не буде, відкинуті вигляди — `command.unavailable`. Наслідок осідання за
+  // межею (Р-SK1-7): «помилка чи строк повтору R3», не допуск.
+  if (discarded.length > 0 && ctx.source.settledPastBound()) {
     session.commit(
       () => {
         for (const s of discarded) {

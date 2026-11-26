@@ -923,6 +923,7 @@ export function withSleep(
     close: () => source.close(),
     run: (operation) => source.run(operation),
     admit: testGate.admit,
+    settledPastBound: testGate.settledPastBound,
     read: (parts) => source.read(parts, { sleep }),
     // Пряме джерело тесту: оренд запису немає кому обліковувати.
     lease: () => ({ issue() {}, release() {} }),

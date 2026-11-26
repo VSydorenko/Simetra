@@ -293,7 +293,9 @@ const EFFECTIVE: Record<SiteCode, Record<JudgedCondition, Verdict>> = {
   R12: { closed: R, "stale-object": P, "discard-bound": P, "tab-hidden": P },
   R13: { closed: R, "stale-object": R, "discard-bound": R, "tab-hidden": D },
   R14: { closed: R, "stale-object": R, "discard-bound": P, "tab-hidden": P },
-  R15: { closed: R, "stale-object": P, "discard-bound": R, "tab-hidden": P },
+  // R15 судить позначку вигляду, а не межу сесії: хвіст над виглядом, чий
+  // політ упав збоєм, читає й за межею (рішення архітекторки 25.11).
+  R15: { closed: R, "stale-object": P, "discard-bound": P, "tab-hidden": P },
   R16: { closed: R, "stale-object": P, "discard-bound": P, "tab-hidden": P },
   R17: { closed: R, "stale-object": P, "discard-bound": P, "tab-hidden": P },
   R18: { closed: R, "stale-object": P, "discard-bound": R, "tab-hidden": D },
@@ -411,6 +413,56 @@ describe("stale-object: the sticky mark of the object (Р-SK1-6)", () => {
     // Без функції стану умова не настає й для пізньої відмови.
     expect(createGate({ token: () => OPEN }).staleObject(OBJECT)).toBe(false)
   })
+})
+
+describe("discard-bound: the discard limit of the session (Р-SK1-7)", () => {
+  it("judges the limit at the moment of admit; the two queries ask the same predicate", () => {
+    let unavailable = false
+    const gate = createGate({
+      token: () => OPEN,
+      discardBound: () => unavailable,
+    })
+    const { cause, target } = SITES.R13
+    expect(isPermit(gate.admit(cause, target, "R13"))).toBe(true)
+    expect(gate.discardBound()).toBe(false)
+    expect(gate.settledPastBound()).toBe(false)
+    unavailable = true
+    expect(gate.admit(cause, target, "R13")).toEqual({
+      refused: "discard-bound",
+    })
+    expect(gate.discardBound()).toBe(true)
+    expect(gate.settledPastBound()).toBe(true)
+    // Без функції стану умова не настає й для запитів.
+    const bare = createGate({ token: () => OPEN })
+    expect(bare.discardBound()).toBe(false)
+    expect(bare.settledPastBound()).toBe(false)
+  })
+
+  // Мутації самотесту сягають рішення шлюзу лише для кодів свого шляху:
+  // прапорець, що відкрив би межу всім, ловився б чужою перевіркою.
+  it.each([
+    ["scheduler-reads-unavailable", ["R1", "R2", "R3"]],
+    ["receiver-reads-unavailable", ["K1", "K2", "R8", "R9"]],
+  ] as const)(
+    "the defect %s admits only the codes of its path",
+    (flag, own) => {
+      const gate = createGate({
+        token: () => OPEN,
+        discardBound: () => true,
+        defects: new Set([flag]),
+      })
+      for (const code of SITE_CODES) {
+        const { cause, target } = SITES[code]
+        const want: Verdict = (own as readonly SiteCode[]).includes(code)
+          ? P
+          : EFFECTIVE[code]["discard-bound"]
+        expect(verdictOf(gate.admit(cause, target, code)), code).toBe(want)
+      }
+      // Запити таймерів і осідання прапорець не чіпає: їх вимикає шлях.
+      expect(gate.discardBound()).toBe(true)
+      expect(gate.settledPastBound()).toBe(true)
+    }
+  )
 })
 
 describe("the permit issues one flight (рішення архітекторки 25.11)", () => {

@@ -649,10 +649,14 @@ export function createCore(options: {
   // Умову `closed` шлюз судить за токеном сесії (Р-SK1-5): він недійсний уже
   // з `closing`, а `closedSnapshot` — лише публічний знімок. `stale-object` —
   // липка позначка `staleObjects` (Р-SK1-6): той самий предикат судить `admit`
-  // і пізню відмову `dispatch`, збирача й джерела.
+  // і пізню відмову `dispatch`, збирача й джерела. `discard-bound` — межа
+  // відкинутих сесії (Р-SK1-7); позначка вигляду `EPOCH_UNAVAILABLE` — стан
+  // відмови цілі, не умова.
   const gate = createGate({
     token: () => session.token(),
     staleObject: (object) => staleObjects.has(object),
+    discardBound: () => session.versions.unavailable(),
+    defects,
   })
   const batcher = createBatcher(options.source, {
     ownFlight: gate.issued,
@@ -712,6 +716,7 @@ export function createCore(options: {
       }
     },
     admit: gate.admit,
+    settledPastBound: gate.settledPastBound,
     read: (parts, flight) => {
       // Політ, якого не видав шлюз цієї сесії, на дріт не йде (Р-SK1-2);
       // мутація самотесту вимикає перевірку.
@@ -1814,16 +1819,15 @@ export function createCore(options: {
   }
 
   const requirementEnv = {
-    versions: session.versions,
     tabVisible: () => visible,
   }
 
   // Одна умова з точками осідання (§8.4, п. 7): вимога стоїть, вигляд видимий
   // на видимій вкладці, і її ніхто інший не прочитає — ні читання з епохи
-  // вимоги в польоті чи в черзі, ні пауза збоїв, ні межа відкинутих.
+  // вимоги в польоті чи в черзі, ні пауза збоїв.
   function readRequirement(s: Subset) {
     if (!s.alive || s.purged || !s.loaded) return
-    // `stale-object` судить шлюз (R13) в `admitViews` нижче.
+    // `stale-object` і межу відкинутих судить шлюз (R13) в `admitViews` нижче.
     if (!requirementPending(s, requirementEnv)) return
     const why = {
       reason: "requirement",
@@ -1863,9 +1867,10 @@ export function createCore(options: {
   // відкидається, тож відкладені строки (перемикання епохи, повтор відкинутої
   // відповіді) були б читаннями без шансу й без паузи.
   // Запит скидає `scheduled`: після межі відкинутих жодне відкладене читання
-  // не має виконатися (§6.2).
+  // не має виконатися (§6.2). Наслідок осідання за межею (Р-SK1-7), не
+  // допуск: гасить строки R1, R3 і хвилю R4 разом.
   function dropDeferredWhenUnavailable() {
-    if (!session.versions.unavailable()) return
+    if (!gate.settledPastBound()) return
     scheduled.clear()
     wave = undefined
   }
@@ -1873,11 +1878,9 @@ export function createCore(options: {
   function schedulerDue(): number | undefined {
     let due: number | undefined
     dropDeferredWhenUnavailable()
-    // Після межі відкинутих планувальник нічого не читає до нової сесії (§6.2).
-    if (
-      session.versions.unavailable() &&
-      !defects.has("scheduler-reads-unavailable")
-    )
+    // Після межі відкинутих планувальник нічого не читає до нової сесії (§6.2):
+    // строку таймера немає (запит шлюзу для таймера, Р-SK1-9).
+    if (gate.discardBound() && !defects.has("scheduler-reads-unavailable"))
       return undefined
     for (const held of scheduled.values()) {
       for (const at of [held.whole?.at, held.retry?.at])
@@ -1915,10 +1918,10 @@ export function createCore(options: {
     closed: () => closed !== undefined || !session.token().valid,
     dueAt: schedulerDue,
     tick() {
-      if (
-        session.versions.unavailable() &&
-        !defects.has("scheduler-reads-unavailable")
-      ) {
+      // Запит шлюзу для таймера (Р-SK1-9): охороняє не-читальні ефекти такту —
+      // такт приймача, строк знімка прав, `lastTickAt`, `scheduled.clear()`;
+      // читання R2 судить `admit` у `reconcile`.
+      if (gate.discardBound() && !defects.has("scheduler-reads-unavailable")) {
         scheduled.clear()
         return
       }
@@ -2535,9 +2538,7 @@ export function createCore(options: {
       const conditionOf = (r: SyncRequirement): SyncDeferral | undefined => {
         // Вимогу складу судить те саме місце, що й `main`.
         if (r.kind === "composition-unconfirmed")
-          return composition === "absent" || composition === "discard-bound"
-            ? undefined
-            : composition
+          return composition === "absent" ? undefined : composition
         // До `endHydration` довіру після гідратації не читає ніхто: її
         // читання — сам виклик (умова `hydrating`, рішення архітекторки).
         if (r.kind === "hydration-trust" && hydration === "hydrated")

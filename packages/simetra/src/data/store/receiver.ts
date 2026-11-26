@@ -385,9 +385,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   // тож читання за сигналом — запит без шансу, як і такт планувальника. Одна
   // перевірка для всіх шляхів читання приймача: сигнали не збираються, а
   // пачка, що чекає (зокрема дочитування мінімальної версії), відкидається.
-  // Самотест (`receiver-reads-unavailable`) вимикає зупинку.
+  // Наслідок осідання за межею (Р-SK1-7), до будь-якого `admit` і без коду
+  // й цілі: питає шлюз. Самотест (`receiver-reads-unavailable`) вимикає
+  // зупинку, а шлюз під ним допускає читання приймача (K1, K2, R8, R9).
   const halted = () =>
-    session.versions.unavailable() &&
+    writer.source.settledPastBound() &&
     !writer.defects.has("receiver-reads-unavailable")
 
   const scopesOfRows = (entry: CatalogEntry): string[] => {
