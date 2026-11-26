@@ -38,6 +38,8 @@ const GATE_QUERIES = [
   "discardBound",
   "settledPastBound",
   "tabHidden",
+  "refusal",
+  "timersRead",
 ] as const
 type GateQuery = (typeof GATE_QUERIES)[number]
 
@@ -793,16 +795,13 @@ const PLACES: readonly Group[] = [
   {
     inventory: false,
     reason:
-      "Діагностика `sync()` (Р-SK1-9, Р-SK1-12): відмова, відкладення й строки, які показує інспекція; копії `refusalOf` і `timersRead` прибирає задача 8",
+      "Діагностика `sync()` (Р-SK1-9, Р-SK1-12): відмова, відкладення й строки, які показує інспекція, беруться зі шлюзу — тим самим предикатом, що судить `admit`",
     sites: [
       "core.ts::createCore.syncState gate.tabHidden",
-      "core.ts::createCore.syncState token",
+      "core.ts::createCore.syncState gate.refusal ×4",
+      "core.ts::createCore.syncState gate.timersRead",
       "core.ts::createCore.syncState.conditionOf gate.tabHidden ×2",
-      "core.ts::createCore.syncState.refusalOf staleObjects",
-      "core.ts::createCore.syncState.refusalOf unavailable",
-      "core.ts::createCore.timersRead gate.tabHidden",
-      "core.ts::createCore.timersRead staleObjects",
-      "core.ts::createCore.timersRead unavailable",
+      "core.ts::createCore.timerDue gate.timersRead",
       "core.ts::createCore.versionEpochs unavailable",
     ],
   },
@@ -1106,6 +1105,8 @@ export interface Gate {
   discardBound(): boolean
   settledPastBound(): boolean
   tabHidden(): boolean
+  refusal(object?: string): string | undefined
+  timersRead(object: string): boolean
 }
 export declare function createGate(state: GateState): Gate
 `,

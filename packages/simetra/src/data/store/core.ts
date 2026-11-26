@@ -2430,14 +2430,6 @@ export function createCore(options: {
     ...(fields.dueCause === undefined ? {} : { dueCause: fields.dueCause }),
   })
 
-  // Таймери `main` читають об'єкт лише на видимій вкладці, поки він сумісний
-  // і сесія в межі відкинутих — ті самі умови, що в `schedulerDue` і такті.
-  const timersRead = (object: ObjectName) =>
-    !gate.tabHidden() &&
-    !staleObjects.has(object) &&
-    (!session.versions.unavailable() ||
-      defects.has("scheduler-reads-unavailable"))
-
   // Обіцянку чи умову судить кожна вимога окремо (§5.3, §5.13): політ, що
   // обіцяє одну, нічого не каже про пізнішу. Ціль має умову, лише коли її має
   // кожна вимога; `promised` — лише коли всі обіцяні.
@@ -2453,7 +2445,7 @@ export function createCore(options: {
   // відкинутої відповіді. На прихованій вкладці планувальник не спрацьовує.
   function timerDue(s: Subset): number | undefined {
     const object = s.form.object.name
-    if (!timersRead(object)) return undefined
+    if (!gate.timersRead(object)) return undefined
     const held = scheduled.get(object)
     const byTick = revalidateTargets(writerContext, object, {
       visibleOnly: true,
@@ -2468,15 +2460,6 @@ export function createCore(options: {
 
   function syncState(): SyncState[] {
     const out: SyncState[] = []
-    const shut = closed !== undefined || !session.token().valid
-    const refusalOf = (object?: ObjectName): SyncRefusal | undefined =>
-      shut
-        ? "closed"
-        : object !== undefined && staleObjects.has(object)
-          ? "stale-object"
-          : object !== undefined && session.versions.unavailable()
-            ? "discard-bound"
-            : undefined
     const record = (
       base: Omit<SyncState, "deferral" | "refusal">,
       refusal: SyncRefusal | undefined,
@@ -2584,7 +2567,7 @@ export function createCore(options: {
                 : undefined,
           }
         ),
-        refusalOf(object),
+        gate.refusal(object),
         () => deferralOf(requirements.map(conditionOf))
       )
     }
@@ -2660,7 +2643,7 @@ export function createCore(options: {
             },
             {
               due: earliest(
-                timersRead(o.name) ? retry?.at : undefined,
+                gate.timersRead(o.name) ? retry?.at : undefined,
                 // Вигляд-тримач у паузі повтору читає кінець паузи, а не таймери
                 // об'єкта (вони читають вигляд у польоті лише хвостом).
                 ...holders
@@ -2669,7 +2652,7 @@ export function createCore(options: {
               ),
             }
           ),
-          refusalOf(o.name),
+          gate.refusal(o.name),
           () =>
             deferralOf(
               requirements.map((r) =>
@@ -2697,7 +2680,7 @@ export function createCore(options: {
           flights,
           queued,
         },
-        refusalOf(),
+        gate.refusal(),
         () => (promised(requirements, flights, queued) ? "promised" : undefined)
       )
     }
@@ -2724,7 +2707,7 @@ export function createCore(options: {
           },
           { proof: rights?.rightsEpoch, due: rightsDueAt() }
         ),
-        refusalOf(),
+        gate.refusal(),
         () => (promised(requirements, flights, queued) ? "promised" : undefined)
       )
     }

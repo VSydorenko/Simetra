@@ -588,3 +588,54 @@ describe("the permit issues one flight (рішення архітекторки 
     }).toThrow(TypeError)
   })
 })
+
+describe("diagnostics queries of the gate (Р-SK1-12)", () => {
+  it("refusal lists closed, stale-object and discard-bound in the order of §5.3; a service has no object", () => {
+    const stale = new Set<string>()
+    let unavailable = false
+    let valid = true
+    const gate = createGate({
+      token: () => (valid ? OPEN : SHUT),
+      staleObject: (object) => stale.has(object),
+      discardBound: () => unavailable,
+    })
+    expect(gate.refusal(OBJECT)).toBeUndefined()
+    unavailable = true
+    expect(gate.refusal(OBJECT)).toBe("discard-bound")
+    expect(gate.refusal()).toBeUndefined()
+    stale.add(OBJECT)
+    expect(gate.refusal(OBJECT)).toBe("stale-object")
+    valid = false
+    expect(gate.refusal(OBJECT)).toBe("closed")
+    expect(gate.refusal()).toBe("closed")
+  })
+
+  it("timersRead needs a visible tab, a compatible object and a session within the limit", () => {
+    const stale = new Set<string>()
+    let hidden = false
+    let unavailable = false
+    const state: GateState = {
+      token: () => OPEN,
+      staleObject: (object) => stale.has(object),
+      discardBound: () => unavailable,
+      tabHidden: () => hidden,
+    }
+    const gate = createGate(state)
+    expect(gate.timersRead(OBJECT)).toBe(true)
+    hidden = true
+    expect(gate.timersRead(OBJECT)).toBe(false)
+    hidden = false
+    stale.add(OBJECT)
+    expect(gate.timersRead(OBJECT)).toBe(false)
+    stale.clear()
+    unavailable = true
+    expect(gate.timersRead(OBJECT)).toBe(false)
+    // Мутація самотесту відкриває межу таймерам.
+    expect(
+      createGate({
+        ...state,
+        defects: new Set(["scheduler-reads-unavailable"]),
+      }).timersRead(OBJECT)
+    ).toBe(true)
+  })
+})
