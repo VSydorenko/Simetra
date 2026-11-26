@@ -22,6 +22,7 @@ import {
   rowFreeGrants,
   type RightsCondition,
 } from "../rights/predicates"
+import { opensEveryRow } from "../rights/public-read"
 import { executeGrants } from "../sql/execute-grants"
 import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
@@ -65,6 +66,11 @@ interface SignalFacts {
   kindId: string
   /** Множина скоупів межі тенанта; нескоуплений — немає. */
   scopeSet?: string
+  /**
+   * `publicRead` відкриває всі рядки (`opensEveryRow`): умовний сигнал не
+   * відкриває — id і версії чернеток бачив би кожен, тож канал судить право
+   * `read`, як без `publicRead`.
+   */
   publicRead: boolean
   /** Безрядкова форма права `read`; без функцій прав чи дії — порожньо. */
   readGrants: RightsCondition[]
@@ -178,7 +184,7 @@ function signalFacts(input: SignalInput): SignalFacts[] {
           ...(access.scope === undefined
             ? {}
             : { scopeSet: scopeSetCall(access.scope) }),
-          publicRead: access.publicRead.length > 0,
+          publicRead: opensEveryRow(access),
           readGrants:
             rights !== undefined && readable
               ? rowFreeGrants(rights, "read", main)

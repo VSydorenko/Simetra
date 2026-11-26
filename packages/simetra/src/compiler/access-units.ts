@@ -46,7 +46,12 @@ import {
   rightsPredicates,
   type RightsPredicate,
 } from "./rights/predicates"
-import { publicReadConditions, renderConditions } from "./rights/public-read"
+import {
+  opensEveryRow,
+  opensPublishedRows,
+  publicReadConditions,
+  renderConditions,
+} from "./rights/public-read"
 import { sha256HexSync } from "./sha256"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
@@ -174,6 +179,20 @@ function commandColumns(
     update: update.map((c) => c.name),
     delete: section || (facts.main && facts.roleAssignments),
   }
+}
+
+/**
+ * Лівий диз'юнкт межі тенанта умовного `publicRead` (спека прав §5.2) — лише
+ * умови рядка будівника, без `validUser`: опублікований рядок межа пропускає
+ * кожній ролі політики, а дійсність користувача судить `<t>_public_read`.
+ */
+function publishedRow(contract: AccessContract, sessionUser: boolean): string {
+  return renderConditions(
+    publicReadConditions(contract, sessionUser).filter(
+      (c) => c.kind === "rowLiteral"
+    ),
+    contract.published
+  )
 }
 
 /** Гість бачить не більше за користувача: `anon` відкриває обидві ролі запиту. */
@@ -369,8 +388,8 @@ export type ReadBoundary = "tenant" | "users"
 
 /**
  * The `RESTRICTIVE` read boundaries of a table (rights spec §5.2): `tenant`
- * for a scoped table without `publicRead`, `users` for a Users table when
- * users visibility is generated.
+ * for a scoped table whose `publicRead` does not open every row, `users` for
+ * a Users table when users visibility is generated.
  */
 export function readBoundaries(
   contract: AccessContract,
@@ -379,7 +398,9 @@ export function readBoundaries(
   // Одне джерело для політик читання й ознаки сигналу (спека П4-B §8.3):
   // інакше ознака могла б розійтися з тим, що насправді обмежує читання.
   const boundaries: ReadBoundary[] = []
-  if (contract.scope !== undefined && contract.publicRead.length === 0) {
+  // Умовний `publicRead` межу лишає: чернетку бачить лише свій тенант, а
+  // опублікований рядок межа пропускає лівим диз'юнктом (`buildAccessUnits`).
+  if (contract.scope !== undefined && !opensEveryRow(contract)) {
     boundaries.push("tenant")
   }
   if (visibleUsers && contract.users) boundaries.push("users")
@@ -492,6 +513,7 @@ export function buildAccessUnits(
       const names = accessPolicyNames(table)
       const policies: string[] = []
       const publicRead = contract.publicRead.length > 0
+      const everyRow = opensEveryRow(contract)
       const boundaries = readBoundaries(contract, visibleUsers)
       if (contract.scope !== undefined) {
         // Некорельована форма: множину скоупів планувальник обчислює раз на
@@ -502,10 +524,15 @@ export function buildAccessUnits(
           policies.push(
             policy(name, table, "RESTRICTIVE", command, bounded, clauses)
           )
-        // Об'єкт із `publicRead` свідомо відкриває всі рядки на читання
-        // (§6.8, спека прав §5.2), але межа запису від форми прав не залежить.
+        // Об'єкт із `publicRead` без умови свідомо відкриває всі рядки на
+        // читання (§6.8, спека прав §5.2), умовний — лише опубліковані поза
+        // межею; межа запису від форми прав не залежить.
         if (boundaries.includes("tenant")) {
-          restrict(names.scopeRead, "SELECT", { using: boundary })
+          restrict(names.scopeRead, "SELECT", {
+            using: opensPublishedRows(contract)
+              ? `(${publishedRow(contract, sessionUser)}) OR (${boundary})`
+              : boundary,
+          })
         }
         // Скоуп нового кореня — його власний `id`: межу нового тенанта дасть
         // право створення кореня (П4), а не множина моїх скоупів (спека прав §5.2).
@@ -556,14 +583,15 @@ export function buildAccessUnits(
         )
       }
       // Без функцій прав політика, що їх кличе, не застосувалась би;
-      // `publicRead` відкриває всі рядки й без прав (спека прав §5.2).
+      // `publicRead` без умови відкриває всі рядки й без прав (спека прав §5.2),
+      // а чернетки умовного читають лише за правами.
       const rights =
         contract.rights === undefined
           ? undefined
           : rightsById.get(contract.rights.objectId)
       if (
         rightsOn &&
-        !publicRead &&
+        !everyRow &&
         rights?.actions.some((a) => a.action === "read") === true
       ) {
         const physicalTable = tableOf(physical, table)

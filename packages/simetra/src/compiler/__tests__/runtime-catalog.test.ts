@@ -1233,6 +1233,29 @@ describe("buildRuntimeCatalog: rights snapshot fields", () => {
     expect(objectOf("Project")).not.toHaveProperty("publicRead")
   })
 
+  // Р-D1-12: `publicRead` каталогу — лише за `opensEveryRow`; умовний клієнт
+  // вважав би відкритими й чернетки. `published` будівник контрактів ще не
+  // заповнює (Р-D1-2), тож контракт — вручну.
+  it("a conditional publicRead is not the publicRead of the catalog", () => {
+    const bulletin = model.objects.find((o) => o.name === "Bulletin")!
+    const conditional = buildRuntimeCatalog({
+      ...model,
+      contracts: {
+        ...model.contracts,
+        access: model.contracts.access.map((a) =>
+          a.objectId === bulletin.id
+            ? {
+                ...a,
+                published: { column: "published", mark: "deletion_mark" },
+              }
+            : a
+        ),
+      },
+    }).objects.find((o) => o.name === "Bulletin")
+    expect(conditional).toBeDefined()
+    expect(conditional).not.toHaveProperty("publicRead")
+  })
+
   it("anon public read, which opens both request roles, is `anon`", async () => {
     const { model: anon, diagnostics } = await compileRights(
       policyDomain(writeRoles(), adminRoles(), commandCoreLayer(), {

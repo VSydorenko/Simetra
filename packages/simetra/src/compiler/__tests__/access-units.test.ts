@@ -27,8 +27,14 @@ import {
   COMMAND_ACTION,
   renderCondition,
   rightsPredicates,
+  type RightsCondition,
   type RightsPredicate,
 } from "../rights/predicates"
+import {
+  opensEveryRow,
+  publicReadConditions,
+  renderConditions,
+} from "../rights/public-read"
 import { sha256HexSync } from "../sha256"
 import { loadSqlParser } from "../sql/parse"
 import type { SqlUnit } from "../sql/units"
@@ -336,6 +342,93 @@ function policiesOf(model: CompiledModel, table: string): Map<string, string> {
 const ORG_BOUNDARY = "org_id = ANY (ARRAY(SELECT public.org_member_scopes()))"
 const BOUNDED = "TO authenticated, simetra_command"
 
+/** Колонки умови публікації шапки (`AccessContract.published`, Р-D1-2). */
+const PUBLISHED = { column: "published", mark: "deletion_mark" }
+/**
+ * Колонки ТЧ — свідомо інші імена, ніж у шапки: рендер, що взяв би колонку
+ * шапки замість своєї таблиці, тут червоний.
+ */
+const SECTION_PUBLISHED = {
+  column: "head_published",
+  mark: "head_deletion_mark",
+}
+const PUBLISHED_ROW = "published AND NOT deletion_mark"
+const VALID_USER = "(SELECT simetra.current_user_id()) IS NOT NULL"
+const ROW_LITERALS: RightsCondition[] = [
+  { kind: "rowLiteral", field: "published", value: true },
+  { kind: "rowLiteral", field: "deletionMark", value: false },
+]
+
+describe("publicReadConditions (Р-D1-3)", () => {
+  it("gives the same logical row literals for a header and its section; only the render differs", () => {
+    const header = contract({
+      publicRead: ["anonymous", "user"],
+      published: PUBLISHED,
+    })
+    const section = contract({
+      table: { schema: "public", name: "item_lines" },
+      publicRead: ["anonymous", "user"],
+      published: SECTION_PUBLISHED,
+    })
+    expect(publicReadConditions(header, true)).toEqual(ROW_LITERALS)
+    expect(publicReadConditions(section, true)).toEqual(
+      publicReadConditions(header, true)
+    )
+    expect(
+      renderConditions(publicReadConditions(header, true), header.published)
+    ).toBe(PUBLISHED_ROW)
+    expect(
+      renderConditions(
+        publicReadConditions(section, true),
+        section.published,
+        "r"
+      )
+    ).toBe("r.head_published AND NOT r.head_deletion_mark")
+  })
+
+  it("authenticated with a session user adds validUser; the string form keeps its condition", () => {
+    const user = (published?: typeof PUBLISHED) =>
+      contract({ publicRead: ["user"], ...(published ? { published } : {}) })
+    expect(publicReadConditions(user(PUBLISHED), true)).toEqual([
+      ...ROW_LITERALS,
+      { kind: "validUser" },
+    ])
+    // Без функції користувача дійсність судити нічим, як і в рядковій формі.
+    expect(publicReadConditions(user(PUBLISHED), false)).toEqual(ROW_LITERALS)
+    expect(publicReadConditions(user(), true)).toEqual([{ kind: "validUser" }])
+    expect(
+      publicReadConditions(
+        contract({ publicRead: ["anonymous", "user"] }),
+        true
+      )
+    ).toEqual([])
+    expect(renderConditions([], undefined)).toBe("true")
+    expect(renderConditions([{ kind: "validUser" }], undefined)).toBe(
+      VALID_USER
+    )
+  })
+
+  it("never opens a closed table and never renders a row literal without columns", () => {
+    // Порожній масив — `true`: таблиця без `publicRead` відкрилась би кожному.
+    expect(() =>
+      publicReadConditions(contract({ published: PUBLISHED }), true)
+    ).toThrow(/internal/)
+    expect(() => renderConditions(ROW_LITERALS, undefined)).toThrow(/internal/)
+  })
+
+  it.each<[string, AccessContract, boolean]>([
+    ["the string form", contract({ publicRead: ["user"] }), true],
+    [
+      "the conditional form",
+      contract({ publicRead: ["user"], published: PUBLISHED }),
+      false,
+    ],
+    ["no publicRead", contract(), false],
+  ])("opensEveryRow: %s", (_, access, expected) => {
+    expect(opensEveryRow(access)).toBe(expected)
+  })
+})
+
 describe("readBoundaries", () => {
   it.each<[string, AccessContract, boolean, string[]]>([
     [
@@ -349,6 +442,16 @@ describe("readBoundaries", () => {
       contract({ scope: ORG_SCOPE, publicRead: ["user"] }),
       true,
       [],
+    ],
+    [
+      "a scoped table with conditional publicRead",
+      contract({
+        scope: ORG_SCOPE,
+        publicRead: ["user"],
+        published: PUBLISHED,
+      }),
+      true,
+      ["tenant"],
     ],
     ["an unscoped table", contract(), true, []],
     ["Users with visible users", contract({ users: true }), true, ["users"]],
@@ -589,6 +692,108 @@ describe("buildAccessUnits", () => {
       "read_in_контейнер_own",
     ]) {
       expect(sha256HexSync(text)).toBe(await sha256Hex(text))
+    }
+  })
+})
+
+describe("conditional publicRead policies (Р-D1-4)", () => {
+  it("public_read takes the builder, scope_read lets a published row past the tenant boundary, the write boundaries stay", async () => {
+    expect(
+      policySql(
+        await units([
+          contract({
+            scope: ORG_SCOPE,
+            publicRead: ["anonymous", "user"],
+            published: PUBLISHED,
+          }),
+        ])
+      )
+    ).toEqual([
+      `CREATE POLICY item_public_read ON public.item AS PERMISSIVE FOR SELECT TO anon, authenticated, simetra_command USING (${PUBLISHED_ROW});`,
+      `CREATE POLICY item_scope_delete ON public.item AS RESTRICTIVE FOR DELETE ${BOUNDED} USING (${ORG_BOUNDARY});`,
+      `CREATE POLICY item_scope_insert ON public.item AS RESTRICTIVE FOR INSERT ${BOUNDED} WITH CHECK (${ORG_BOUNDARY});`,
+      `CREATE POLICY item_scope_read ON public.item AS RESTRICTIVE FOR SELECT ${BOUNDED} USING ((${PUBLISHED_ROW}) OR (${ORG_BOUNDARY}));`,
+      `CREATE POLICY item_scope_update ON public.item AS RESTRICTIVE FOR UPDATE ${BOUNDED} USING (${ORG_BOUNDARY}) WITH CHECK (${ORG_BOUNDARY});`,
+    ])
+  })
+
+  it("authenticated: the session user condition is in public_read only, the left disjunct is the row literals", async () => {
+    const source = (await compile(adoptedSourcesDomain())).model!.contracts
+      .membershipSources[0]!
+    const sql = policySql(
+      await units(
+        [
+          contract({
+            scope: ORG_SCOPE,
+            publicRead: ["user"],
+            published: PUBLISHED,
+          }),
+        ],
+        { ...NO_RIGHTS, membershipSources: [source] }
+      )
+    )
+    expect(sql).toContain(
+      `CREATE POLICY item_public_read ON public.item AS PERMISSIVE FOR SELECT TO authenticated, simetra_command USING (${PUBLISHED_ROW} AND ${VALID_USER});`
+    )
+    expect(sql).toContain(
+      `CREATE POLICY item_scope_read ON public.item AS RESTRICTIVE FOR SELECT ${BOUNDED} USING ((${PUBLISHED_ROW}) OR (${ORG_BOUNDARY}));`
+    )
+  })
+
+  it("the rights read policies come back, and a section renders its own columns", async () => {
+    // Р-D1-4: `<t>_read_*` повертаються незмінними — чернетку читають за
+    // правами; ТЧ — той самий будівник над своїми колонками-копіями.
+    const domain = (await compile(policyDomain())).model!
+    const conditional = domain.contracts.access.map((a) =>
+      a.table.name === "task"
+        ? { ...a, publicRead: ["user" as const], published: PUBLISHED }
+        : a.table.name === CHECKLIST_TABLE
+          ? {
+              ...a,
+              publicRead: ["user" as const],
+              published: SECTION_PUBLISHED,
+            }
+          : a
+    )
+    const rebuilt = buildAccessUnits(
+      conditional,
+      domain.contracts,
+      domain.physical,
+      domain.project.database.provider,
+      domain.project.name,
+      await loadSqlParser()
+    )
+    const policiesIn = (units: readonly SqlUnit[], table: string) =>
+      policiesOf({ ...domain, sqlUnits: [...units] }, table)
+    for (const [table, published] of [
+      ["task", PUBLISHED_ROW],
+      [CHECKLIST_TABLE, "head_published AND NOT head_deletion_mark"],
+    ] as const) {
+      const before = policiesOf(domain, table)
+      const after = policiesIn(rebuilt, table)
+      const reads = (policies: Map<string, string>) =>
+        [...policies].filter(([name]) => name.startsWith(`${table}_read_`))
+      expect(reads(before).length).toBeGreaterThan(0)
+      expect(reads(after)).toEqual(reads(before))
+      const access = conditional.find((a) => a.table.name === table)!
+      const boundary = tenantBoundary(access.scope!)
+      expect(after.get(`${table}_scope_read`)).toBe(
+        before
+          .get(`${table}_scope_read`)!
+          .replace(
+            `USING (${boundary})`,
+            `USING ((${published}) OR (${boundary}))`
+          )
+      )
+      expect(after.get(`${table}_public_read`)).toContain(
+        `USING (${published} AND ${VALID_USER});`
+      )
+      // Межі запису й політики запису — ті самі.
+      for (const [name, sql] of before) {
+        if (name.startsWith(`${table}_read_`) || name === `${table}_scope_read`)
+          continue
+        expect(after.get(name), name).toBe(sql)
+      }
     }
   })
 })

@@ -41,11 +41,18 @@ import {
   type RightsFunctionContracts,
 } from "./functions"
 import {
+  renderCondition,
   rightsPredicates,
   type PredicateCondition,
+  type RightsCondition,
   type RightsPredicate,
 } from "./predicates"
-import { publicReadNeedsUser } from "./public-read"
+import {
+  opensEveryRow,
+  opensPublishedRows,
+  publicReadConditions,
+  publicReadNeedsUser,
+} from "./public-read"
 import { must } from "./references"
 
 /**
@@ -237,7 +244,14 @@ function branch(
   if (rows.length === 0) return undefined
   const { contracts } = context
   const { scope } = access
-  const publicRead = access.publicRead.length > 0
+  const needsUser = publicReadNeedsUser(access, context.sessionUser)
+  const member =
+    scope === undefined
+      ? undefined
+      : `EXISTS (SELECT 1 FROM ${call(F.scopesOf, [USER])} s WHERE s.scope_kind_id = ${uuidLiteral(scope.scopeKindId)} AND s.scope = ${row(scope.carrier)})`
+  // Опублікований рядок і лише рядок `public_read` (виняток умовного об'єкта).
+  const publishedOnly = () =>
+    `${publicReadMatch(publicReadConditions(access, context.sessionUser), access, context.subject)} AND e.policy = ${sqlLiteral(accessPolicyNames(access.table).publicRead)}`
   // Скоуп рядка задає вид скоупу об'єкта й колонка скоупу рядка;
   // нескоуплений об'єкт питає лише глобальний адміністратор (спека прав §5.1).
   const request: AnalysisScope =
@@ -253,14 +267,16 @@ function branch(
     // видно кожному — пояснення фактів `p_user` не розкриває; крім
     // `authenticated`: його `carrier_match` — дійсність `p_user`, і без цієї
     // перевірки адміністратор A дізнався б, чи існує й чи дійсний користувач B.
+    // Умовний — так само, але лише опублікований рядок і лише рядок
+    // `public_read`: рядки прав і межі несли б права, носії й ролі `p_user`
+    // поза скоупом рядка, а чернетку поза скоупом не видно, як випадковий id.
     // Нескоуплений об'єкт питає лише глобальний адміністратор, якому видно
     // всіх користувачів.
-    ...(scope !== undefined &&
-    (!publicRead || publicReadNeedsUser(access, context.sessionUser))
-      ? [
-          `EXISTS (SELECT 1 FROM ${call(F.scopesOf, [USER])} s WHERE s.scope_kind_id = ${uuidLiteral(scope.scopeKindId)} AND s.scope = ${row(scope.carrier)})`,
-        ]
-      : []),
+    ...(member === undefined || (opensEveryRow(access) && !needsUser)
+      ? []
+      : opensPublishedRows(access) && !needsUser
+        ? [`(${member} OR (${publishedOnly()}))`]
+        : [member]),
     // Пояснюється лише рядок, який бачить сам викликач (спека прав §5.1): інакше
     // адміністратор без `read` дізнався б носії рядка з `carrier_match`.
     visibility(explainRows(access, rights, main, context, CALLER)),
@@ -303,22 +319,33 @@ function explainRows(
 ): ExplainRow[] {
   const names = accessPolicyNames(access.table)
   const publicRead = access.publicRead.length > 0
+  const everyRow = opensEveryRow(access)
   const rows: ExplainRow[] = []
   const { scope } = access
   // Межі — ті самі умови, що вирішують, чи `buildAccessUnits` ставить
   // політику межі: інакше пояснення назвало б політику, якої немає.
-  if (scope !== undefined && !publicRead) {
+  if (scope !== undefined && !everyRow) {
+    const boundary = scopeSetMatch(
+      contracts,
+      scope,
+      row(scope.carrier),
+      subject
+    )
     rows.push({
       policy: names.scopeRead,
       kind: "restrictive",
       extent: null,
       hasRight: "TRUE",
-      carrierMatch: scopeSetMatch(
-        contracts,
-        scope,
-        row(scope.carrier),
-        subject
-      ),
+      // Лівий диз'юнкт — той самий, що в політиці: лише умови рядка.
+      carrierMatch: opensPublishedRows(access)
+        ? `(${publicReadMatch(
+            publicReadConditions(access, sessionUser).filter(
+              (c) => c.kind === "rowLiteral"
+            ),
+            access,
+            subject
+          )}) OR ${boundary}`
+        : boundary,
       roles: NO_ROLES,
     })
   }
@@ -343,14 +370,18 @@ function explainRows(
       kind: "permissive",
       extent: null,
       hasRight: "TRUE",
-      // Та сама умова, що в політиці (`publicReadNeedsUser`): недійсний
+      // Та сама умова, що в політиці (`publicReadConditions`): недійсний
       // користувач рядків `authenticated`-об'єкта не бачить.
-      carrierMatch: publicReadNeedsUser(access, sessionUser)
-        ? `${subject.valid} IS NOT NULL`
-        : "TRUE",
+      carrierMatch: publicReadMatch(
+        publicReadConditions(access, sessionUser),
+        access,
+        subject
+      ),
       roles: NO_ROLES,
     })
-  } else if (
+  }
+  if (
+    !everyRow &&
     rights !== undefined &&
     rights.actions.some((a) => a.action === "read")
   ) {
@@ -376,6 +407,26 @@ function explainRows(
     }
   }
   return rows
+}
+
+/**
+ * Умови будівника публічного читання для `subject`: `validUser` — дійсність
+ * його користувача, як `current_user_id()` у політиці; умови рядка — над
+ * рядком `r` тим самим рендером, що й політика.
+ */
+function publicReadMatch(
+  conditions: readonly RightsCondition[],
+  access: AccessContract,
+  subject: Subject
+): string {
+  if (conditions.length === 0) return "TRUE"
+  return conditions
+    .map((c) =>
+      c.kind === "validUser"
+        ? `${subject.valid} IS NOT NULL`
+        : renderCondition(c, "r", access.published)
+    )
+    .join(" AND ")
 }
 
 /**

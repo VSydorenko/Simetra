@@ -38,6 +38,7 @@ import {
 import type { PresentationBlock } from "./presentation"
 import { hasRightsFunctions, hasVisibleUsers } from "./rights/functions"
 import { carrierColumn } from "./rights/predicates"
+import { opensEveryRow } from "./rights/public-read"
 import { triggeredRelationTable } from "./rights/relation-table"
 import { sha256HexSync } from "./sha256"
 
@@ -137,23 +138,26 @@ export function kernelHashOf(operations: RuntimeObject["operations"]): string {
 }
 
 // Роль — з `access.publicRead` (призначення ролей запиту): `anonymous` є лише
-// в `anon`, який відкриває обидві ролі; решта — `authenticated`.
+// в `anon`, який відкриває обидві ролі; решта — `authenticated`. Лише
+// `publicRead`, що відкриває всі рядки: умовний клієнт вважав би відкритими й
+// чернетки.
 function publicReadOf(
   model: CompiledModel,
   objectId: string,
   table: QualifiedName
 ): Pick<RuntimeObject, "publicRead"> {
   // Основна таблиця: ТЧ того ж об'єкта мають власні записи доступу.
-  const purposes =
-    model.contracts.access.find(
-      (a) =>
-        a.objectId === objectId &&
-        a.table.schema === table.schema &&
-        a.table.name === table.name
-    )?.publicRead ?? []
-  if (purposes.length === 0) return {}
+  const access = model.contracts.access.find(
+    (a) =>
+      a.objectId === objectId &&
+      a.table.schema === table.schema &&
+      a.table.name === table.name
+  )
+  if (access === undefined || !opensEveryRow(access)) return {}
   return {
-    publicRead: purposes.includes("anonymous") ? "anon" : "authenticated",
+    publicRead: access.publicRead.includes("anonymous")
+      ? "anon"
+      : "authenticated",
   }
 }
 

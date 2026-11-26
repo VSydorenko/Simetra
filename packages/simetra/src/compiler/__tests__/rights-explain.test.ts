@@ -209,12 +209,44 @@ function constant(node: unknown): string | null {
  * дійсний користувач, як `current_user_id()` у політиці.
  */
 function validUser(model: CompiledModel): unknown {
+  return exprTree(validUserSql(model))
+}
+
+function validUserSql(model: CompiledModel): string {
   const users = model.contracts.users!
   const key = users.keyColumn
-  return exprTree(
-    `(SELECT u.${key} FROM public.${users.table.name} u WHERE u.${key} = ${P("p_user")} AND NOT u.${users.invalidColumn}) IS NOT NULL`
-  )
+  return `(SELECT u.${key} FROM public.${users.table.name} u WHERE u.${key} = ${P("p_user")} AND NOT u.${users.invalidColumn}) IS NOT NULL`
 }
+
+/**
+ * Пояснення над контрактами доступу, де `Task` має умову публікації:
+ * `published` будівник контрактів ще не заповнює (Р-D1-2), тож контракт —
+ * вручну, а генератор той самий.
+ */
+function withPublishedTask(domain: CompiledModel): CompiledModel {
+  const units = buildExplainUnits(
+    {
+      ...domain.contracts,
+      scopeSetFunctions: [],
+      access: domain.contracts.access.map((a) =>
+        a.table.name === "task"
+          ? { ...a, published: { column: "published", mark: "deletion_mark" } }
+          : a
+      ),
+      kindLabels: new Map(
+        domain.contracts.rights.map((c) => [c.objectId, c.kindLabel])
+      ),
+    },
+    domain.physical,
+    domain.project.database.provider,
+    domain.project.name,
+    parse
+  )
+  return { ...domain, sqlUnits: units }
+}
+
+const PUBLISHED_ROW = "r.published AND NOT r.deletion_mark"
+const TASK_MEMBER = `EXISTS (SELECT 1 FROM simetra.rights_scopes_of(${P("p_user")}) s WHERE s.scope_kind_id = '${ORG_KIND_ID}'::uuid AND s.scope = r.org_id)`
 
 /** Рядки пояснення гілки — гілки підзапиту `CROSS JOIN LATERAL (…) e`. */
 function rowsOf(branch: Select): Row[] {
@@ -668,6 +700,70 @@ describe("rights_explain", () => {
     expect(where[4]).toEqual(
       exprTree("(TRUE AND (SELECT simetra.current_user_id()) IS NOT NULL)")
     )
+  })
+
+  // Р-D1-6: рядок `public_read` — будівник для `p_user`, `scope_read` — лівий
+  // диз'юнкт умов рядка OR межа, рядки прав — як без `publicRead`.
+  describe("a conditional public read object", () => {
+    const boundary = member(
+      `simetra.rights_scope_set_of(${P("p_user")}, '${ORG_KIND_ID}'::uuid)`,
+      "org_id"
+    )
+    const readRows = () =>
+      rowsOf(branchOf(model, "task")!).filter((r) =>
+        r.policy.startsWith("task_read_")
+      )
+
+    it("anon: the rows, and outside the row's scope only the public_read row of a published row", async () => {
+      const open = compiled(
+        await compile(policyDomain({ [TASK_FILE]: { publicRead: "anon" } }))
+      )
+      const branch = branchOf(withPublishedTask(open), "task")!
+      expect(readRows().length).toBeGreaterThan(0)
+      expect(rowsOf(branch)).toEqual([
+        {
+          policy: "task_scope_read",
+          kind: "restrictive",
+          extent: null,
+          hasRight: TRUE,
+          carrierMatch: exprTree(`(${PUBLISHED_ROW}) OR ${boundary}`),
+          roles: NO_ROLES,
+        },
+        {
+          policy: "task_public_read",
+          kind: "permissive",
+          extent: null,
+          hasRight: TRUE,
+          carrierMatch: exprTree(PUBLISHED_ROW),
+          roles: NO_ROLES,
+        },
+        ...readRows(),
+      ])
+      expect(conjuncts(branch.whereClause)[3]).toEqual(
+        exprTree(
+          `(${TASK_MEMBER} OR (${PUBLISHED_ROW} AND e.policy = 'task_public_read'))`
+        )
+      )
+    })
+
+    it("authenticated with current_user_id(): validUser of p_user, and p_user always in the row's scope", async () => {
+      const open = compiled(
+        await compile(
+          policyDomain({ [TASK_FILE]: { publicRead: "authenticated" } })
+        )
+      )
+      const branch = branchOf(withPublishedTask(open), "task")!
+      const rows = rowsOf(branch)
+      // Лівий диз'юнкт межі — без `validUser`, як у політиці.
+      expect(rowNamed(rows, "task_scope_read").carrierMatch).toEqual(
+        exprTree(`(${PUBLISHED_ROW}) OR ${boundary}`)
+      )
+      expect(rowNamed(rows, "task_public_read").carrierMatch).toEqual(
+        exprTree(`${PUBLISHED_ROW} AND ${validUserSql(open)}`)
+      )
+      expect(rows.slice(2)).toEqual(readRows())
+      expect(conjuncts(branch.whereClause)[3]).toEqual(exprTree(TASK_MEMBER))
+    })
   })
 
   it("registers and constants have no branch", async () => {
