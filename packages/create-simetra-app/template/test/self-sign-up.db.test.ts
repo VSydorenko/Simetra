@@ -445,6 +445,38 @@ describe("self sign-up and client rights (D5 task 6)", () => {
     )
   }, 60_000)
 
+  it("does not link a verified provider to an unverified local record with a password", async () => {
+    const email = "oauth-verified-to-unverified@example.test"
+    const record = await unverifiedRecord(
+      email,
+      "verified-provider-password-0123456789"
+    )
+    const linked = await signInWithProvider(openAuth, {
+      sub: "provider-verified-to-unverified",
+      email,
+      emailVerified: true,
+    })
+    // Перевірена адреса провайдера не підтверджує запис, який зареєстрував
+    // хтось інший: зв'язування вимагає перевіреної адреси й у запису
+    // (`requireLocalEmailVerified`, типово `true`)
+    expect(linked).toMatchObject({
+      status: 401,
+      body: { code: "OAUTH_LINK_ERROR", message: "account not linked" },
+    })
+    expect((await accountsOf(record.id)).map((a) => a.providerId)).toEqual([
+      "credential",
+    ])
+    expect(
+      await query<{ emailVerified: boolean }>(
+        'SELECT "emailVerified" FROM better_auth."user" WHERE id = $1',
+        [record.id]
+      )
+    ).toEqual([{ emailVerified: false }])
+    expect((await sessionTokens(record.id)).sort()).toEqual(
+      [...record.tokens].sort()
+    )
+  }, 60_000)
+
   it("lets two clients read and change only their own rows (І-11)", async () => {
     const a = String(
       (
