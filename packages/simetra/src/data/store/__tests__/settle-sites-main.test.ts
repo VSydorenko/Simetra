@@ -1378,13 +1378,101 @@ const MAIN_APPLY_THROWS: Record<string, readonly string[]> = {
 }
 
 describe("keys apply throws: main versus the accepted exception path", () => {
-  it.each(Object.keys(MAIN_APPLY_THROWS))("%s", (name) => {
-    expect(EXPECTED[name]).not.toEqual(MAIN_APPLY_THROWS[name])
-    // Стало: запитувач K4 дізнається одразу; хвіст і приймач логують у `listener-failed`.
-    expect(EXPECTED[name]!.some((l) => l === "log listener-failed")).toBe(true)
+  const was = (name: string) => MAIN_APPLY_THROWS[name]!
+  const now = (name: string) => EXPECTED[name]!
+  const count = (lines: readonly string[], line: string) =>
+    lines.filter((l) => l === line).length
+
+  it("K4: the requester is told at once, not left to the deadline", () => {
+    const name = "write-confirm apply throws"
+    expect(was(name).at(-1)).toBe("requester waiting")
+    expect(now(name).at(-1)).toBe("requester told")
   })
-  it("tells the requester at once (K4)", () => {
-    expect(EXPECTED["write-confirm apply throws"]).toContain("requester told")
+
+  it("K3: the exception is logged, main logged nothing", () => {
+    const name = "tail apply throws"
+    expect(count(was(name), "log listener-failed")).toBe(0)
+    expect(count(now(name), "log listener-failed")).toBe(1)
+  })
+
+  it("receiver: the log is in the write region, main logged it after the lease release", () => {
+    const name = "signal read apply throws"
+    const position = (lines: readonly string[]) => ({
+      log: lines.indexOf("log listener-failed"),
+      release: lines.indexOf("lease.release"),
+    })
+    expect(position(was(name)).log).toBeGreaterThan(position(was(name)).release)
+    expect(position(now(name)).log).toBeLessThan(position(now(name)).release)
+  })
+
+  it("receiver batch of two objects: the log moved the same way", () => {
+    const name = "signal batch of two objects: apply throws"
+    const first = (lines: readonly string[]) =>
+      lines.indexOf("log listener-failed") - lines.indexOf("lease.release")
+    expect(first(was(name))).toBeGreaterThan(0)
+    expect(first(now(name))).toBeLessThan(0)
+  })
+})
+
+/*
+ * Таблиця як у §5.5. Виведені перевірки нижче згортають значення, яких жоден
+ * код не розрізняє (`confirms` view-stable проти rows, `failureCounts` never
+ * проти by-reason), тож таблицю прикріплено до тексту спеки літералом тут.
+ */
+describe("the kind table as in §5.5", () => {
+  it("is pinned literally", () => {
+    expect(FLIGHT_KIND_RULES).toEqual({
+      load: {
+        reasons: ["mount", "user", "retry", "requirement"],
+        confirms: "view-with-composition",
+        successMovesDeadline: true,
+        failureCounts: "if-loaded",
+        liftsBanners: true,
+        setsBanners: false,
+        discarded: "pause-then-retry",
+      },
+      page: {
+        reasons: ["user", "retry"],
+        confirms: "own-page",
+        successMovesDeadline: false,
+        failureCounts: "never",
+        liftsBanners: false,
+        setsBanners: false,
+        discarded: "pause-then-retry",
+      },
+      reread: {
+        reasons: ["requirement", "interval", "retry", "user", "signal"],
+        confirms: "view-stable",
+        successMovesDeadline: true,
+        failureCounts: "always",
+        liftsBanners: false,
+        setsBanners: true,
+        discarded: "pause-then-deadline",
+      },
+      keys: {
+        reasons: ["signal", "requirement", "write-confirm"],
+        confirms: "rows",
+        successMovesDeadline: false,
+        failureCounts: "by-reason",
+        liftsBanners: false,
+        setsBanners: false,
+        discarded: "nothing",
+      },
+      service: {
+        reasons: ["requirement", "interval"],
+        confirms: "service",
+        successMovesDeadline: true,
+        failureCounts: "never",
+        liftsBanners: null,
+        setsBanners: false,
+        discarded: "none",
+      },
+    })
+    expect(KEYS_FAILURE).toEqual({
+      signal: "composition-unconfirmed",
+      requirement: "requirement-budget",
+      "write-confirm": "reply-to-requester",
+    })
   })
 })
 
