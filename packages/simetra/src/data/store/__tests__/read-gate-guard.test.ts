@@ -768,7 +768,7 @@ const PLACES: readonly Group[] = [
   {
     inventory: false,
     reason:
-      "Носій: властивість контексту передає запит шлюзу чи стан у модуль, що його кличе; місце виклику звітує саме (`via`). `scheduler.closed` — знімок закриття або токен сесії для таймера (Р-SK1-9)",
+      "Носій: властивість контексту передає запит шлюзу чи стан у модуль, що його кличе; місце виклику звітує саме (`via`). `scheduler.closed` — запит умови `closed` для таймера (Р-SK1-9)",
     sites: [
       "core.ts::createCore.batcher.staleObject gate.staleObject",
       "core.ts::createCore.registry.isStale staleObjects",
@@ -777,7 +777,7 @@ const PLACES: readonly Group[] = [
       "core.ts::createCore.overlay.isStale staleObjects",
       "core.ts::createCore.tabHidden gate.tabHidden",
       "core.ts::createCore.scheduler.visible gate.tabHidden",
-      "core.ts::createCore.scheduler.closed token",
+      "core.ts::createCore.scheduler.closed gate.closed",
       "core.ts::createCore.source.settledPastBound gate.settledPastBound",
     ],
   },
@@ -824,8 +824,8 @@ const PLACES: readonly Group[] = [
   {
     inventory: false,
     reason:
-      "Токен охороняє не-читальні ефекти закритої сесії: `staleClient` не ставить позначку `commit`-ом і не просить версію (запит версії S1 далі судить `admit`); кандидат на `gate.closed()`",
-    sites: ["core.ts::createCore.core.staleClient token"],
+      "Запит умови `closed` поза `admit` для відмови мутації `stale-client` (публічна ознака, Р-SK1-9): закрита сесія не ставить позначку `commit`-ом і не просить версію (запит версії S1 далі судить `admit`)",
+    sites: ["core.ts::createCore.core.staleClient gate.closed"],
   },
   {
     inventory: false,
@@ -940,9 +940,9 @@ const PLACES: readonly Group[] = [
       "core.ts::createCore.schedulerDue gate.staleObject",
       "core.ts::createCore.rightsDueAt gate.tabHidden",
       "scheduler.ts::createScheduler.fire gate.tabHidden via SchedulerContext.visible",
-      "scheduler.ts::createScheduler.fire token via SchedulerContext.closed",
+      "scheduler.ts::createScheduler.fire gate.closed via SchedulerContext.closed",
       "scheduler.ts::createScheduler.plan gate.tabHidden via SchedulerContext.visible",
-      "scheduler.ts::createScheduler.plan token via SchedulerContext.closed",
+      "scheduler.ts::createScheduler.plan gate.closed via SchedulerContext.closed",
     ],
   },
   {

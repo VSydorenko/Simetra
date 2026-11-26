@@ -1920,7 +1920,10 @@ export function createCore(options: {
     // Запит шлюзу для таймера (Р-SK1-8, Р-SK1-9): прихована вкладка таймера
     // не ставить і не спрацьовує.
     visible: () => !gate.tabHidden(),
-    closed: () => closed !== undefined || !session.token().valid,
+    // Запит умови шлюзу для таймера (Р-SK1-9): `core.close` ставить знімок
+    // закриття й робить токен недійсним без коду між ними, тож окремої
+    // перевірки знімка не треба (Р-SK1-5).
+    closed: () => gate.closed(),
     dueAt: schedulerDue,
     tick() {
       // Запит шлюзу для таймера (Р-SK1-9): охороняє не-читальні ефекти такту —
@@ -2214,7 +2217,7 @@ export function createCore(options: {
     },
     staleClient(object) {
       const o = objects.get(object)
-      if (o === undefined || !session.token().valid) return
+      if (o === undefined || gate.closed()) return
       const token = session.token()
       let turned = false
       session.commit(
