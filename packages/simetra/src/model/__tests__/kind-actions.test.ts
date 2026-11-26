@@ -6,7 +6,12 @@ import {
   informationRegisterSchema,
 } from "../schemas"
 import { KIND_REGISTRY } from "../kinds/registry"
-import { actionRequires, closeRequires } from "../kinds/actions"
+import {
+  STANDARD_ACTIONS,
+  actionRequires,
+  closeRequires,
+} from "../kinds/actions"
+import { parsePublicRead } from "../schemas/public-read"
 
 const ID = "3f2b8a52-6d1e-4c0a-9b7e-5a1c2d3e4f50"
 const base = (kind: string) => ({ id: ID, kind, name: "Sample" })
@@ -120,5 +125,81 @@ describe("actions(obj)", () => {
     expect(KIND_REGISTRY.Catalog.rightsBinding).toBe(true)
     expect(KIND_REGISTRY.Document.rightsBinding).toBe(true)
     expect(KIND_REGISTRY.Document.rightsContainer).toBeUndefined()
+  })
+})
+
+describe("conditional publicRead (Р-D1-1, Р-D1-8)", () => {
+  const conditional = catalogSchema.parse({
+    ...base("Catalog"),
+    publicRead: { role: "anon", published: true },
+  })
+  const columnNames = (obj: unknown) =>
+    KIND_REGISTRY.Catalog.standardColumns(obj).map((c) => c.logicalName)
+
+  it("the schema accepts the string form and the object form, nothing else", () => {
+    expect(
+      catalogSchema.parse({ ...base("Catalog"), publicRead: "anon" }).publicRead
+    ).toBe("anon")
+    expect(conditional.publicRead).toEqual({ role: "anon", published: true })
+    for (const publicRead of [
+      { role: "anon", published: false },
+      { role: "anon" },
+      { role: "service", published: true },
+      { role: "anon", published: true, extra: 1 },
+    ]) {
+      expect(
+        catalogSchema.safeParse({ ...base("Catalog"), publicRead }).success,
+        JSON.stringify(publicRead)
+      ).toBe(false)
+    }
+  })
+
+  it("the column and the actions exist only for the conditional form", () => {
+    const published = KIND_REGISTRY.Catalog.standardColumns(conditional).find(
+      (c) => c.logicalName === "published"
+    )
+    expect(published).toMatchObject({
+      physicalName: "published",
+      type: { type: "Boolean" },
+      notNull: true,
+      default: "false",
+    })
+    for (const publicRead of [undefined, "anon"]) {
+      const plain = catalogSchema.parse({ ...base("Catalog"), publicRead })
+      expect(columnNames(plain)).not.toContain("published")
+      expect(
+        KIND_REGISTRY.Catalog.actions(plain).map((a) => a.name)
+      ).not.toContain("publish")
+    }
+    const actions = KIND_REGISTRY.Catalog.actions(conditional)
+    expect(actions.map((a) => [a.name, actionRequires(a)]).slice(-2)).toEqual([
+      ["publish", ["read"]],
+      ["unpublish", ["read"]],
+    ])
+    expect(actions.find((a) => a.name === "publish")!.transition).toEqual({
+      column: "published",
+      from: false,
+      to: true,
+    })
+    expect(actions.find((a) => a.name === "unpublish")!.transition).toEqual({
+      column: "published",
+      from: true,
+      to: false,
+    })
+    expect(STANDARD_ACTIONS).toEqual(
+      expect.arrayContaining(["publish", "unpublish"])
+    )
+  })
+
+  it("parsePublicRead gives the role and the flag of both forms", () => {
+    expect(parsePublicRead(undefined)).toBeUndefined()
+    expect(parsePublicRead("authenticated")).toEqual({
+      role: "authenticated",
+      conditional: false,
+    })
+    expect(parsePublicRead({ role: "anon", published: true })).toEqual({
+      role: "anon",
+      conditional: true,
+    })
   })
 })

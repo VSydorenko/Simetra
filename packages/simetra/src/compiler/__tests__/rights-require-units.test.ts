@@ -4,6 +4,11 @@ import {
   RIGHTS_REQUIRE_ERROR,
   type SqlFunctionDeclaration,
 } from "simetra/model"
+import type { AccessContract } from "../contracts"
+import { buildRequireUnits } from "../rights/require-units"
+import type { DeclaredFunction } from "../sql/declarations"
+import { loadSqlParser } from "../sql/parse"
+import { loadPlpgsqlParser } from "../sql/plpgsql"
 import { hasFixedBody } from "../sql/units"
 import { uuid } from "./helpers"
 import {
@@ -88,6 +93,73 @@ async function unitsOver(all: Map<string, string>, specs: Spec[]) {
 
 const units = (specs: Spec[], ...layers: Layer[]) =>
   unitsOver(withRoles(...layers), specs)
+
+/**
+ * Одиниці запобіжника над контрактами доступу, зміненими `patch`: `published`
+ * будівник контрактів ще не заповнює (Р-D1-2), тож контракт — вручну, а
+ * генератор той самий. Декларації — зі стану `explain` компіляції.
+ */
+async function unitsPatched(
+  specs: Spec[],
+  patch: (access: AccessContract) => AccessContract,
+  ...layers: Layer[]
+) {
+  const result = await compile(declare(withRoles(...layers), specs, true))
+  expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+  const model = result.model!
+  const declared = result.declaredFunctions!.flatMap(
+    (state): DeclaredFunction[] => {
+      if (state.check === undefined) return []
+      const unit = model.sqlUnits.find(
+        (u) =>
+          u.class === "function" &&
+          u.schema === state.schema &&
+          u.name === state.name
+      )!
+      return [
+        {
+          declaration: {
+            function: { schema: state.schema, name: state.name },
+            callers: [...state.callers],
+            check: state.check,
+          },
+          file: FUNCTIONS,
+          pointer: "",
+          unit: { ...unit, file: unit.file!, line: unit.line! },
+          key: { schema: state.schema, name: state.name },
+        },
+      ]
+    }
+  )
+  const rebuild = async (access: (a: AccessContract) => AccessContract) =>
+    buildRequireUnits({
+      declared,
+      objects: model.objects,
+      contracts: {
+        ...model.contracts,
+        access: model.contracts.access.map(access),
+      },
+      physical: model.physical,
+      provider: model.project.database.provider,
+      module: model.project.name,
+      units: model.sqlUnits.filter((u) => u.generator !== "rightsRequire"),
+      parse: await loadSqlParser(),
+      plpgsql: await loadPlpgsqlParser(),
+    })
+  // Перебудова без зміни дає рівно одиниці компіляції: оснастка вірна.
+  expect((await rebuild((a) => a)).map((u) => u.sql)).toEqual(
+    model.sqlUnits
+      .filter((u) => u.generator === "rightsRequire")
+      .map((u) => u.sql)
+  )
+  return rebuild(patch)
+}
+
+/** Основна таблиця `Task` з умовою публікації (`AccessContract.published`). */
+const publishedTask = (a: AccessContract): AccessContract =>
+  a.table.name === "task"
+    ? { ...a, published: { column: "published", mark: "deletion_mark" } }
+    : a
 
 const functionOf = (all: { class: string; sql: string }[], name: string) =>
   all.find((u) => u.class === "function" && u.sql.includes(`simetra.${name}(`))
@@ -367,6 +439,45 @@ describe("rights_require / rights_require_scope generator", () => {
       ).toBe(
         "EXISTS (SELECT 1 FROM public.task r WHERE r.id = p_row AND ((r.org_id = ANY (ARRAY(SELECT simetra.rights_any('read', 'task'))))))"
       )
+    })
+
+    // Р-D1-5: умовний `publicRead` — RLS пари user/command: опублікований
+    // рядок (умова `<t>_public_read`) OR межа тенанта з правом `read`; пара з
+    // `service` — лише права з межею, як об'єкт без `publicRead`.
+    it("conditional publicRead read of a user-only pair is the published row or the tenant boundary with the rights", async () => {
+      const plain = await units([task("read")])
+      const rightsBranch = branches(functionOf(plain, "rights_require")).get(
+        "task/read"
+      )!
+      const head = `EXISTS (SELECT 1 FROM public.task r WHERE r.id = p_row AND ${TENANT_ROW} AND (`
+      expect(rightsBranch.startsWith(head)).toBe(true)
+      const rights = rightsBranch.slice(head.length, -"))".length)
+      const publicRead = { [TASK_FILE]: { publicRead: "authenticated" } }
+      const userOnly = await unitsPatched(
+        [
+          { ...task("read"), callers: ["user", "command"] },
+          { ...task("update"), callers: ["user"] },
+        ],
+        publishedTask,
+        publicRead
+      )
+      expect(
+        branches(functionOf(userOnly, "rights_require")).get("task/read")
+      ).toBe(
+        `EXISTS (SELECT 1 FROM public.task r WHERE r.id = p_row AND ((r.published AND NOT r.deletion_mark AND (SELECT simetra.current_user_id()) IS NOT NULL) OR (${TENANT_ROW} AND (${rights}))))`
+      )
+      // Дія, крім читання, — за предикатами з межею, як досі.
+      expect(
+        branches(functionOf(userOnly, "rights_require")).get("task/update")
+      ).toContain(`AND ${TENANT_ROW} AND (`)
+      const service = await unitsPatched(
+        [task("read")],
+        publishedTask,
+        publicRead
+      )
+      expect(
+        branches(functionOf(service, "rights_require")).get("task/read")
+      ).toBe(rightsBranch)
     })
 
     // Межі тенанта читання `publicRead` не має (політики `scope_read` нема), а

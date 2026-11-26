@@ -1,6 +1,16 @@
 import type { AlterTableCmd, Node } from "libpg-query"
-import { unitIdentity, type SqlParser } from "simetra/compiler"
-import { quoteIdent, type CatalogModel, type CatalogTable } from "simetra/model"
+import {
+  accessPolicyNames,
+  unitIdentity,
+  type SqlParser,
+} from "simetra/compiler"
+import {
+  deletionMarkColumn,
+  publishedColumn,
+  quoteIdent,
+  type CatalogModel,
+  type CatalogTable,
+} from "simetra/model"
 import type {
   EngineAction,
   EngineDiagnostic,
@@ -626,6 +636,93 @@ export function foreignChanges(
   return out
 }
 
+/** Ідентифікатори тексту: рядкові літерали знято, ідентифікатор у лапках — як є, без лапок — у нижньому регістрі. */
+function identifiersOf(text: string): Set<string> {
+  const out = new Set<string>()
+  for (const m of text
+    .replace(/'(?:[^']|'')*'/g, " ")
+    .matchAll(/"((?:[^"]|"")+)"|([A-Za-z_][A-Za-z0-9_$]*)/g))
+    out.add(m[1] !== undefined ? m[1].replace(/""/g, '"') : m[2]!.toLowerCase())
+  return out
+}
+
+/** Частина `USING (…)` тексту політики; `undefined` — вираз не задано. */
+function usingOf(sql: string): string | undefined {
+  const at = sql.search(/\bUSING\b/i)
+  return at < 0 ? undefined : sql.slice(at + "USING".length)
+}
+
+/**
+ * Id кроків двигуна, що лишають `<t>_public_read` таблиці без умови
+ * публікації (Р-D1-14, «умовний → рядковий»): політика в `applied` у виразі
+ * `USING` читала колонку своєї таблиці (умова публікації), а нова дія
+ * створює чи перевизначає її з виразом без жодної колонки таблиці. Ключ —
+ * текст політики, а не колонка `published`: умову знімає зміна політики, і
+ * вона ж лишається за наявності нового реквізиту з тим самим фізичним
+ * іменем, коли жодного `DROP COLUMN` у плані немає. Дозвіл за id окремий
+ * від дозволу на видалення колонки: це інший крок. Зайвий дозвіл на хибній
+ * тривозі безпечний, тому розбір тексту тут навмисно грубий. `original` і
+ * `offset` — як у `foreignChanges`.
+ */
+export function conditionalToPlain(
+  actions: readonly Pick<
+    EngineAction,
+    | "verb"
+    | "sql"
+    | "produces"
+    | "destroys"
+    | "consumes"
+    | "consumed"
+    | "produced"
+  >[],
+  applied: CatalogModel | undefined,
+  offset: number,
+  original: (ref: EngineObjectRef) => EngineObjectRef = (ref) => ref
+): Set<string> {
+  const out = new Set<string>()
+  if (applied === undefined) return out
+  actions.forEach((action, i) => {
+    const refs = [...action.produced, redefined(action)].filter(
+      (r): r is EngineObjectRef =>
+        r !== undefined &&
+        r.kind === "policy" &&
+        r.table !== undefined &&
+        r.name === accessPolicyNames({ name: r.table }).publicRead
+    )
+    const now = usingOf(action.sql)
+    if (now === undefined) return
+    for (const ref of refs) {
+      const was = original(ref)
+      const table = applied.tables.find(
+        (t) => t.schema === was.schema && t.name === was.table
+      )
+      const unit = applied.units.find(
+        (u) =>
+          u.class === "policy" &&
+          u.identity ===
+            unitIdentity("policy", was.schema, was.table ?? "", was.name)
+      )
+      const before = unit === undefined ? undefined : usingOf(unit.sql)
+      if (table === undefined || before === undefined) continue
+      // Лише колонки публікації: інакше будь-який ідентифікатор виразу
+      // (`current_user_id`, `simetra`) збігся б із колонкою-реквізитом таблиці
+      // і рядкова політика `authenticated` лишилась би без дозволу. Копії в ТЧ
+      // мають ті самі фізичні імена (Р-D1-9).
+      const publication = new Set([
+        publishedColumn().physicalName,
+        deletionMarkColumn().physicalName,
+      ])
+      const columns = new Set(
+        table.columns.map((c) => c.name).filter((n) => publication.has(n))
+      )
+      const reads = (text: string) =>
+        [...identifiersOf(text)].some((id) => columns.has(id))
+      if (reads(before) && !reads(now)) out.add(stepId(offset + i))
+    }
+  })
+  return out
+}
+
 /**
  * Тип колонки з моделі: рядок `format_type()` розбирає той самий парсер, що
  * й оператор, тож обидва боки зводяться до одного дерева типу.
@@ -812,7 +909,11 @@ export function classifySteps(
   target: CatalogModel,
   parse: SqlParser,
   offset = 0,
-  o: { noReplacement?: ReadonlySet<string>; foreign?: ReadonlySet<string> } = {}
+  o: {
+    noReplacement?: ReadonlySet<string>
+    foreign?: ReadonlySet<string>
+    conditionalToPlain?: ReadonlySet<string>
+  } = {}
 ): PlanStep[] {
   const facts: Facts = {
     indexes: target.tables.flatMap((t) =>
@@ -845,7 +946,8 @@ export function classifySteps(
     // Виняток не перекриває втрату даних: `destructive` сюди не доходить.
     // Зняття чужого об'єкта — щонайменше послаблення з дозволом, а виняток
     // «заміна» для нього не діє
-    const foreign = o.foreign?.has(id) === true
+    const foreign =
+      o.foreign?.has(id) === true || o.conditionalToPlain?.has(id) === true
     const cls: StepClass = foreign
       ? base === "destructive"
         ? base

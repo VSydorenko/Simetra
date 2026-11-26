@@ -130,11 +130,36 @@
       }
     },
     "publicRead": {
-      "description": "API role that may read every row of the object: authenticated users or anonymous visitors. Absent means no public read.",
-      "type": "string",
-      "enum": [
-        "authenticated",
-        "anon"
+      "description": "API role that may read the object: authenticated users or anonymous visitors. A string opens every row; an object { role, published: true } opens only rows marked published. Absent means no public read.",
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "authenticated",
+            "anon"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "enum": [
+                "authenticated",
+                "anon"
+              ]
+            },
+            "published": {
+              "type": "boolean",
+              "const": true
+            }
+          },
+          "required": [
+            "role",
+            "published"
+          ],
+          "additionalProperties": false
+        }
       ]
     },
     "customActions": {

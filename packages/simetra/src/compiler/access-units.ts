@@ -3,9 +3,12 @@ import {
   PLATFORM_ROLES,
   PROVIDER_API_ROLES,
   PUBLIC_READ_PURPOSES,
+  deletionMarkColumn,
   isObjectTable,
   makeObjectName,
   objectTable,
+  parsePublicRead,
+  publishedColumn,
   quoteIdent,
   tabularParentColumn,
   toSnakeCase,
@@ -15,8 +18,10 @@ import {
   type Dml,
   type ObjectTable,
   type PhysicalSnapshot,
+  type PublicRead,
   type PublicReadRole,
   type RequestRolePurpose,
+  type StandardColumnDef,
 } from "simetra/model"
 import type { CompiledModel, CompiledScopeKind } from "./compile"
 import {
@@ -30,7 +35,6 @@ import {
   type RightsContract,
 } from "./contracts"
 import { compareStrings } from "./diagnostics"
-import { CURRENT_USER } from "./membership-functions"
 import {
   commandWriteColumns,
   roleFixedColumns,
@@ -51,11 +55,21 @@ import {
   rightsPredicates,
   type RightsPredicate,
 } from "./rights/predicates"
+import {
+  opensEveryRow,
+  opensPublishedRows,
+  publicReadConditions,
+  renderConditions,
+} from "./rights/public-read"
 import { sha256HexSync } from "./sha256"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 import { isDeclaredTable, sqlLiteral } from "./stages/model"
-import { standardColumn, styleFreeColumn } from "./standard-column"
+import {
+  findStandardColumn,
+  standardColumn,
+  styleFreeColumn,
+} from "./standard-column"
 import type { ParsedObject } from "./stages/files"
 
 /**
@@ -113,7 +127,12 @@ export function accessContracts(
         table.origin.part === undefined
       const users = objectId === usersObjectId
       const kind = KIND_REGISTRY[object.kind]
-      const published = main ? kind.publishedRead?.(object.data) : undefined
+      const published =
+        parsePublicRead((object.data as { publicRead?: PublicRead }).publicRead)
+          ?.conditional === true
+          ? publishedColumnsOf(table, physical, attributeCase)
+          : undefined
+      const publishedRead = main ? kind.publishedRead?.(object.data) : undefined
       const command = kind.commandWrites
         ? commandColumns(table, {
             attributeCase,
@@ -133,26 +152,29 @@ export function accessContracts(
           table: { schema: table.schema, name: table.name },
           ...(scope === undefined ? {} : { scope }),
           publicRead: publicReadPurposes(
-            (object.data as { publicRead?: PublicReadRole }).publicRead
+            parsePublicRead(
+              (object.data as { publicRead?: PublicRead }).publicRead
+            )?.role
           ),
+          ...(published === undefined ? {} : { published }),
           root: main && roots.has(objectId),
           // Похідних таблиць «Користувачі» з RLS не мають: `identities` —
           // службова таблиця без RLS (спека системної схеми).
           users,
           ...(withRights.has(objectId) ? { rights: { objectId } } : {}),
           ...(command === undefined ? {} : { command }),
-          ...(published === undefined
+          ...(publishedRead === undefined
             ? {}
             : {
                 publishedRead: {
                   stateColumn: physicalOf(
                     table,
                     object,
-                    published.stateColumn,
+                    publishedRead.stateColumn,
                     attributeCase
                   ),
-                  publishedState: published.publishedState,
-                  guestColumns: published.guestColumns.map((name) =>
+                  publishedState: publishedRead.publishedState,
+                  guestColumns: publishedRead.guestColumns.map((name) =>
                     physicalOf(table, object, name, attributeCase)
                   ),
                 },
@@ -218,36 +240,57 @@ function commandColumns(
 }
 
 /**
- * Чи відкриває `publicRead` рядки лише дійсному користувачу (спека прав §5.2):
- * `authenticated` — так, бо сесія з недійсним чи не прив'язаним користувачем
- * (`current_user_id()` — NULL) не відрізняється від гостя, а гостю об'єкт
- * закритий; `anon` — ні, гість і так читає. Без функції користувача
- * (`hasSessionUser`) дійсність судити нічим — рядки відкриті ролі запиту, як і
- * досі. Одне місце для політики й функції пояснення прав.
+ * Лівий диз'юнкт межі тенанта умовного `publicRead` (спека прав §5.2) — лише
+ * умови рядка будівника, без `validUser`: опублікований рядок межа пропускає
+ * кожній ролі політики, а дійсність користувача судить `<t>_public_read`.
  */
-export function publicReadNeedsUser(
-  contract: Pick<AccessContract, "publicRead">,
-  sessionUser: boolean
-): boolean {
-  return (
-    sessionUser &&
-    contract.publicRead.length > 0 &&
-    contract.publicRead.every((purpose) => purpose === "user")
+function publishedRow(contract: AccessContract, sessionUser: boolean): string {
+  return renderConditions(
+    publicReadConditions(contract, sessionUser).filter(
+      (c) => c.kind === "rowLiteral"
+    ),
+    contract.published
   )
 }
 
 /**
- * Умова `PERMISSIVE`-політики `publicRead`: функція запобіжника
- * (`simetra.rights_require`) бере її тим самим будівником для читання від
- * імені ролей цієї політики.
+ * Фізичні колонки умови публікації таблиці умовного об'єкта (Р-D1-2): у шапки
+ * — її стандартні колонки, у ТЧ — їхні копії (Р-D1-9). Копію впізнаємо за
+ * походженням (`copyOf` — колонка шапки), а не за іменем: реквізит ТЧ з тим
+ * самим іменем не копія, і політика читала б чуже значення. Таблиця без колонок
+ * — дефект компілятора: політика з умовою без колонки не побудується, а
+ * мовчазне пропускання таблиці відкрило б усі її рядки, тож кидаємо помилку,
+ * а не повертаємо порожнє.
  */
-export function publicReadUsing(
-  contract: Pick<AccessContract, "publicRead">,
-  sessionUser: boolean
-): string {
-  return publicReadNeedsUser(contract, sessionUser)
-    ? `${CURRENT_USER} IS NOT NULL`
-    : "true"
+function publishedColumnsOf(
+  table: ObjectTable,
+  physical: PhysicalSnapshot,
+  attributeCase: AttributeCase
+): NonNullable<AccessContract["published"]> {
+  const header = must(mainTableOf(physical, table.origin.objectId))
+  const isHeader =
+    table.origin.tabularSectionId === undefined &&
+    table.origin.part === undefined
+  const columnOf = (def: StandardColumnDef): string | undefined => {
+    const own = findStandardColumn(header, def, attributeCase)?.name
+    if (isHeader || own === undefined) return own
+    // Похідна таблиця (не ТЧ) копій не має — лишається без колонок.
+    if (table.origin.tabularSectionId === undefined) return undefined
+    return table.columns.find(
+      (c) =>
+        c.origin.copyOf?.table.schema === header.schema &&
+        c.origin.copyOf.table.name === header.name &&
+        c.origin.copyOf.column === own
+    )?.name
+  }
+  const column = columnOf(publishedColumn())
+  const mark = columnOf(deletionMarkColumn())
+  if (column === undefined || mark === undefined) {
+    throw new Error(
+      `internal: conditional public read of ${table.name} has no publication columns`
+    )
+  }
+  return { column, mark }
 }
 
 /**
@@ -480,8 +523,8 @@ export type ReadBoundary = "tenant" | "users"
 
 /**
  * The `RESTRICTIVE` read boundaries of a table (rights spec §5.2): `tenant`
- * for a scoped table without `publicRead`, `users` for a Users table when
- * users visibility is generated.
+ * for a scoped table whose `publicRead` does not open every row, `users` for
+ * a Users table when users visibility is generated.
  */
 export function readBoundaries(
   contract: AccessContract,
@@ -490,7 +533,9 @@ export function readBoundaries(
   // Одне джерело для політик читання й ознаки сигналу (спека П4-B §8.3):
   // інакше ознака могла б розійтися з тим, що насправді обмежує читання.
   const boundaries: ReadBoundary[] = []
-  if (contract.scope !== undefined && contract.publicRead.length === 0) {
+  // Умовний `publicRead` межу лишає: чернетку бачить лише свій тенант, а
+  // опублікований рядок межа пропускає лівим диз'юнктом (`buildAccessUnits`).
+  if (contract.scope !== undefined && !opensEveryRow(contract)) {
     boundaries.push("tenant")
   }
   if (visibleUsers && contract.users) boundaries.push("users")
@@ -603,6 +648,7 @@ export function buildAccessUnits(
       const names = accessPolicyNames(table)
       const policies: string[] = []
       const publicRead = contract.publicRead.length > 0
+      const everyRow = opensEveryRow(contract)
       const boundaries = readBoundaries(contract, visibleUsers)
       if (contract.scope !== undefined) {
         // Некорельована форма: множину скоупів планувальник обчислює раз на
@@ -613,10 +659,15 @@ export function buildAccessUnits(
           policies.push(
             policy(name, table, "RESTRICTIVE", command, bounded, clauses)
           )
-        // Об'єкт із `publicRead` свідомо відкриває всі рядки на читання
-        // (§6.8, спека прав §5.2), але межа запису від форми прав не залежить.
+        // Об'єкт із `publicRead` без умови свідомо відкриває всі рядки на
+        // читання (§6.8, спека прав §5.2), умовний — лише опубліковані поза
+        // межею; межа запису від форми прав не залежить.
         if (boundaries.includes("tenant")) {
-          restrict(names.scopeRead, "SELECT", { using: boundary })
+          restrict(names.scopeRead, "SELECT", {
+            using: opensPublishedRows(contract)
+              ? `(${publishedRow(contract, sessionUser)}) OR (${boundary})`
+              : boundary,
+          })
         }
         // Скоуп нового кореня — його власний `id`: межу нового тенанта дасть
         // право створення кореня (П4), а не множина моїх скоупів (спека прав §5.2).
@@ -658,7 +709,10 @@ export function buildAccessUnits(
               PLATFORM_ROLES.command,
             ],
             {
-              using: publicReadUsing(contract, sessionUser),
+              using: renderConditions(
+                publicReadConditions(contract, sessionUser),
+                contract.published
+              ),
             }
           )
         )
@@ -684,14 +738,15 @@ export function buildAccessUnits(
         )
       }
       // Без функцій прав політика, що їх кличе, не застосувалась би;
-      // `publicRead` відкриває всі рядки й без прав (спека прав §5.2).
+      // `publicRead` без умови відкриває всі рядки й без прав (спека прав §5.2),
+      // а чернетки умовного читають лише за правами.
       const rights =
         contract.rights === undefined
           ? undefined
           : rightsById.get(contract.rights.objectId)
       if (
         rightsOn &&
-        !publicRead &&
+        !everyRow &&
         rights?.actions.some((a) => a.action === "read") === true
       ) {
         const physicalTable = tableOf(physical, table)

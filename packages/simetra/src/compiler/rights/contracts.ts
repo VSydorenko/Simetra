@@ -291,6 +291,14 @@ function rightsContract(
             },
           }
         : {}),
+      ...(a.coupled
+        ? {
+            coupled: {
+              ...a.coupled,
+              column: must(physicalOf(a.coupled.column)[0]),
+            },
+          }
+        : {}),
       extents,
     })),
     ...custom.map(({ action, index }) => {

@@ -436,6 +436,8 @@ function callOf(
         params: [op.id, String(op.expectedVersion), String(op.mark)],
       }
     case "delete":
+    case "publish":
+    case "unpublish":
       return {
         text: `SELECT ${fn(target)}($1::uuid, $2::bigint) AS r`,
         params: [op.id, String(op.expectedVersion)],
@@ -549,7 +551,7 @@ async function checkTabularRows(
 /**
  * Чернетка хука «до» — та сама перевірка, що й вхід (спека П4 §6.5): ключі
  * поза чернеткою — `command.invalid`; значення перевіряє `encodeItem`.
- * Чернетка `markDeletion` порожня: позначку хук бачить у `ctx.mark`.
+ * Чернетка `markDeletion`, `publish` і `unpublish` порожня: позначку хук бачить у `ctx.mark`.
  */
 function checkDraft(
   tx: Transaction,
@@ -557,7 +559,13 @@ function checkDraft(
   draft: unknown,
   refusal: (key: string) => CommandError
 ): Draft<object> {
-  const keys = op.action === "markDeletion" ? [] : ["values", "tabularSections"]
+  // Чернетка переходу публікації, як і позначки, порожня.
+  const keys =
+    op.action === "markDeletion" ||
+    op.action === "publish" ||
+    op.action === "unpublish"
+      ? []
+      : ["values", "tabularSections"]
   let bad: string | undefined
   try {
     if (!isPlainObject(draft)) {

@@ -58,6 +58,8 @@ beforeAll(async () => {
 // Ключі, яких клієнт не бачить: їх знає лише ядро T3.
 const SERVER_ONLY = [
   "operations",
+  // Умовне публічне читання клієнту до D2 не передається (Р-D1-12)
+  "publicReadPublished",
   "membership",
   "constraints",
   "pgType",

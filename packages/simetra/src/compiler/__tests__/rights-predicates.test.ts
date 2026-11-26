@@ -8,7 +8,7 @@ import {
   renderCondition,
   rightsPredicates,
   type PredicateDml,
-  type RightsCondition,
+  type PredicateCondition,
   type RightsPredicate,
 } from "../rights/predicates"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
@@ -83,7 +83,7 @@ function predicatesOf(
   return rightsPredicates(contract, action, main, main, dml)
 }
 
-const grantDependent = (condition: RightsCondition) =>
+const grantDependent = (condition: PredicateCondition) =>
   condition.kind === "boolean" ||
   (condition.kind === "column" && condition.grantDependent)
 
@@ -121,7 +121,7 @@ function whereOf(table: string, condition: string): Record<string, unknown> {
  * (ARRAY(SELECT …))`, `currentUser` — `<колонка> = (SELECT …)`, `boolean` —
  * голий скалярний підзапит. Повертає підзапити умови.
  */
-function shapeOf(table: string, condition: RightsCondition): SubLink[] {
+function shapeOf(table: string, condition: PredicateCondition): SubLink[] {
   const where = whereOf(table, renderCondition(condition))
   if (condition.kind === "boolean") {
     const link = where.SubLink as SubLink

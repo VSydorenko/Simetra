@@ -442,8 +442,8 @@ const KIND_MODULE_REPLACEMENT: Readonly<
     uk: "Службову дату й версію рядка тримає механіка платформи; для решти реакцій оголосіть EventSubscription на подію таблиці, а обробник залиште функцією в закритій оболонці.",
   },
   policy: {
-    en: "Row access is declared, not written: a scoped table gets the tenant boundary policies <table>_scope_read, <table>_scope_insert, <table>_scope_update and <table>_scope_delete derived from the kind, roles give the read policies <table>_read_*, and publicRead on the object opens every row for reading.",
-    uk: "Доступ до рядків оголошується, а не пишеться: скоуплена таблиця отримує політики межі тенанта <table>_scope_read, <table>_scope_insert, <table>_scope_update і <table>_scope_delete, виведені з виду, ролі дають політики читання <table>_read_*, а publicRead об'єкта відкриває на читання всі рядки.",
+    en: "Row access is declared, not written: a scoped table gets the tenant boundary policies <table>_scope_read, <table>_scope_insert, <table>_scope_update and <table>_scope_delete derived from the kind, roles give the read policies <table>_read_*, and publicRead on the object opens every row for reading, or with published only the rows marked published.",
+    uk: "Доступ до рядків оголошується, а не пишеться: скоуплена таблиця отримує політики межі тенанта <table>_scope_read, <table>_scope_insert, <table>_scope_update і <table>_scope_delete, виведені з виду, ролі дають політики читання <table>_read_*, а publicRead об'єкта відкриває на читання всі рядки або, з published, лише опубліковані.",
   },
   grant: {
     en: "Privileges are derived, not written: on a kind's tables they come from the kind, EXECUTE on a scope set function and a subscription handler comes from the metadata, and EXECUTE on any other function comes from its TypeScript declaration (P4).",
@@ -3156,6 +3156,36 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Drop publicRead: rows of people and their rights are read through roles. For public profiles declare a separate catalog with the public fields and a reference to the users catalog.",
       uk: "Приберіть publicRead: рядки людей і їхніх прав читають через ролі. Для публічних профілів оголосіть окремий довідник з публічними полями й посиланням на «Користувачі».",
+    },
+  },
+  "rights.public-read-published-kind": {
+    en: (p) =>
+      `publicRead with published on "${p.object}" needs a kind whose rows are written by commands: the publish and unpublish actions are commands`,
+    uk: (p) =>
+      `publicRead з published на "${p.object}" потребує виду, рядки якого пишуть команди: дії publish і unpublish — команди`,
+    hint: {
+      en: "Use the string form of publicRead, or move the published rows to a catalog.",
+      uk: "Використайте рядкову форму publicRead або винесіть опубліковані рядки в довідник.",
+    },
+  },
+  "rights.public-read-published-rights": {
+    en: (p) =>
+      `publicRead with published on "${p.object}" needs the rights functions of the project: a draft row is shown by the rights, not by the condition`,
+    uk: (p) =>
+      `publicRead з published на "${p.object}" потребує функцій прав проєкту: чернетку показують права, а не умова`,
+    hint: {
+      en: "Declare a role and the users catalog (or a membership source), or use the string form of publicRead.",
+      uk: "Оголосіть роль і довідник «Користувачі» (або джерело членства) або використайте рядкову форму publicRead.",
+    },
+  },
+  "rights.public-read-published-read": {
+    en: (p) =>
+      `publicRead with published on "${p.object}" needs the object to have a rights contract with the read action`,
+    uk: (p) =>
+      `publicRead з published на "${p.object}" потребує, щоб об'єкт мав контракт прав з дією read`,
+    hint: {
+      en: "Use the string form of publicRead.",
+      uk: "Використайте рядкову форму publicRead.",
     },
   },
   "rights.include-target": {

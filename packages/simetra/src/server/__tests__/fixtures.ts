@@ -222,6 +222,24 @@ export const catalog: RuntimeCatalog = runtimeCatalogSchema.parse({
   objects: [client, rightsRole, ticket, roleAssignment],
 })
 
+/** Об'єкт з умовним `publicRead`: операції публікації (Р-D1-11). */
+export const PAGE = { kind: "Catalog" as const, name: "Page" }
+export const page = commandObject({
+  name: "Page",
+  table: "page",
+  operations: {
+    create: target("page", "save", "create"),
+    update: target("page", "save", "update"),
+    markDeletion: target("page", "mark_deletion", "markDeletion"),
+    publish: target("page", "publish", "publish"),
+    unpublish: target("page", "unpublish", "unpublish"),
+  },
+})
+export const pageCatalog: RuntimeCatalog = runtimeCatalogSchema.parse({
+  ...catalog,
+  objects: [...catalog.objects, page],
+})
+
 /** Довідник із поліморфною парою `subject`: читання за парою в `where`. */
 export const TASK = { kind: "Catalog" as const, name: "Task" }
 export const task = commandObject({

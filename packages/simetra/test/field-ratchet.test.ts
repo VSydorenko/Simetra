@@ -79,6 +79,20 @@ const EXCEPTIONS: Record<string, string> = Object.fromEntries([
     "InformationRegister.access.ref",
     "register path is an error (спека прав §5.2)",
   ],
+  // Виняток знімуть, коли ядро команд документа дозволить умовний `publicRead`
+  // на документі (спека М5d §2); список — з реєстру, а не вручну: вид з
+  // командами не потрапить сюди сам.
+  // Об'єктна форма `publicRead` спільна для видів з RLS, а вид без команд
+  // (`commandWrites`) відмовляє їй правилом `rights.public-read-published-kind`,
+  // тож валідна модель шляху не має. Форму ратчет бачить на довіднику (`Partner`).
+  ...Object.values(KIND_REGISTRY)
+    .filter(({ commandWrites }) => !commandWrites)
+    .flatMap(({ kind }) =>
+      ["role", "published"].map((field) => [
+        `${kind}.publicRead.${field}`,
+        "rights.public-read-published-kind: a kind without command writes",
+      ])
+    ),
   // `load` — подання (спека П4-B Рд25, В3): реквізит ТЧ лінивим не буває, а
   // реквізит регістра `load` не задає зовсім — регістрів у каталозі рантайму
   // ще немає (Рд1). Обидва тримає схема (до шва); виняток регістрів знімуть
