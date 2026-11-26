@@ -104,9 +104,11 @@ enforced by `packages/simetra/eslint.tier-zones.js` with the negative test
 owner decision.
 
 **Framework boundary** (a lint zone): T5 imports only React, T4 contracts, the
-navigation adapter interface and the headless UI libraries the spec names
-(forms, virtualisation) — never routing, data fetching or the host framework;
-framework adapters live in T6; the host
+navigation adapter interface and the headless UI libraries that platform spec §9
+(«Примітиви й форми») names — primitives, forms, tables and virtualisation,
+grids, trees, panels, the command palette, drag and drop, rich text — never
+routing, data fetching or the host framework. A library joins T5 only after
+that spec names it; framework adapters live in T6; the host
 template and the studio are the only places that import TanStack Start. It is
 held by the same `packages/simetra/eslint.tier-zones.js` and its negative test.
 In `@simetrajs/designer` the studio is `src/studio` and nothing else there imports
