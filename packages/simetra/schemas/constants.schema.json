@@ -157,6 +157,7 @@
         "DateTime",
         "Bytes",
         "Json",
+        "RichText",
         "Ref"
       ],
       "description": "Logical value type."

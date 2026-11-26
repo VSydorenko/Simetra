@@ -46,6 +46,7 @@ import {
   commandCoreLayer,
   compileRights,
   gaugeLoadLayer,
+  gaugeRichTextLayer,
   gaugeMaxBytesLayer,
   gaugeRowRule,
   policyDomain,
@@ -738,7 +739,8 @@ describe("buildRuntimeCatalog on runtime values", () => {
 
 /**
  * Лінивий атрибут (Рд25, В3): у каталозі лише ефективно лінивий реквізит
- * шапки — явний `load: "lazy"` чи `Bytes` без `load`; у ТЧ лінивих немає.
+ * шапки — явний `load: "lazy"` чи `Bytes` або `RichText` без `load`
+ * (Р-B7-10); у ТЧ лінивих немає.
  */
 describe("buildRuntimeCatalog: lazy attributes", () => {
   const gaugeOf = async (loads: Record<string, "eager" | "lazy">) => {
@@ -765,6 +767,28 @@ describe("buildRuntimeCatalog: lazy attributes", () => {
     )
     expect(scan).toMatchObject({ type: "Bytes" })
     expect(scan).not.toHaveProperty("load")
+  })
+
+  it("RichText of the header defaults to lazy, eager overrides it; in a section it is eager", async () => {
+    const richTextGauge = async (loads: Record<string, "eager" | "lazy">) => {
+      const { model: m, diagnostics } = await compileRights(
+        policyDomain(gaugeRichTextLayer(loads))
+      )
+      expect(diagnostics).toEqual([])
+      return buildRuntimeCatalog(m!).objects.find((o) => o.name === "Gauge")!
+    }
+    const defaults = await richTextGauge({})
+    const article = defaults.attributes.find((a) => a.name === "article")
+    expect(article).toMatchObject({ type: "RichText", load: "lazy" })
+    const remark = defaults.tabularSections[0]!.attributes.find(
+      (a) => a.name === "remark"
+    )
+    expect(remark).toMatchObject({ type: "RichText" })
+    expect(remark).not.toHaveProperty("load")
+    const eager = await richTextGauge({ article: "eager" })
+    const explicit = eager.attributes.find((a) => a.name === "article")
+    expect(explicit).toMatchObject({ type: "RichText" })
+    expect(explicit).not.toHaveProperty("load")
   })
 })
 
@@ -907,14 +931,14 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
   // (обчислений на коміті до неї). Зміна фікстури чи платформних таблиць
   // знімка (outbox сигналів) чи нові згенеровані одиниці (знімок прав клієнта, оракул сигналу,
   // функції відправки, виклик сигналу в ядрі, тригери сигналу прав, гілки каналів прав
-  // в оракулі, опції оболонки ядра), нормалізовані колонки полів пошуку (і межа їхнього префікса) чи правило ідентичності одиниць (`sql/identity.ts`) змінюють і цей літерал.
+  // в оракулі, опції оболонки ядра, функція порожності `RichText`), нормалізовані колонки полів пошуку (і межа їхнього префікса) чи правило ідентичності одиниць (`sql/identity.ts`) змінюють і цей літерал.
   it("stays outside the canonical snapshot and the hash", async () => {
     const { model: m } = await checksOf(policyDomain(runtimeValuesLayer()))
     expect(m.checkColumns.length).toBeGreaterThan(0)
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "562797eca2a462be51ccfd951b1383a0e19832f050ede6b49b2d877e2de5b885"
+      "bdae54116247adcad7c7d5bbb1a41be8f876e7fc577ce0ce9947168e169d276e"
     )
   })
 })

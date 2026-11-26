@@ -12,6 +12,7 @@ import {
   catalogFromSnapshot,
   DATABASE_PROVIDERS,
   SIGNAL_OUTBOX,
+  type DatabaseProvider,
 } from "simetra/model"
 import { outboxUnits } from "../platform/outbox"
 
@@ -151,4 +152,89 @@ describe("platformInstall", () => {
       "grant|table|public.t|anon|insert(c)",
     ])
   })
+})
+
+/**
+ * Функція порожності `RichText` (Р-B7-8) — об'єкт установки кожного
+ * провайдера: розпізнавач бере її текст і форму каталогу, а не зміну опцій
+ * чи тіла. Порядок опцій — частина дерева, яке порівнює розпізнавач, тож
+ * форма каталогу (`pg_get_functiondef` друкує `IMMUTABLE PARALLEL SAFE
+ * STRICT`) — платформна, а переставлені опції — ні.
+ */
+describe("platformInstall: rich_text_is_empty", () => {
+  const FN = "function:simetra.rich_text_is_empty(jsonb)"
+  const SIGNATURE = "simetra.rich_text_is_empty(jsonb)"
+  const ROLES: Record<DatabaseProvider, string[]> = {
+    supabase: ["anon", "authenticated", "service_role", "simetra_command"],
+    postgres: ["simetra_anon", "simetra_command", "simetra_user"],
+  }
+
+  it.each(DATABASE_PROVIDERS)(
+    "%s: the install holds the function and its grants, the recogniser takes them",
+    async (provider) => {
+      const install = await platformInstall(provider)
+      expect(
+        install.units
+          .map((u) => u.identity)
+          .filter((id) => id === FN || id.includes(`:${SIGNATURE}:`))
+          .sort()
+      ).toEqual(
+        [
+          FN,
+          `grant:revoke:function:${SIGNATURE}:public:execute`,
+          ...ROLES[provider].map(
+            (role) => `grant:grant:function:${SIGNATURE}:${role}:execute`
+          ),
+        ].sort()
+      )
+      const platform = platformRecogniser(install, parse)
+      const fn = install.units.find((u) => u.identity === FN)!
+      expect(platform.unit(unitOf(fn.sql))).toBe(true)
+      expect(
+        ROLES[provider].filter(
+          (role) =>
+            !platform.unit(
+              unitOf(`GRANT EXECUTE ON FUNCTION ${SIGNATURE} TO ${role};`)
+            )
+        )
+      ).toEqual([])
+      expect(
+        [
+          `GRANT EXECUTE ON FUNCTION ${SIGNATURE} TO PUBLIC;`,
+          `GRANT EXECUTE ON FUNCTION ${SIGNATURE} TO some_extra_role;`,
+        ].filter((sql) => platform.unit(unitOf(sql)))
+      ).toEqual([])
+    }
+  )
+
+  it.each(DATABASE_PROVIDERS)(
+    "%s: the catalog form is the platform's; reordered options, another volatility, no STRICT or lax mode are not",
+    async (provider) => {
+      const install = await platformInstall(provider)
+      const platform = platformRecogniser(install, parse)
+      const fn = install.units.find((u) => u.identity === FN)!
+      // Тіло між долар-лапками генератора — те, що каталог зберігає в
+      // `prosrc` і друкує між `$function$`.
+      const body = /AS (\$\w*\$)([\s\S]*)\1;$/.exec(fn.sql)?.[2]
+      expect(body).toBeDefined()
+      const form = (options: string, source = body!) =>
+        "CREATE OR REPLACE FUNCTION simetra.rich_text_is_empty(p_value jsonb)\n" +
+        ` RETURNS boolean\n LANGUAGE sql\n ${options}\n` +
+        ` SET search_path TO ''\nAS $function$${source}$function$`
+      expect(
+        platform.unit(unitOf(form("IMMUTABLE PARALLEL SAFE STRICT")))
+      ).toBe(true)
+      expect(
+        [
+          form("IMMUTABLE STRICT PARALLEL SAFE"),
+          form("STABLE PARALLEL SAFE STRICT"),
+          form("IMMUTABLE PARALLEL SAFE"),
+          form(
+            "IMMUTABLE PARALLEL SAFE STRICT",
+            body!.replace("strict $", "lax $")
+          ),
+        ].filter((sql) => platform.unit(unitOf(sql)))
+      ).toEqual([])
+    }
+  )
 })

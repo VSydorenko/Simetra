@@ -6,8 +6,9 @@ import {
   normalDateTime,
 } from "../schemas/value-type"
 import type { CatalogEntryAttribute } from "./catalog"
-import { LIMIT_REASONS, type CommandError } from "./errors"
+import { LIMIT_REASONS, VALUE_REASONS, type CommandError } from "./errors"
 import { jsonBytes } from "./limits"
+import { checkRichText, richTextDepthOk } from "./rich-text"
 
 /**
  * Кодування значень за спільною частиною запису каталогу:
@@ -155,7 +156,10 @@ function scalar(attribute: CatalogEntryAttribute, value: unknown): unknown {
       return typeof value === "string" && BYTES_TEXT.test(value)
         ? value
         : undefined
+    // Тип `RichText` — чистий JSON; профіль перевіряє `encodeAttributeValue`,
+    // бо його порядок з `maxBytes` — частина контракту відмови.
     case "Json":
+    case "RichText":
       return pureJson(value, new Set())
     case "Raw":
       // Копія носія прав: її пише платформа, не вхід.
@@ -320,7 +324,76 @@ function jsonbNumbersSurplus(value: unknown): number {
  */
 function wireBytes(attribute: CatalogEntryAttribute, value: unknown): number {
   const bytes = jsonBytes(wireMeasure(attribute, value))
-  return attribute.type === "Json" ? bytes + jsonbNumbersSurplus(value) : bytes
+  return attribute.type === "Json" || attribute.type === "RichText"
+    ? bytes + jsonbNumbersSurplus(value)
+    : bytes
+}
+
+/** What {@link encodeAttributeValue} checks beyond the value's type. */
+export interface EncodeValueOptions {
+  /**
+   * Refuse a value over its attribute's `maxBytes` (`reason: "too-large"`).
+   * Only command input sets it: a stored value over the limit still reads.
+   */
+  maxBytes?: boolean
+  /**
+   * `false` — skip the `RichText` profile (on by default). Only a value
+   * compared with the stored one, never written, skips it (`expectedValues`):
+   * a stored document outside the profile would block it otherwise.
+   */
+  profile?: boolean
+}
+
+const refused = (path: string, reason: string): { error: CommandError } => ({
+  error: { code: "command.invalid", path, reason },
+})
+
+/**
+ * The check of one attribute value of command input, the one point every
+ * write path goes through: the type (`encodeItemValue`), an explicit `null`
+ * on a `NOT NULL` column with a default, `maxBytes` and the `RichText`
+ * profile. For `RichText` the order is: the type, the depth bound
+ * (`rich-text-profile`), `maxBytes` (`too-large`), the rest of the profile
+ * (`rich-text-profile`).
+ */
+export function encodeAttributeValue(
+  attribute: CatalogEntryAttribute,
+  value: unknown,
+  path: string,
+  options: EncodeValueOptions = {}
+): Encoded<unknown> {
+  const { maxBytes = false, profile = true } = options
+  // Колонка NOT NULL з типовим значенням (`required` хибне): явний `null`
+  // відхиляє команда, а не база — клієнт бачить `command.invalid` зі шляхом.
+  // Пропущене значення лишається за типовим.
+  if (value === null && attribute.notNull === true && !attribute.required) {
+    return invalid(path)
+  }
+  const encoded = encodeItemValue(attribute, value, path)
+  if ("error" in encoded) return encoded
+  // Перевіряється копія `pureJson`, а не вхід: геттер не підмінить
+  // перевірене значення.
+  const rich = attribute.type === "RichText" && encoded.value !== null
+  // Межа глибини — до міри й незалежно від `profile`: рекурсивні міри
+  // `wireBytes` поза `try` на глибокому документі переповнили б стек, а
+  // `expectedValues` теж міряється.
+  if (rich && !richTextDepthOk(encoded.value)) {
+    return refused(path, VALUE_REASONS.richTextProfile)
+  }
+  // Міра — закодоване значення форми передачі, та сама, якою бюджет
+  // відповіді рахує рядок: межа входу й межа читання не розходяться.
+  // Масив міряється цілком.
+  if (
+    maxBytes &&
+    attribute.maxBytes !== undefined &&
+    wireBytes(attribute, encoded.value) > attribute.maxBytes
+  ) {
+    return refused(path, LIMIT_REASONS.tooLarge)
+  }
+  if (rich && profile && !checkRichText(encoded.value).ok) {
+    return refused(path, VALUE_REASONS.richTextProfile)
+  }
+  return encoded
 }
 
 /**
@@ -346,6 +419,8 @@ export interface EncodeAttributesOptions<
    * Only command input sets it: a stored value over the limit still reads.
    */
   maxBytes?: true
+  /** `false` — skip the `RichText` profile; see {@link EncodeValueOptions}. */
+  profile?: false
 }
 
 /**
@@ -362,7 +437,15 @@ export function encodeAttributes<A extends CatalogEntryAttribute>(
   values: unknown,
   options: EncodeAttributesOptions<A>
 ): { columns: Record<string, unknown> } | { error: CommandError } {
-  const { allowed, forced = [], path, prefix, rowKey, maxBytes } = options
+  const {
+    allowed,
+    forced = [],
+    path,
+    prefix,
+    rowKey,
+    maxBytes,
+    profile,
+  } = options
   let keys: Set<string>
   try {
     if (!isPlainObject(values)) return invalid(path)
@@ -386,30 +469,11 @@ export function encodeAttributes<A extends CatalogEntryAttribute>(
     } catch {
       return invalid(at)
     }
-    // Колонка NOT NULL з типовим значенням (`required` хибне): явний `null`
-    // відхиляє команда, а не база — клієнт бачить `command.invalid` зі шляхом.
-    // Пропущене значення лишається за типовим.
-    if (value === null && attribute.notNull === true && !attribute.required) {
-      return invalid(at)
-    }
-    const encoded = encodeItemValue(attribute, value, at)
+    const encoded = encodeAttributeValue(attribute, value, at, {
+      maxBytes,
+      profile,
+    })
     if ("error" in encoded) return encoded
-    // Міра — закодоване значення форми передачі, та сама, якою бюджет
-    // відповіді рахує рядок: межа входу й межа читання не розходяться.
-    // Масив міряється цілком.
-    if (
-      maxBytes === true &&
-      attribute.maxBytes !== undefined &&
-      wireBytes(attribute, encoded.value) > attribute.maxBytes
-    ) {
-      return {
-        error: {
-          code: "command.invalid",
-          path: at,
-          reason: LIMIT_REASONS.tooLarge,
-        },
-      }
-    }
     if (attribute.pair !== undefined) {
       Object.assign(columns, encoded.value)
     } else {

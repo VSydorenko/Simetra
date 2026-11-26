@@ -20,3 +20,13 @@ export const CURRENT_USER_FUNCTION: QualifiedName = {
 export const PLATFORM_READ_FUNCTIONS: readonly QualifiedName[] = [
   CURRENT_USER_FUNCTION,
 ]
+
+/**
+ * Порожність значення `RichText` у SQL (Р-B7-7, Р-B7-8): CHECK таблиці
+ * перекладів (B3) кличе її за цим іменем, а шар платформи її створює — одне
+ * ім'я, щоб перейменування не розійшлося з викликом.
+ */
+export const RICH_TEXT_IS_EMPTY_FUNCTION: QualifiedName = {
+  schema: PLATFORM_SCHEMA,
+  name: "rich_text_is_empty",
+}
