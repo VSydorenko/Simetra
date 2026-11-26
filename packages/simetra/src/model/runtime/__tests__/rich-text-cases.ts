@@ -1,3 +1,5 @@
+import { RICH_TEXT_WHITESPACE } from "../rich-text"
+
 /**
  * Спільна таблиця порожності `RichText` (Р-B7-7): unit T0 (`isRichTextEmpty`),
  * DB-тест B7 і тести CHECK B3 (`simetra.rich_text_is_empty`) читають ті самі
@@ -123,4 +125,11 @@ export const RICH_TEXT_EMPTINESS_CASES: readonly RichTextEmptinessCase[] = [
   { name: "number", doc: 1, empty: true },
   { name: "boolean", doc: true, empty: true },
   { name: "empty object", doc: {}, empty: true },
+  // Кожен символ сталої T0 окремо: мутація одного символу сталої чи класу SQL
+  // червоніє, а не ховається за переліком руками.
+  ...RICH_TEXT_WHITESPACE.map((code) => ({
+    name: `only U+${code.toString(16).toUpperCase().padStart(4, "0")}`,
+    doc: paragraph(text(String.fromCodePoint(code))),
+    empty: true,
+  })),
 ]
