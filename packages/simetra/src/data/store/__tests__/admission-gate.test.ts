@@ -228,7 +228,7 @@ describe("base cells: the target table §5.3", () => {
         expect(BASE[reason][condition], `${reason} × ${condition}`).toBe("path")
   })
 
-  it("the hidden tab by requirement kind: column «Прихована й невидима» §5.2", () => {
+  it("the hidden tab by requirement kind: column «Прихована й невидима» §5.2; rights-unconfirmed and version-unconfirmed are admitted by row 23 of §5.14", () => {
     expect(HIDDEN_TAB).toEqual({
       "composition-unconfirmed": "defer",
       "channel-rejoin": "defer",

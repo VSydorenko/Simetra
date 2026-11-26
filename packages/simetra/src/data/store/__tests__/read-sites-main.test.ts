@@ -940,7 +940,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     "tab-hidden": { request: true, then: "ready" },
     closing: {
       unreachable:
-        "the purge flush of `close()` runs, but the check of M4 is deferred by `queueCheck` to a microtask that runs after `close()`, where the gate refuses it by the invalid session token (code reading: removing the gate's `closed` condition stays green)",
+        "the purge flush of `close()` runs, but the check of M4 is deferred by `queueCheck` to a microtask that runs after `close()`, where `check` returns on `!s.alive` (the registry cleared by `registry.close()`) before `load`, so the gate is not asked (code reading: removing the gate's `closed` condition stays green)",
     },
   },
   M5: {
