@@ -1159,6 +1159,34 @@ describe("version epochs", () => {
     expect(requestsSince(h, from)).toHaveLength(0)
   })
 
+  // Зупинка збору — наслідок осідання за межею (Р-SK1-7), а не допуск: читання
+  // пачки відмовив би й шлюз, але зупинка береже й не-читальні ефекти пачки —
+  // діагностику сигналу, сплеск і вимогу «склад не підтверджено» виглядам.
+  it("collects no signal after the discard limit: no signal read, no burst, no requirement", async () => {
+    const h = await switched()
+    await exhaust(h)
+    const seen: string[] = []
+    h.inspect.watchSignalReads((object, signal) => {
+      if (signal.by === "batch") seen.push(object)
+    })
+    const logged = h.log.length
+    const version = h.fake.edit(TASK, key(1), { title: "late" })
+    emit(h, change("update", key(1), version))
+    emit(h, { id: String(++seq), object: task.id, op: "invalidate" })
+    await closeBatch()
+    await settle()
+    expect(seen).toEqual([])
+    expect(
+      h.log.slice(logged).filter((e) => e.kind === "revalidate-burst")
+    ).toEqual([])
+    expect(
+      h.inspect
+        .sync()
+        .flatMap((state) => state.requirements)
+        .filter((r) => r.kind === "composition-unconfirmed")
+    ).toEqual([])
+  })
+
   it("drops the batch waiting behind a read in flight once the discard limit is reached", async () => {
     const h = await switched()
     h.fake.mode = "manual"
