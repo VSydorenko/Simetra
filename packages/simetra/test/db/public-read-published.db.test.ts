@@ -342,32 +342,51 @@ describe("conditional publicRead", () => {
     })
 
     it("7: the effects trigger of the owner refuses a published mark, an unmark with publication and a publish of a marked row", async () => {
-      const owner = (action: string, sql: string) =>
+      // Контекст завжди на самому рядку: рядок поза коренем судить лише
+      // природна дія, а не гілка дії контексту.
+      const owner = (action: string, sql: string, root = "pB") =>
         asUser("pU", [
-          asOwnerLogin({ context: context(action, "pB"), sql, asOwner: true }),
+          asOwnerLogin({ context: context(action, root), sql, asOwner: true }),
         ])
       const update = (set: string, row: string) =>
         `UPDATE public.${NOTICE_TABLE} SET ${set} WHERE id = '${key(row)}'`
-      const cases: [string, string, string][] = [
+      const cases: [string, string, string, string][] = [
         [
           "mark with published",
           "markDeletion",
           update("deletion_mark = true", "pB"),
+          "pB",
         ],
         [
           "unmark with published",
           "markDeletion",
           update("deletion_mark = false", "mA"),
+          "mA",
         ],
         [
           "publish of a marked row",
           "publish",
           update("published = true", "kA"),
+          "kA",
+        ],
+        // Перехід лише у свій бік: `publish` не знімає публікації, `unpublish`
+        // не публікує
+        [
+          "unpublish under publish",
+          "publish",
+          update("published = false", "pB"),
+          "pB",
+        ],
+        [
+          "publish under unpublish",
+          "unpublish",
+          update("published = true", "dB"),
+          "dB",
         ],
       ]
-      for (const [name, action, sql] of cases)
+      for (const [name, action, sql, root] of cases)
         expect
-          .soft((await owner(action, sql)).refusal, name)
+          .soft((await owner(action, sql, root)).refusal, name)
           .toMatchObject(EFFECT)
       // контроль: позначка з `published = false` проходить
       const control = await owner(
@@ -403,14 +422,18 @@ describe("conditional publicRead", () => {
       expect(direct.completed[1]).toEqual([{ published: true }])
     })
 
-    it("12: the command role without a context cannot touch published or insert", async () => {
-      const without = (sql: string) =>
-        commandAs(tx.client(), claims("wA"), undefined, sql)
+    const without = (sql: string) =>
+      commandAs(tx.client(), claims("wA"), undefined, sql)
+
+    it("12: the command role without a context cannot set published", async () => {
       expect(
         await without(
           `UPDATE public.${NOTICE_TABLE} SET published = true WHERE id = '${key("dA")}'`
         )
       ).toEqual(NO_CONTEXT)
+    })
+
+    it("12: the command role without a context cannot insert", async () => {
       expect(
         await without(
           `INSERT INTO public.${NOTICE_TABLE} (id, org_id) VALUES ('${randomUUID()}', '${key("A")}')`

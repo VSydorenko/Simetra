@@ -14,9 +14,6 @@ import {
   ORG_MEMBER_ROLE_ID,
   RIGHTS_ADMIN_ID,
   SUPPORT_ID,
-  adminRoles,
-  compileRights,
-  policyDomain,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { SNAPSHOT_TABLES } from "../../src/compiler/rights/actor-snapshot"
 import { RIGHTS_FUNCTIONS } from "../../src/compiler/rights/functions"
@@ -43,8 +40,12 @@ import {
   inMaintenance,
   insert,
   orgDeltaRow,
-  profileLayer,
 } from "./rights-seed"
+import {
+  NOTICE_ITEMS_TABLE,
+  NOTICE_TABLE,
+  publicReadPublishedModel,
+} from "./public-read-published.support"
 
 /**
  * Гейт планів політик прав (спека прав §5.4): чи читають
@@ -69,6 +70,7 @@ const TENANTS = 1000
 const TASKS_PER_TENANT = 20
 const LINES_PER_TASK = 5
 const MOVEMENTS_PER_TENANT = 10
+const NOTICES_PER_TENANT = 10
 const JOURNAL_PER_SCOPE = 20
 /**
  * Скоупи власника `fullAccess` (спека прав §5.4): досить, щоб квадратичне замикання
@@ -267,6 +269,22 @@ async function seed(client: pg.Client): Promise<Gate> {
      WHERE t.n <= $1
      ORDER BY t.org_id, t.id`,
     [MOVEMENTS_PER_TENANT]
+  )
+  // Умовний об'єкт D1 (права §5.4): половина рядків опублікована, кожен має
+  // рядки ТЧ — гейт читає їх гостем і користувачем без права `read`.
+  await client.query(
+    `INSERT INTO public.${NOTICE_TABLE} (id, org_id, published)
+     SELECT gen_random_uuid(), o.id, g % 2 = 0
+     FROM public.organization o CROSS JOIN generate_series(1, $1) AS g
+     ORDER BY o.id, g`,
+    [NOTICES_PER_TENANT]
+  )
+  await client.query(
+    `INSERT INTO public.${NOTICE_ITEMS_TABLE} (id, org_id, parent_id, line_number, text)
+     SELECT gen_random_uuid(), n.org_id, n.id, g, 'line'
+     FROM public.${NOTICE_TABLE} n CROSS JOIN generate_series(1, $1) AS g
+     ORDER BY n.org_id, n.id, g`,
+    [LINES_PER_TASK]
   )
   // Журнал скоупу: новіші першими за `at` — як його читає `rights_journal_of`.
   await client.query(
@@ -499,12 +517,10 @@ describe("rights plan gate", () => {
   let gate: Gate
 
   beforeAll(async () => {
-    const result = await compileRights(
-      policyDomain(adminRoles(), profileLayer())
-    )
-    expect(result.diagnostics).toEqual([])
+    // Той самий домен, що раніше, плюс умовні довідники D1 (`notice` з ТЧ)
+    const model = await publicReadPublishedModel()
     const client = await tx.open()
-    await deploy(client, result.model!)
+    await deploy(client, model)
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PLATFORM_ROLES.command}`
     )
@@ -516,7 +532,7 @@ describe("rights plan gate", () => {
     // Лише засіяні таблиці: ANALYZE усієї спільної бази тримав би блокування
     // чужих таблиць до відкату й переписав би їхню статистику поза транзакцією.
     await client.query(
-      `ANALYZE public.organization, public.region, public.org_member, public.org_role_assignments, public.org_roles, public.org_roles_delta, public.users, public.global_role_assignments, public.global_roles, public.global_roles_delta, public.${TASK}, public.${CHECKLIST}, public.${HOURS}, simetra.${JOURNAL}`
+      `ANALYZE public.organization, public.region, public.org_member, public.org_role_assignments, public.org_roles, public.org_roles_delta, public.users, public.global_role_assignments, public.global_roles, public.global_roles_delta, public.${TASK}, public.${CHECKLIST}, public.${HOURS}, public.${NOTICE_TABLE}, public.${NOTICE_ITEMS_TABLE}, simetra.${JOURNAL}`
     )
     // Таблиці знімка: статистика обсягу
     // паралельних знімків, а не оцінка за замовчуванням.
@@ -583,6 +599,35 @@ describe("rights plan gate", () => {
             `scope in index access: ${shape(scans).join("; ")}`
           )
           .toBe(true)
+    }
+  )
+
+  /**
+   * Інваріант 13 (D1): умовний `publicRead` — рядкова умова, а не підплан,
+   * тож гість і користувач без `read` читають шапку й ТЧ без `SubPlan`.
+   */
+  it.each([NOTICE_TABLE, NOTICE_ITEMS_TABLE])(
+    "conditional public read of %s has no SubPlan for a guest and a user",
+    async (table) => {
+      const sql = `SELECT * FROM public.${table} ORDER BY id LIMIT 50`
+      const plans = {
+        user: await explain(gate.user, sql),
+        guest: await queryAs<{ "QUERY PLAN": unknown }>(
+          tx.client(),
+          "anonymous",
+          claimsFor("anonymous"),
+          `EXPLAIN (ANALYZE, FORMAT JSON) ${sql}`
+        ).then((r) => {
+          if (!("rows" in r)) throw new Error(`EXPLAIN failed: ${r.code}`)
+          return r.rows[0]!["QUERY PLAN"]
+        }),
+      }
+      for (const [who, plan] of Object.entries(plans)) {
+        expect
+          .soft(scansOf(plan, table).length, `${who}: the table is read`)
+          .toBeGreaterThan(0)
+        expect.soft(subPlans(plan), `${who}: SubPlan nodes`).toEqual([])
+      }
     }
   )
 
