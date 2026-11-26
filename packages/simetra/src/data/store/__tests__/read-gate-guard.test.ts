@@ -799,7 +799,7 @@ const PLACES: readonly Group[] = [
   {
     inventory: false,
     reason:
-      "Публічні ознаки й публічне API (Р-SK1-9, PR #433): `core.visible`, прапор знімка, відмова мутації `stale-client` журналу, відмова виклику закритого ядра (`view`, `subscribe`, `hydrate`, `dehydrate`, `staleClient`) і токен журналу мутацій — не рішення читати",
+      "Публічні ознаки й публічне API (Р-SK1-9, PR #433): `core.visible`, прапор знімка, відмова мутації `stale-client` журналу, відмова виклику закритого ядра (`view`, `subscribe`, `hydrate`, `dehydrate`) і токен журналу мутацій — не рішення читати",
     sites: [
       "core.ts::createCore.core.visible gate.tabHidden",
       "subsets.ts::createRegistry.idleSnapshot staleObjects via RegistryContext.isStale",
@@ -810,8 +810,13 @@ const PLACES: readonly Group[] = [
       "subsets.ts::createRegistry.makeHandle.subscribe isClosed",
       "core.ts::createCore.core.hydrate token",
       "core.ts::createCore.core.dehydrate token",
-      "core.ts::createCore.core.staleClient token",
     ],
+  },
+  {
+    inventory: false,
+    reason:
+      "Токен охороняє не-читальні ефекти закритої сесії: `staleClient` не ставить позначку `commit`-ом і не просить версію (запит версії S1 далі судить `admit`); кандидат на `gate.closed()`",
+    sites: ["core.ts::createCore.core.staleClient token"],
   },
   {
     inventory: false,
