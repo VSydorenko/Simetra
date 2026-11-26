@@ -562,7 +562,6 @@ describe("projectSchema", () => {
       database: { provider: "supabase" },
       naming: { attributeCase: "camelCase" },
       timezone: "UTC",
-      selfSignUp: false,
       scopeKinds: [],
       accessDimensions: [],
       membershipSources: [],

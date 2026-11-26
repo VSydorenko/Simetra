@@ -174,7 +174,7 @@ describe("projectSchema database.provider", () => {
 
 describe("projectSchema selfSignUp", () => {
   it.each([
-    ["absent", undefined, true, false],
+    ["absent", undefined, true, undefined],
     ["true", true, true, true],
     ["false", false, true, false],
     ["a string", "true", false, undefined],
