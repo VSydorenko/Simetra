@@ -79,12 +79,13 @@ const richTextPlan = (provider: DatabaseProvider) => [
     [RICH_TEXT],
     `REVOKE ALL ON FUNCTION ${RICH_TEXT} FROM PUBLIC`
   ),
-  ...RICH_TEXT_ROLES[provider].map((role) =>
-    action(
-      [],
-      [RICH_TEXT, `role:${role}`],
-      `GRANT EXECUTE ON FUNCTION ${RICH_TEXT} TO "${role}"`
-    )
+  // Живий diff зливає гранти ролей в одну дію
+  action(
+    [],
+    [RICH_TEXT, ...RICH_TEXT_ROLES[provider].map((role) => `role:${role}`)],
+    `GRANT EXECUTE ON FUNCTION ${RICH_TEXT} TO ${RICH_TEXT_ROLES[provider]
+      .map((role) => `"${role}"`)
+      .join(", ")}`
   ),
 ]
 const richTextDifferences = (provider: DatabaseProvider) => {
