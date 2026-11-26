@@ -39,7 +39,10 @@ export interface PostgresClusterSet {
   roles: PlatformRoleSet
   /** API request roles: the role of a user session and the anonymous one. */
   request: readonly string[]
-  /** The login role of the identity provider; it owns the schema `better_auth`. */
+  /**
+   * The login role of the identity provider; it owns the schemas `better_auth`
+   * and `agent_oauth` (the authorization server of agents).
+   */
   auth: string
   /** The template database that shadows are copied from. */
   template: string
@@ -225,13 +228,13 @@ export function extensionsSchemaViolation(
     : undefined
 }
 
-/** Факти схеми `better_auth` і ролі `auth` у цільовій базі. */
+/** Факти схем ролі `auth` (`better_auth`, `agent_oauth`) і самої ролі в цільовій базі. */
 export interface AuthSchemaFacts {
-  /** Власник схеми `better_auth`; `undefined` — схеми ще немає. */
-  schemaOwner: string | undefined
+  /** Власники наявних схем ролі `auth`; схеми, якої ще немає, тут немає. */
+  schemaOwners: readonly { schema: string; owner: string }[]
   createDatabase: boolean
   createPublic: boolean
-  /** Відношення ролі `auth` поза `better_auth`. */
+  /** Відношення ролі `auth` поза обома її схемами. */
   strayRelations: readonly { schema: string; name: string }[]
   /** `setconfig` рядка `pg_db_role_setting` ролі для цієї бази; `null` — рядка немає. */
   searchPath: readonly string[] | null
@@ -240,21 +243,31 @@ export interface AuthSchemaFacts {
 const unquoted = (value: string): string =>
   value.replaceAll('"', "").replaceAll(" ", "")
 
+/** Порушення меж ролі `auth`: схема, яку називає відмова, і причина. */
+export interface AuthSchemaViolation {
+  schema: string
+  reason: string
+}
+
 /**
- * Причина, з якої роль `auth` не обмежена схемою `better_auth`:
- * чужий власник схеми, `CREATE` на базу чи `public`, відношення поза схемою
- * або інший `search_path` ролі для цієї бази.
+ * Причина, з якої роль `auth` не обмежена своїми схемами `better_auth` і
+ * `agent_oauth`: чужий власник однієї з них, `CREATE` на базу чи `public`,
+ * відношення поза обома схемами або інший `search_path` ролі для цієї бази.
+ * Відмову, що не стосується однієї схеми, названо схемою `better_auth`.
  */
 export function authSchemaViolation(
   facts: AuthSchemaFacts,
   auth: string
-): string | undefined {
-  if (facts.schemaOwner !== undefined && facts.schemaOwner !== auth)
-    return `owner:${facts.schemaOwner}`
-  if (facts.createDatabase) return "create-database"
-  if (facts.createPublic) return "create-public"
+): AuthSchemaViolation | undefined {
+  const foreign = facts.schemaOwners.find((s) => s.owner !== auth)
+  if (foreign !== undefined)
+    return { schema: foreign.schema, reason: `owner:${foreign.owner}` }
+  const violation = (reason: string) => ({ schema: AUTH_SCHEMA, reason })
+  if (facts.createDatabase) return violation("create-database")
+  if (facts.createPublic) return violation("create-public")
   const [stray] = facts.strayRelations
-  if (stray !== undefined) return `relation:${stray.schema}.${stray.name}`
+  if (stray !== undefined)
+    return violation(`relation:${stray.schema}.${stray.name}`)
   const path = (facts.searchPath ?? []).find(
     (entry) =>
       entry.startsWith("search_path=") &&
@@ -262,7 +275,9 @@ export function authSchemaViolation(
   )
   return path === undefined
     ? undefined
-    : `search-path:${path.slice("search_path=".length).replaceAll('"', "")}`
+    : violation(
+        `search-path:${path.slice("search_path=".length).replaceAll('"', "")}`
+      )
 }
 
 /** Рядок `pg_database` шаблону разом з власником. */
@@ -329,9 +344,19 @@ export function templateState(found: TemplateRow | undefined): TemplateState {
 }
 
 // Схеми профілю: імена з переліку `PROVIDER_SCHEMAS.postgres` (T0); тест
-// тримає збіг. Схема Better Auth — одне джерело з таблицею ідентичності
+// тримає збіг. Схема Better Auth — одне джерело з таблицею ідентичності.
+// Схема сервера авторизації агентів теж належить ролі `auth`: її таблиці
+// створює крок налаштування бази шаблону від цієї ролі
 const EXTENSIONS_SCHEMA = "extensions"
 const AUTH_SCHEMA = PROVIDER_IDENTITY_SOURCES.postgres.table.schema
+const AGENT_SCHEMA = "agent_oauth"
+const AUTH_SCHEMAS = [AUTH_SCHEMA, AGENT_SCHEMA]
+/**
+ * Schemas the auth role owns in a target database of the postgres profile:
+ * Better Auth and the agents' authorization server. A host that prepares a
+ * database without `roles` (the shared-stack stands) creates exactly these.
+ */
+export const POSTGRES_AUTH_SCHEMAS: readonly string[] = AUTH_SCHEMAS
 const CHECK_EXTENSION = "plpgsql_check"
 
 /**
@@ -414,6 +439,7 @@ interface DatabaseFacts {
   extensionsSchema: boolean
   checkInstalled: boolean
   betterAuth: boolean
+  agentOauth: boolean
 }
 
 /** Гранти власника на таблицю ідентичності, які вже є в цілі. */
@@ -542,18 +568,23 @@ async function readExtensionsFacts(
   }
 }
 
-/** Факти схеми `better_auth` і ролі `auth`; роль може ще не існувати. */
+const hasSchema = (facts: AuthSchemaFacts, schema: string): boolean =>
+  facts.schemaOwners.some((s) => s.schema === schema)
+
+/** Факти схем ролі `auth` і самої ролі; роль може ще не існувати. */
 async function readAuthFacts(
   tx: ApplyTransaction,
   auth: string
 ): Promise<AuthSchemaFacts> {
-  const [schema] = await tx.query<{ schemaOwner: string }>(
+  const schemaOwners = await tx.query<{ schema: string; owner: string }>(
     [
-      'SELECT o.rolname::text AS "schemaOwner" FROM pg_catalog.pg_namespace n',
+      "SELECT n.nspname::text AS schema, o.rolname::text AS owner",
+      "FROM pg_catalog.pg_namespace n",
       "JOIN pg_catalog.pg_roles o ON o.oid = n.nspowner",
-      "WHERE n.nspname = $1::text",
+      "WHERE n.nspname = ANY($1::text[])",
+      "ORDER BY 1",
     ].join("\n"),
-    [AUTH_SCHEMA]
+    [AUTH_SCHEMAS]
   )
   const [role] = await tx.query<{
     oid: string
@@ -572,25 +603,25 @@ async function readAuthFacts(
   )
   if (role === undefined)
     return {
-      schemaOwner: schema?.schemaOwner,
+      schemaOwners,
       createDatabase: false,
       createPublic: false,
       strayRelations: [],
       searchPath: null,
     }
   // Таблиці й індекси TOAST лежать у `pg_toast` з власником основної таблиці:
-  // вони належать таблиці `better_auth`, а не стороннім об'єктам; створити
+  // вони належать таблиці схем ролі, а не стороннім об'єктам; створити
   // там власний об'єкт не можна
   const strayRelations = await tx.query<{ schema: string; name: string }>(
     [
       "SELECT n.nspname::text AS schema, c.relname::text AS name",
       "FROM pg_catalog.pg_class c",
       "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace",
-      "WHERE c.relowner = $1::pg_catalog.oid AND n.nspname <> $2::text",
+      "WHERE c.relowner = $1::pg_catalog.oid AND n.nspname <> ALL($2::text[])",
       "  AND n.nspname <> 'pg_toast'",
       "ORDER BY 1, 2 LIMIT 5",
     ].join("\n"),
-    [role.oid, AUTH_SCHEMA]
+    [role.oid, AUTH_SCHEMAS]
   )
   const [setting] = await tx.query<{ setconfig: string[] }>(
     [
@@ -602,7 +633,7 @@ async function readAuthFacts(
     [role.oid]
   )
   return {
-    schemaOwner: schema?.schemaOwner,
+    schemaOwners,
     createDatabase: role.createDatabase,
     createPublic: role.createPublic,
     strayRelations,
@@ -845,10 +876,9 @@ async function readPhase(
       const ext = await readExtensionsFacts(tx)
       const auth = await readAuthFacts(tx, set.auth)
       // Схеми ще немає — обидва гранти дасть фаза запису після її створення
-      const grants =
-        auth.schemaOwner === undefined
-          ? undefined
-          : await readIdentityGrants(tx, set)
+      const grants = !hasSchema(auth, AUTH_SCHEMA)
+        ? undefined
+        : await readIdentityGrants(tx, set)
       return { ext, auth, grants }
     })
     if (isRefusal(read)) refusal.push(...read)
@@ -856,13 +886,14 @@ async function readPhase(
       const reason = extensionsSchemaViolation(read.ext)
       if (reason !== undefined)
         refusal.push(unsafe(set.database, EXTENSIONS_SCHEMA, reason))
-      const authReason = authSchemaViolation(read.auth, set.auth)
-      if (authReason !== undefined)
-        refusal.push(unsafe(set.database, AUTH_SCHEMA, authReason))
+      const auth = authSchemaViolation(read.auth, set.auth)
+      if (auth !== undefined)
+        refusal.push(unsafe(set.database, auth.schema, auth.reason))
       target = {
         extensionsSchema: read.ext.exists,
         checkInstalled: read.ext.checkSchema !== undefined,
-        betterAuth: read.auth.schemaOwner !== undefined,
+        betterAuth: hasSchema(read.auth, AUTH_SCHEMA),
+        agentOauth: hasSchema(read.auth, AGENT_SCHEMA),
       }
       identityGrants = read.grants
     }
@@ -895,6 +926,7 @@ async function readPhase(
         extensionsSchema: read.ext.exists,
         checkInstalled: read.ext.checkSchema !== undefined,
         betterAuth: false,
+        agentOauth: false,
       }
     }
   }
@@ -1039,6 +1071,12 @@ async function writePhase(
       await tx.query(
         `CREATE SCHEMA ${q(AUTH_SCHEMA)} AUTHORIZATION ${q(set.auth)}`
       )
+    // Окремий факт, а не разом із `better_auth`: база, підготована до схеми
+    // агентів, має `better_auth` і отримує `agent_oauth` повторним `roles`
+    if (!snapshot.target?.agentOauth)
+      await tx.query(
+        `CREATE SCHEMA ${q(AGENT_SCHEMA)} AUTHORIZATION ${q(set.auth)}`
+      )
     await tx.query(
       `ALTER ROLE ${q(set.auth)} IN DATABASE ${q(set.database)} SET search_path = ${q(AUTH_SCHEMA)}`
     )
@@ -1124,7 +1162,7 @@ export interface ClusterConnections {
 
 /**
  * Готує кластер профілю `postgres` (спека профілю §3.4): ролі §3.1, цільову
- * базу з власником, схеми `extensions` і `better_auth`, `plpgsql_check`,
+ * базу з власником, схеми `extensions`, `better_auth` і `agent_oauth`, `plpgsql_check`,
  * запечатаний шаблон тіней. Дві фази під одним advisory lock службової бази.
  * Фаза читання нічого не пише й збирає всі відмови; фаза запису не відмовляє
  * вибірково (окрім повторної перевірки `extensions` перед

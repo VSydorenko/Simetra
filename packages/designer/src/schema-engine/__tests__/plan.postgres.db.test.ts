@@ -81,6 +81,16 @@ beforeAll(async () => {
   // Гранти на таблицю ідентичності дає повторний `roles` після міграції
   await migrateBetterAuth(roleUrl(set, set.auth))
   await roles()
+  // Таблиця сервера авторизації агентів від ролі `auth`, як її створює крок
+  // налаштування бази шаблону: зовнішній ключ на таблицю ідентичності
+  await admin(roleUrl(set, set.auth), (c) =>
+    c.query(
+      `create table agent_oauth.agent_grants (
+         grant_id text primary key,
+         user_id uuid not null references better_auth."user" (id) on delete cascade,
+         payload jsonb not null)`
+    )
+  )
   // Рядок цілі, якого в копії доказу бути не має
   await admin(targetDb(), (c) =>
     c.query(
@@ -132,6 +142,16 @@ describe("plan and apply on the postgres profile", () => {
     expect(text).not.toMatch(/REVOKE[^;]*better_auth/i)
     expect(text).toMatch(/CREATE TRIGGER[^;]*"?better_auth"?\."?user"?/is)
     expect(artifact.plpgsqlCheck).toBe("installed")
+    // Схема агентів поза межею плану: ні `DROP`, ні гранту, ні згадки
+    expect(text).not.toMatch(/agent_oauth/i)
+
+    // Таблиця `agent_oauth` між планом і застосуванням — не дрейф цілі:
+    // застосування однаково комітиться
+    await admin(roleUrl(set, set.auth), (c) =>
+      c.query(
+        "create table agent_oauth.between_plan_and_apply (id text primary key, payload jsonb not null)"
+      )
+    )
 
     const applied = await executePlan(writer, target(), artifact, {
       mode: "apply",
@@ -170,6 +190,19 @@ describe("plan and apply on the postgres profile", () => {
       )
       expect(grants.rows[0]?.usage).toBe(true)
     })
+
+    // Нова таблиця `agent_oauth` після застосування, із зовнішнім ключем на
+    // таблицю ідентичності, — не дрейф: наступний план не має що робити
+    await admin(roleUrl(set, set.auth), (c) =>
+      c.query(
+        `create table agent_oauth.models (
+           id text primary key,
+           user_id uuid references better_auth."user" (id) on delete cascade,
+           payload jsonb not null)`
+      )
+    )
+    const again = await buildPlan(engine, dbs, model, shadowOptions(), [])
+    expect(again).toMatchObject({ status: "unchanged" })
 
     // Копія доказу: той самий режим `plpgsql_check`, без рядків цілі
     const extracted = await engine.extract(target(), artifact.scope)

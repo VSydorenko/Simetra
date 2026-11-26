@@ -882,6 +882,61 @@ describe("tier zones", () => {
     })
   })
 
+  // Спека П4-F §5.4: SDK MCP — необов'язковий peer, тож його імпортує лише
+  // `src/shell/mcp`; решта пакета, зокрема `simetra/shell`, працює без нього.
+  describe("T6 mcp zone", () => {
+    const inside = "src/shell/mcp/__fixture.ts"
+    const both = async (spec: string, file: string) => [
+      ...(await restricted(importOf(spec), file)),
+      ...(await purity(importOf(spec), file)),
+    ]
+
+    it("allows the SDK, lower tiers and ./x in the folder", async () => {
+      for (const spec of [
+        "@modelcontextprotocol/server",
+        "simetra/server",
+        "simetra/model",
+        "./x",
+      ])
+        expect(await both(spec, inside), spec).toEqual([])
+      expect(
+        await both(
+          "@modelcontextprotocol/server",
+          "src/shell/mcp/a/__fixture.ts"
+        )
+      ).toEqual([])
+    })
+
+    it.each(
+      [
+        ...TIERS.map((tier) => `src/${tier}/__fixture.ts`),
+        "src/shell/a/__fixture.ts",
+      ].flatMap((file) => [
+        [file, "@modelcontextprotocol/server"],
+        [file, "@modelcontextprotocol/server/stdio"],
+      ])
+    )("%s refuses %s", async (file, spec) => {
+      expect(await purity(importOf(spec), file)).toHaveLength(1)
+    })
+
+    it.each([
+      ["src/shell/__fixture.ts", "./mcp"],
+      ["src/shell/__fixture.ts", "./mcp/entry"],
+      ["src/shell/a/__fixture.ts", "../mcp"],
+      ["src/ui/__fixture.ts", "../shell/mcp"],
+      ["src/schema/__fixture.ts", "../../src/shell/mcp/x"],
+    ])("%s: mcp detour %s is refused", async (file, spec) => {
+      expect(await both(spec, file), spec).not.toEqual([])
+    })
+
+    it.each(["pg", "better-auth", "@supabase/pg-delta"])(
+      "the folder still refuses %s",
+      async (spec) => {
+        expect(await purity(importOf(spec), inside)).toHaveLength(1)
+      }
+    )
+  })
+
   it("mts and cts are covered", async () => {
     for (const ext of ["mts", "cts"]) {
       const msgs = await restricted(

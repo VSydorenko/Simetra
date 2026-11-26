@@ -240,7 +240,7 @@ export const PROVIDER_SCHEMAS: Readonly<
     "supabase_migrations",
     "vault",
   ],
-  postgres: ["better_auth", "extensions", "information_schema"],
+  postgres: ["agent_oauth", "better_auth", "extensions", "information_schema"],
 }
 
 // Довіри до цілої схеми провайдера немає (спека прав §5.3): голова кличе лише

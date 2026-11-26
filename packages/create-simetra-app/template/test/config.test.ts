@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { appOrigin, authSecret, signalsConfig } from "../src/server/config"
+import {
+  agentOauthKeys,
+  appOrigin,
+  authSecret,
+  signalsConfig,
+} from "../src/server/config"
+import { agentOauthKeyEnv } from "./agent-oauth-keys"
 import { generateKey, mismatchedKey } from "./signal-keys"
 
 afterEach(() => vi.unstubAllEnvs())
@@ -152,5 +158,86 @@ describe("signalsConfig", () => {
     vi.stubEnv("SIMETRA_SIGNALS_URL", url)
     vi.stubEnv("SIMETRA_SIGNALS_KEYS", JSON.stringify([key, key]))
     expect(() => signalsConfig()).toThrow(/repeated/)
+  })
+})
+
+describe("agentOauthKeys (Р-F4-1)", () => {
+  const COOKIE = "SIMETRA_AGENT_OAUTH_COOKIE_KEYS"
+  const SIGNING = "SIMETRA_AGENT_OAUTH_SIGNING_KEY"
+
+  it("throws in production without both variables", () => {
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv(COOKIE, undefined)
+    vi.stubEnv(SIGNING, "")
+    expect(() => agentOauthKeys()).toThrow(
+      `${COOKIE} and ${SIGNING} are required in production`
+    )
+  })
+
+  it("is undefined outside production without both variables", () => {
+    vi.stubEnv("NODE_ENV", "development")
+    vi.stubEnv(COOKIE, undefined)
+    vi.stubEnv(SIGNING, undefined)
+    expect(agentOauthKeys()).toBeUndefined()
+  })
+
+  it("parses both variables", async () => {
+    const env = await agentOauthKeyEnv()
+    vi.stubEnv(COOKIE, env.cookieKeys)
+    vi.stubEnv(SIGNING, env.signingKey)
+    const jwk = JSON.parse(env.signingKey) as Record<string, string>
+    expect(agentOauthKeys()).toEqual({
+      cookieKeys: JSON.parse(env.cookieKeys),
+      signingKey: { kty: "OKP", crv: "Ed25519", x: jwk.x, d: jwk.d },
+    })
+  })
+
+  it("refuses one variable without the other in any environment", async () => {
+    const env = await agentOauthKeyEnv()
+    vi.stubEnv("NODE_ENV", "development")
+    vi.stubEnv(COOKIE, env.cookieKeys)
+    vi.stubEnv(SIGNING, undefined)
+    expect(() => agentOauthKeys()).toThrow(/set together or not at all/)
+    vi.stubEnv(COOKIE, undefined)
+    vi.stubEnv(SIGNING, env.signingKey)
+    expect(() => agentOauthKeys()).toThrow(/set together or not at all/)
+  })
+
+  it.each([
+    ["not JSON", "{"],
+    ["an empty array", "[]"],
+    ["a short key", JSON.stringify(["short"])],
+    ["a non-string key", JSON.stringify([42])],
+  ])("refuses cookie keys that are %s", async (_name, value) => {
+    const env = await agentOauthKeyEnv()
+    vi.stubEnv(COOKIE, value)
+    vi.stubEnv(SIGNING, env.signingKey)
+    expect(() => agentOauthKeys()).toThrow(COOKIE)
+  })
+
+  it("refuses a malformed or mismatched signing key without echoing key material", async () => {
+    const env = await agentOauthKeyEnv()
+    const other = JSON.parse((await agentOauthKeyEnv()).signingKey) as {
+      x: string
+    }
+    const jwk = JSON.parse(env.signingKey) as { x: string; d: string }
+    vi.stubEnv(COOKIE, env.cookieKeys)
+    for (const value of [
+      "{",
+      "[]",
+      JSON.stringify({ kty: "RSA", x: jwk.x, d: jwk.d }),
+      JSON.stringify({ kty: "OKP", crv: "Ed25519", x: jwk.x }),
+      JSON.stringify({ ...jwk, x: other.x }),
+    ]) {
+      vi.stubEnv(SIGNING, value)
+      let message = ""
+      try {
+        agentOauthKeys()
+      } catch (error) {
+        message = (error as Error).message
+      }
+      expect(message).toContain(SIGNING)
+      expect(message).not.toContain(jwk.d)
+    }
   })
 })

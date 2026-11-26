@@ -197,8 +197,8 @@ describe("postgres profile policy", () => {
   const policy = scopePolicy(scope)
   const flat = flattenPolicy(policy)
 
-  it("assumes only better_auth, which is a provider schema", () => {
-    expect(flat.assumedSchemas).toEqual(["better_auth"])
+  it("assumes only better_auth and agent_oauth, which are provider schemas", () => {
+    expect(flat.assumedSchemas).toEqual(["agent_oauth", "better_auth"])
     for (const schema of flat.assumedSchemas)
       expect(PROVIDER_SCHEMAS.postgres).toContain(schema)
     // extensions та information_schema — провайдерні, але не припущені
@@ -283,6 +283,20 @@ describe("postgres profile policy", () => {
       target: userTable,
       grantee: "simetra_owner",
     }
+    // Схема сервера авторизації агентів: таблиці від ролі `auth`, зовнішній
+    // ключ на `better_auth.user`; план не керує нічим у ній
+    const grantsTable = table("agent_oauth", "agent_grants").id
+    const agentTrigger: StableId = {
+      kind: "trigger",
+      schema: "agent_oauth",
+      table: "agent_grants",
+      name: "touch",
+    }
+    const agentAcl: StableId = {
+      kind: "acl",
+      target: grantsTable,
+      grantee: "simetra_owner",
+    }
     const adp: StableId = {
       kind: "defaultPrivilege",
       role: "simetra_owner",
@@ -294,11 +308,15 @@ describe("postgres profile policy", () => {
     const view = resolveView(
       buildFactBase(
         [
+          schema("agent_oauth"),
           schema("better_auth"),
           schema("extensions"),
           schema("app"),
           schema("simetra"),
           table("better_auth", "user"),
+          table("agent_oauth", "agent_grants"),
+          { id: agentTrigger, parent: grantsTable, payload: {} },
+          { id: agentAcl, payload: {} },
           { id: fn, payload: {} },
           { id: trigger, parent: userTable, payload: {} },
           { id: acl, payload: {} },
@@ -307,6 +325,9 @@ describe("postgres profile policy", () => {
         [
           { from: trigger, to: userTable, kind: "depends" },
           { from: trigger, to: fn, kind: "depends" },
+          { from: agentTrigger, to: grantsTable, kind: "depends" },
+          { from: agentTrigger, to: fn, kind: "depends" },
+          { from: grantsTable, to: userTable, kind: "depends" },
         ],
         "liveDb",
         new Set()
@@ -323,6 +344,18 @@ describe("postgres profile policy", () => {
       ["table better_auth.user", "reference-only", userTable],
       ["acl on better_auth.user", "dropped", acl],
       ["schema extensions", "dropped", { kind: "schema", name: "extensions" }],
+      [
+        "schema agent_oauth",
+        "reference-only",
+        { kind: "schema", name: "agent_oauth" },
+      ],
+      ["table agent_oauth.agent_grants", "reference-only", grantsTable],
+      [
+        "trigger on agent_oauth.agent_grants with an edge to simetra",
+        "reference-only",
+        agentTrigger,
+      ],
+      ["acl on agent_oauth.agent_grants", "dropped", agentAcl],
       ["default privilege of the owner in app", "managed", adp],
     ] as const)("%s is %s", (_name, verdict, id) => {
       const actual = !view.has(id)

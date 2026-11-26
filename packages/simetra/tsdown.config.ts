@@ -15,6 +15,7 @@ export default defineConfig({
     "data/centrifugo/index": "src/data/centrifugo/index.ts",
     "ui/index": "src/ui/index.ts",
     "shell/index": "src/shell/index.ts",
+    "shell/mcp/index": "src/shell/mcp/index.ts",
   },
   format: "esm",
   platform: "node",

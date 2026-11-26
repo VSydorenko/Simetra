@@ -21,6 +21,11 @@ const SENTINELS = {
   SIMETRA_RUNTIME_DATABASE_URL: `postgresql://sentinel-runtime-${tag}:pw@sentinel.test/db`,
   SIMETRA_AUTH_DATABASE_URL: `postgresql://sentinel-auth-${tag}:pw@sentinel.test/db`,
   BETTER_AUTH_SECRET: `sentinel-secret-${tag}`,
+  // Ключі сервера авторизації агентів: збірка їх не читає, тож у клієнтські
+  // асети вони потрапити не можуть, окрім як літералом. Значення без лапок:
+  // контроль-витік вставляє їх через JSON.stringify
+  SIMETRA_AGENT_OAUTH_COOKIE_KEYS: `sentinel-agent-cookie-keys-${tag}`,
+  SIMETRA_AGENT_OAUTH_SIGNING_KEY: `sentinel-agent-signing-key-${tag}`,
 }
 
 /** Маркери, яких у production-збірці бути не може. */

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { stubAgentOauthKeys } from "./agent-oauth-keys"
 import { generateKey, mismatchedKey } from "./signal-keys"
 
 // Порт токенів кешується на модуль: кожен тест бере свіжий екземпляр
@@ -11,6 +12,7 @@ beforeEach(async () => {
   vi.stubEnv("SIMETRA_APP_ORIGIN", "https://app.test")
   vi.stubEnv("BETTER_AUTH_SECRET", "s3cret")
   vi.stubEnv("NODE_ENV", "production")
+  await stubAgentOauthKeys()
 })
 afterEach(() => vi.unstubAllEnvs())
 
@@ -33,6 +35,12 @@ describe("nitro startup plugin", () => {
   it("throws in production without BETTER_AUTH_SECRET", () => {
     vi.stubEnv("BETTER_AUTH_SECRET", undefined)
     expect(() => startupPlugin()).toThrow(/BETTER_AUTH_SECRET/)
+  })
+
+  it("throws in production without the agent authorization server keys", () => {
+    vi.stubEnv("SIMETRA_AGENT_OAUTH_COOKIE_KEYS", undefined)
+    vi.stubEnv("SIMETRA_AGENT_OAUTH_SIGNING_KEY", undefined)
+    expect(() => startupPlugin()).toThrow(/required in production/)
   })
 
   describe("signals", () => {

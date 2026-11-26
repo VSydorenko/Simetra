@@ -1,4 +1,4 @@
-import { appOrigin, authSecret, signalsConfig } from "./config"
+import { agentOauthKeys, appOrigin, authSecret, signalsConfig } from "./config"
 import { signingKeyProblem } from "simetra/server/signals"
 
 // Відмова старту (§4.1). У production Nitro не імпортує SSR-entry при запуску:
@@ -11,6 +11,7 @@ import { signingKeyProblem } from "simetra/server/signals"
 export default function startupPlugin(): void {
   appOrigin()
   authSecret()
+  agentOauthKeys()
   const signals = signalsConfig()
   if (signals === undefined) return
   // Штатна фаза ротації — не помилка конфігу, а попередження (профіль §6.3)

@@ -147,6 +147,35 @@ WebSocket Node з токенами порту `simetra/server/signals`. Producti
 пари SDK і піну образу Centrifugo (`docker/centrifugo-image.txt`): на оновленні будь-якого з них — звірити
 кейси гейта.
 
+## `oidc-provider` і `srvx` — сервер авторизації агентів шаблону
+
+Точні піни в `dependencies` шаблону (`packages/create-simetra-app/template/package.json`):
+`oidc-provider` 9.12.2, `srvx` 1.0.8. Сервер авторизації агентів (спека П4-F
+§5.4) — `template/src/server/agent-oauth/`. CIMD у бібліотеці експериментальний
+(`features.clientIdMetadataDocument`, `ack: "draft-02"`): оновлення
+`oidc-provider` — окрема зміна з тестами F4 (`template/test/agent-oauth-*.test.ts`).
+
+На оновленні звірити:
+
+- **Порядок вживання й ресурсу.** Код (`consumeGrantSource`,
+  `lib/actions/grants/authorization_code.js`) і токен оновлення
+  (`refreshToken.consume()`, `lib/actions/grants/refresh_token.js`)
+  вживаються раніше, ніж `resolveResource` розв'язує ресурс. Тому перевірка
+  `resource` на `/token` стоїть у шарі монтування (`mount.ts`). Стережуть тести
+  «/token resource checked before the library» (`agent-oauth-flows.db.test.ts`).
+- **Вживання читанням до запису.** Бібліотека перевіряє `consumed` читанням,
+  атомарність дає адаптер (`store.ts`). Стереже тест паралельних оновлень.
+- **Адреси кінцевих точок.** `urlFor` (`lib/helpers/oidc_context.js`) будує їх
+  з `ctx.href`, тобто з `Host` і `X-Forwarded-*`, тому монтування закріплює
+  запит за `appOrigin()`. Стереже «host pinning over the real library»
+  (`agent-oauth-mount.test.ts`).
+- **Порт loopback.** `#redirectAllowed` (`lib/models/client.js`) ігнорує порт
+  лише для `native` loopback. Стереже тест Claude Code (`agent-oauth-cimd.db.test.ts`).
+- **Ім'я й `ack` CIMD.** Вони в `lib/helpers/features.js` (`EXPERIMENTS`).
+- **`srvx`: `toFetchHandler`** (`srvx/node`). Будує Node-обгортки над
+  веб-`Request` без `runtime`. Звірити, що `Host` проходить, а сокет не
+  `encrypted`.
+
 ## Драйвер `pg`
 
 `TRANSPORT_MESSAGE` (`packages/designer/src/schema-engine/apply-database.ts`)

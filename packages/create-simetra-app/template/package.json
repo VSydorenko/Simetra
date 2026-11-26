@@ -20,18 +20,22 @@
     "seed": "node scripts/seed.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
     "@tanstack/react-form": "1.33.5",
     "@tanstack/react-router": "1.170.46",
     "@tanstack/react-start": "1.169.5",
     "@tanstack/react-virtual": "3.14.26",
     "better-auth": "1.7.12",
     "centrifuge": "5.8.0",
+    "oidc-provider": "9.12.2",
     "pg": "8.23.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "simetra": "workspace:*"
+    "simetra": "workspace:*",
+    "srvx": "1.0.8"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
     "@simetrajs/designer": "workspace:*",
     "@types/node": "^24.19.2",
     "@types/pg": "^8.23.1",

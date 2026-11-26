@@ -249,6 +249,16 @@ const TEST_ONLY_AUTH_PATTERN = {
     "Test-only dependency: better-auth and kysely are devDependencies of simetra for DB tests; production sources must not import them (postgres profile plan 2a, decision R2).",
 }
 
+// SDK MCP — необов'язковий peer (спека П4-F §5.4): його імпортує лише
+// `src/shell/mcp`, тож решта `simetra` працює без нього. Відносний `./mcp` чи
+// `../mcp` з іншої теки тягнув би SDK у свій вхід так само.
+const MCP_SDK_PATTERN = {
+  regex:
+    "^(?:@modelcontextprotocol/server(?:/|$)|(?:\\./(?:\\.\\./)*|(?:\\.\\./)+)(?:(?:src/)?shell/)?mcp(?:/|$))",
+  message:
+    "MCP zone: only src/shell/mcp imports @modelcontextprotocol/server or the mcp folder; the SDK is an optional peer of simetra (P4-F spec §5.4).",
+}
+
 // Чистота T4 (спека П4-B §3). Allow-list: нерелятивні імпорти — лише
 // simetra/model, zod і react; `@tanstack/*` не дозволено ніде в `src/data`
 // (власне ядро даних, без бібліотек рушія). Ядро в `src/data/store` ще й без
@@ -329,6 +339,24 @@ export const purityConfigs = [
     rules: {
       "@typescript-eslint/no-restricted-imports": [
         "error",
+        {
+          patterns: [
+            DB_ENGINE_PATTERN,
+            TEST_ONLY_AUTH_PATTERN,
+            MCP_SDK_PATTERN,
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // Блок дозволу: пізніший блок замінює опції загального цілком, тож
+    // заборони рушія бази й тестових залежностей повторено без SDK MCP.
+    files: ["src/shell/mcp/**/*.{ts,tsx,mts,cts}"],
+    ignores: PURITY_IGNORES,
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
         { patterns: [DB_ENGINE_PATTERN, TEST_ONLY_AUTH_PATTERN] },
       ],
     },
@@ -395,6 +423,7 @@ export const purityConfigs = [
           patterns: [
             DB_ENGINE_PATTERN,
             TEST_ONLY_AUTH_PATTERN,
+            MCP_SDK_PATTERN,
             {
               regex:
                 "^(?:centrifuge(?:/|$)|simetra/data/(?:supabase|centrifugo)(?:/|$)|(?:\\./)?(?:\\.\\./)+(?:src/)?data(?:/|$))",
@@ -416,6 +445,7 @@ export const purityConfigs = [
           patterns: [
             DB_ENGINE_PATTERN,
             TEST_ONLY_AUTH_PATTERN,
+            MCP_SDK_PATTERN,
             {
               regex:
                 "^(?:node:|(?:fs|path|os|crypto|url|child_process)(?:/|$))",

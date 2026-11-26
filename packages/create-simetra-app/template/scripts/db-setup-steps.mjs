@@ -55,8 +55,53 @@ async function migrateBetterAuth(authUrl, { origin, secret }) {
 }
 
 /**
+ * Таблиці сервера авторизації агентів (спека П4-F §5.4, Р-F4-3). Схему
+ * `agent_oauth` створює кластер профілю з власником `simetra_auth`, тож тут
+ * лише таблиці від цієї ролі: `CREATE SCHEMA IF NOT EXISTS` вимагав би
+ * `CREATE` на базу. Строкових типових значень немає: усі строки ставить
+ * годинник JS (Р-F4-11). Ідемпотентно.
+ */
+export const AGENT_OAUTH_DDL = `
+CREATE TABLE IF NOT EXISTS agent_oauth.models (
+  model       text        NOT NULL,
+  id_hash     text        NOT NULL,
+  grant_id    text,
+  uid         text,
+  payload     jsonb       NOT NULL,
+  consumed_at timestamptz,
+  expires_at  timestamptz,
+  PRIMARY KEY (model, id_hash)
+);
+CREATE INDEX IF NOT EXISTS models_grant_id ON agent_oauth.models (grant_id);
+CREATE INDEX IF NOT EXISTS models_uid ON agent_oauth.models (uid);
+CREATE INDEX IF NOT EXISTS models_expires_at ON agent_oauth.models (expires_at);
+CREATE TABLE IF NOT EXISTS agent_oauth.agent_grants (
+  grant_id     text        PRIMARY KEY,
+  user_id      uuid        NOT NULL REFERENCES better_auth."user" (id) ON DELETE CASCADE,
+  client_id    text        NOT NULL,
+  tenant       uuid,
+  created_at   timestamptz NOT NULL,
+  last_used_at timestamptz NOT NULL,
+  expires_at   timestamptz NOT NULL,
+  revoked_at   timestamptz
+);
+CREATE INDEX IF NOT EXISTS agent_grants_user_id ON agent_oauth.agent_grants (user_id);
+`
+
+/** Крок DDL `agent_oauth` від `simetra_auth`; після міграції Better Auth (FK на `user`). */
+export async function migrateAgentOauth(authUrl) {
+  const client = new pg.Client({ connectionString: authUrl })
+  await client.connect()
+  try {
+    await client.query(AGENT_OAUTH_DDL)
+  } finally {
+    await client.end()
+  }
+}
+
+/**
  * Порядок кроків: `beforeMigration` (ролі й схема `better_auth`) → міграція
- * Better Auth → `afterMigration` (гранти власнику на таблицю ідентичності) →
+ * Better Auth → таблиці `agent_oauth` → `afterMigration` (гранти власнику на таблицю ідентичності) →
  * `plan` і `apply` від власника. Повертає шлях застосованого плану чи
  * `undefined`, коли база вже збігається з метаданими.
  */
@@ -70,6 +115,7 @@ export async function runDbSetup({
 }) {
   await beforeMigration()
   await migrateBetterAuth(authUrl, { origin, secret })
+  await migrateAgentOauth(authUrl)
   await afterMigration()
   const planned = JSON.parse(
     runSimetra(["plan", config.metadataDir, "--format=json"], ownerUrl)
