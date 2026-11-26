@@ -104,6 +104,10 @@ describe("normalizeClientMetadata (Р-F4-6)", () => {
       ["https://localhost/callback"],
       ["http://localhost.example/callback"],
       ["http://10.0.0.1/callback"],
+      // Loopback лише на вигляд: userinfo перед чужим хостом і чужий домен
+      // із префіксом `localhost`
+      ["http://127.0.0.1@evil.com/cb"],
+      ["http://localhost.evil.com/cb"],
     ])
       expect(
         normalizeClientMetadata({ ...fixture("claude-code"), redirect_uris }),

@@ -620,5 +620,10 @@ describe("the human session verifier", () => {
         new Headers({ authorization: `Bearer ${at(l)}` })
       )
     ).toBeNull()
+    // Контроль: справжня сесія Better Auth того самого стенду проходить
+    const session = await stand.verifySession(
+      new Headers({ cookie: l.flow.browser.jar.header(`${ORIGIN}/`) })
+    )
+    expect(session?.sub).toBe(l.userId)
   }, 60_000)
 })
