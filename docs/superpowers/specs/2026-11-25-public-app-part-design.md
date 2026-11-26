@@ -114,14 +114,15 @@ published: true }` (ADR-0119). Рядкова форма означає те с�
 **Політики** (`buildAccessUnits` у `compiler/access-units.ts`) на шапці й ТЧ:
 
 - `<t>_public_read` — ті самі ролі, що зараз (ролі API за `publicRead` і роль
-  команд), `USING (V AND <publicReadUsing>)`;
+  команд), `USING` — умови будівника `publicReadConditions`
+  (`compiler/rights/public-read.ts`): V (рядкові літерали) і `validUser`;
 - межа тенанта на читанні (`readBoundaries`) для умовного об'єкта є:
   `RESTRICTIVE … USING (V OR <межа>)`; лівий диз'юнкт — саме V;
 - `<t>_read_*` повертаються, як для об'єкта без `publicRead`;
 - межі запису й політики запису — без змін.
 
 **Ядро й пояснення.** `rowBranch` (`compiler/rights/require-units.ts`) для
-умовного об'єкта — `(V AND <publicReadUsing>) OR (<межа> AND <право read>)` з
+умовного об'єкта — `(<умови publicReadConditions: V і validUser>) OR (<межа> AND <право read>)` з
 того самого будівника. Пояснення (`compiler/rights/explain-units.ts`) судить
 рядок публічного читання за V; виняток спеки прав §5.1 для користувача поза
 скоупом діє лише для опублікованого рядка.
