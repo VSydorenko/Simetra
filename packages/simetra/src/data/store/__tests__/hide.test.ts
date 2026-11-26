@@ -442,4 +442,36 @@ describe("hide of an include target and the stale-client mark (R10)", () => {
     expect(h.attempts).toEqual([])
     expect(h.handle.getSnapshot().status).toBe("ready")
   })
+
+  // Позначка стала, поки відповідь летіла: пізня відмова після відповіді
+  // (`dispatch`) не віддає її рядків, а відмовляє як `stale-client`.
+  it("the object turns stale while the read flies: the answer is refused late, the view goes to error", async () => {
+    const h = setup()
+    seed(h.fake, 1, 3)
+    const v = h.core.view({ kind: "full", object: TASK })
+    watch(v)
+    await settle()
+    const attempts: unknown[] = []
+    h.inspect.watchAttempts((event) => attempts.push(event))
+    h.fake.hold = () => true
+    v.refresh()
+    await settle()
+    const flying = h.fake.take()
+    h.core.staleClient(TASK)
+    h.fake.hold = undefined
+    flying.answer()
+    await settle()
+    expect(v.getSnapshot()).toMatchObject({
+      status: "error",
+      error: { code: "command.stale-client" },
+      isStale: true,
+    })
+    expect(attempts).toContainEqual(
+      expect.objectContaining({
+        phase: "settled",
+        outcome: "failed",
+        skip: "stale-object",
+      })
+    )
+  })
 })
