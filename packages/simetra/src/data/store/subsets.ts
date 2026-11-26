@@ -592,8 +592,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           // вигляду: дефект застосування її не веде (як на `main`).
           if (
             entry.failure !== undefined &&
-            rules.failureCounts === "if-loaded" &&
-            s.loaded
+            (rules.failureCounts === "always" ||
+              (rules.failureCounts === "if-loaded" && s.loaded))
           ) {
             s.failures++
             s.failedAt = required(f.startedAt, "its start time")
