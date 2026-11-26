@@ -55,6 +55,7 @@ type Kind =
   | "unavailable"
   | "visible"
   | "isClosed"
+  | "closed"
   | "staleObjects"
   | `gate.${GateQuery}`
 
@@ -77,6 +78,12 @@ interface Anchors {
   readonly visible: Named
   readonly staleObjects: Named
   readonly isClosed: Named
+  /**
+   * Сирий стан закриття (вид `closed`): змінна знімка закриття ядра, член
+   * контексту, що його віддає, і геттер закриття сесії.
+   */
+  readonly closed: Named
+  readonly closedMembers: readonly Member[]
   readonly gate: Named
   readonly gateState: Named
   readonly brand: Named
@@ -272,6 +279,8 @@ function analyze(
   const visible = findNamed(program, anchors.visible)
   const staleObjects = findNamed(program, anchors.staleObjects)
   const isClosed = findNamed(program, anchors.isClosed)
+  const closedVar = findNamed(program, anchors.closed)
+  const closedMembers = anchors.closedMembers.map((m) => findMember(program, m))
   const brand = findNamed(program, anchors.brand)
   const flight = findNamed(program, anchors.flight)
   const gateQuery = new Map<ts.Node, GateQuery>(
@@ -404,6 +413,14 @@ function analyze(
       return mutated ? undefined : "staleObjects"
     }
     if (decls.includes(isClosed)) return "isClosed"
+    if (decls.includes(closedVar)) {
+      const written =
+        ts.isBinaryExpression(p) &&
+        p.left === n &&
+        p.operatorToken.kind === ts.SyntaxKind.EqualsToken
+      return written ? undefined : "closed"
+    }
+    if (closedMembers.some((m) => decls.includes(m))) return "closed"
     return undefined
   }
 
@@ -419,6 +436,7 @@ function analyze(
       const q = gateQuery.get(d)
       if (q !== undefined) return `gate.${q}`
     }
+    if (closedMembers.some((m) => decls.includes(m))) return "closed"
     return undefined
   }
 
@@ -534,6 +552,7 @@ function analyze(
   const known = new Set<ts.Node>([
     ...gateDecl.members,
     ...gateStateDecl.members,
+    ...closedMembers,
   ])
   /** Читання носіїв члена, і носіїв, яких носій сам передає далі. */
   const carried = (member: ts.Node, seen = new Set<ts.Node>()): Read[] => {
@@ -688,6 +707,11 @@ const REAL: Anchors = {
   visible: [at("core.ts"), "visible"],
   staleObjects: [at("core.ts"), "staleObjects"],
   isClosed: [at("subsets.ts"), "isClosed"],
+  closed: [at("core.ts"), "closed"],
+  closedMembers: [
+    [at("subsets.ts"), "RegistryContext", "closedSnapshot"],
+    [at("session.ts"), "Session", "closed"],
+  ],
   gate: [at("sync/flight.ts"), "Gate"],
   gateState: [at("sync/flight.ts"), "GateState"],
   brand: [at("sync/flight.ts"), "FLIGHT"],
@@ -772,6 +796,7 @@ const PLACES: readonly Group[] = [
     sites: [
       "core.ts::createCore.batcher.staleObject gate.staleObject",
       "core.ts::createCore.registry.isStale staleObjects",
+      "core.ts::createCore.registry.closedSnapshot closed",
       "core.ts::createCore.registry.tabHidden gate.tabHidden",
       "core.ts::createCore.writerContext.isStale staleObjects",
       "core.ts::createCore.overlay.isStale staleObjects",
@@ -808,7 +833,7 @@ const PLACES: readonly Group[] = [
   {
     inventory: false,
     reason:
-      "Публічні ознаки й публічне API (Р-SK1-9, PR #433): `core.visible`, прапор знімка, відмова мутації `stale-client` журналу, відмова виклику закритого ядра (`view`, `subscribe`, `hydrate`, `dehydrate`) і токен журналу мутацій — не рішення читати",
+      "Публічні ознаки й публічне API (Р-SK1-9, PR #433): `core.visible`, прапор знімка, відмова мутації `stale-client` журналу, відмова виклику закритого ядра (`view`, `subscribe`, `hydrate`, `dehydrate`, причина закриття мутації `update`), знімок закритого вигляду (`getSnapshot`) і токен журналу мутацій — не рішення читати",
     sites: [
       "core.ts::createCore.core.visible gate.tabHidden",
       "subsets.ts::createRegistry.idleSnapshot staleObjects via RegistryContext.isStale",
@@ -818,6 +843,11 @@ const PLACES: readonly Group[] = [
       "subsets.ts::createRegistry.view isClosed",
       "subsets.ts::createRegistry.makeHandle.subscribe isClosed ×2",
       "core.ts::createCore.core.hydrate token",
+      "core.ts::createCore.core.hydrate closed",
+      "core.ts::createCore.core.dehydrate closed",
+      "overlay.ts::createOverlay.update closed",
+      "subsets.ts::createRegistry.closedHandle.getSnapshot closed",
+      "subsets.ts::createRegistry.makeHandle.getSnapshot closed",
       "core.ts::createCore.core.dehydrate token",
     ],
   },
@@ -926,6 +956,7 @@ const PLACES: readonly Group[] = [
       "readers.ts::applyIncluded staleObjects via ReaderContextBase.isStale",
       "subsets.ts::createRegistry.computeSnapshot gate.tabHidden via RegistryContext.tabHidden",
       "subsets.ts::createRegistry.computeSnapshot staleObjects via RegistryContext.isStale",
+      "subsets.ts::createRegistry.computeSnapshot closed",
     ],
   },
   {
@@ -949,7 +980,21 @@ const PLACES: readonly Group[] = [
     inventory: true,
     reason:
       "(v) Публічне API входу: `preload` закритого ядра відмовляє виклику до польоту — без утримання й без читання (публічний знімок закриття, Р-SK1-5)",
-    sites: ["subsets.ts::createRegistry.preload isClosed"],
+    sites: [
+      "subsets.ts::createRegistry.preload isClosed",
+      // Обгортка публічного знімка закриття: її кличуть `view`, `subscribe`,
+      // `preload`.
+      "subsets.ts::createRegistry.isClosed closed",
+    ],
+  },
+  {
+    inventory: true,
+    reason:
+      "Стан закриття для не-читальних ефектів (Р-SK1-10, п. 2: записувачі стану): `core.close` — записувач знімка закриття, повторний виклик нічого не робить; `onFlush` — пачка закриття сповіщає всі вигляди (`afterCommit(closing)`) і не сповіщає далі, коли слухач закрив ядро; читання цих шляхів судить `admit`",
+    sites: [
+      "core.ts::createCore.core.close closed",
+      "core.ts::createCore.onFlush closed ×2",
+    ],
   },
 ]
 
@@ -1072,6 +1117,11 @@ const V: Anchors = {
   visible: ["/v/core.ts", "visible"],
   staleObjects: ["/v/core.ts", "staleObjects"],
   isClosed: ["/v/subsets.ts", "isClosed"],
+  closed: ["/v/core.ts", "closed"],
+  closedMembers: [
+    ["/v/ctx.ts", "Ctx", "closedSnapshot"],
+    ["/v/session.ts", "Session", "closed"],
+  ],
   gate: ["/v/sync/flight.ts", "Gate"],
   gateState: ["/v/sync/flight.ts", "GateState"],
   brand: ["/v/sync/flight.ts", "FLIGHT"],
@@ -1085,6 +1135,7 @@ const FIXTURE = {
 export interface VersionEpochs { unavailable(): boolean }
 export interface Session {
   readonly versions: VersionEpochs
+  readonly closed: string | undefined
   token(): GenerationToken
   childToken(isValid: () => boolean): GenerationToken
   commit(fn: () => void, token: GenerationToken): boolean
@@ -1111,6 +1162,7 @@ export interface Gate {
 export declare function createGate(state: GateState): Gate
 `,
   "/v/ctx.ts": `export interface Ctx {
+  closedSnapshot(): string | undefined
   isStale(object: string): boolean
   hidden(): boolean
 }
@@ -1131,7 +1183,7 @@ import { settle } from "./source.ts"
 import { gone, quiet, use } from "./helper.ts"
 export function createCore(session: Session) {
   const staleObjects = { has: (o: string) => o === "", add: (o: string) => {} }
-  let visible = true
+  let visible = true, closed: string | undefined = undefined
   const gate = createGate({
     token: () => session.token(),
     staleObject: (o) => staleObjects.has(o),
@@ -1226,6 +1278,32 @@ describe("read gate guard self-test: each form", () => {
     expect(t.closure([LOAD])).toEqual([
       "helper.ts::use gate.tabHidden via Ctx.hidden",
       "helper.ts::use staleObjects via Ctx.isStale",
+    ])
+  })
+})
+
+describe("read gate guard self-test: the raw closed state", () => {
+  it("the snapshot variable, the context member and the session getter are reads; writes are not", () => {
+    const t = selfTest(`  function load(ctx: Ctx) {
+    closed = "x"
+    if (ctx.closedSnapshot() !== undefined) return 1
+    if (session.closed !== undefined) return 2
+    const { closedSnapshot } = ctx
+    return closed !== undefined || closedSnapshot()
+  }`)
+    expect(t.closure([LOAD])).toEqual([
+      "core.ts::createCore.load closed",
+      "core.ts::createCore.load closed",
+      "core.ts::createCore.load closed",
+      "core.ts::createCore.load closed",
+    ])
+    expect(
+      mismatches(
+        countOf(t.analysis.closure([LOAD]).findings),
+        new Map([parsePlace("core.ts::createCore.load closed ×3")])
+      )
+    ).toEqual([
+      "core.ts::createCore.load closed: found 4, listed 3 @16, @17, @18, @19",
     ])
   })
 })
