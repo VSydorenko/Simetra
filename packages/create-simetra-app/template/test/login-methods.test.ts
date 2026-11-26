@@ -26,7 +26,7 @@ describe("loginMethodsOf", () => {
   })
 
   it("defaults to password only", () => {
-    vi.stubEnv("SIMETRA_SIGN_IN_METHODS", "")
+    vi.stubEnv("SIMETRA_SIGN_IN_METHODS", undefined)
     expect(loginMethodsOf(authSettings())).toEqual({
       password: true,
       emailCode: false,

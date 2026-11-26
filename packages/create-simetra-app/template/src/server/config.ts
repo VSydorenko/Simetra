@@ -203,10 +203,10 @@ export function authSettings(): AuthSettings {
     throw new Error(`${SIGN_UP_VARIABLE} must be "closed" or "open"`)
   }
   const rawMethods = process.env[METHODS_VARIABLE]
+  // Типовий пароль — лише без змінної: порожній перелік дає пункт "" і
+  // відмову нижче (П4-D §4.1), а не мовчки ввімкнений пароль
   const methods = new Set(
-    (rawMethods === undefined || rawMethods === "" ? "password" : rawMethods)
-      .split(",")
-      .map((item) => item.trim())
+    (rawMethods ?? "password").split(",").map((item) => item.trim())
   )
   const known = new Set(["password", "email-code", ...OAUTH_PROVIDERS])
   for (const method of methods) {

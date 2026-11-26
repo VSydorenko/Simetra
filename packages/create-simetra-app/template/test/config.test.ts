@@ -184,6 +184,12 @@ describe("authSettings", () => {
     })
   })
 
+  it("reads an empty SIMETRA_SIGN_UP as closed", () => {
+    clear()
+    vi.stubEnv("SIMETRA_SIGN_UP", "")
+    expect(authSettings().signUp).toBe("closed")
+  })
+
   it("reads sign-up, methods and provider credentials", () => {
     clear()
     vi.stubEnv("SIMETRA_SIGN_UP", "open")
@@ -205,6 +211,11 @@ describe("authSettings", () => {
     ["SIMETRA_SIGN_IN_METHODS", "password,facebook", /SIMETRA_SIGN_IN_METHODS/],
     ["SIMETRA_SIGN_IN_METHODS", "password,", /SIMETRA_SIGN_IN_METHODS/],
     ["SIMETRA_SIGN_IN_METHODS", ",", /SIMETRA_SIGN_IN_METHODS/],
+    // Типовий пароль дає лише відсутня змінна: порожній перелік — відмова
+    // старту (П4-D §4.1), а не мовчки ввімкнений пароль
+    ["SIMETRA_SIGN_IN_METHODS", "", /SIMETRA_SIGN_IN_METHODS/],
+    ["SIMETRA_SIGN_IN_METHODS", "  ", /SIMETRA_SIGN_IN_METHODS/],
+    ["SIMETRA_SIGN_IN_METHODS", " , ", /SIMETRA_SIGN_IN_METHODS/],
   ])("refuses %s=%j", (name, value, pattern) => {
     clear()
     vi.stubEnv(name, value)
