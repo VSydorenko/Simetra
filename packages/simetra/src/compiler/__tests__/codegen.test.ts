@@ -1141,8 +1141,19 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
       diagnosticsOf(
         code,
         [
+          'import type * as G from "./entities"',
           'import type { Catalogs, RichTextDocument as Generated } from "./entities"',
+          'import type * as M from "./model"',
           'import type { RichTextDocument as Model } from "./model"',
+          // Взаємна присвоюваність не бачить зниклого необов'язкового члена,
+          // тож тип порівнюється на точну рівність.
+          "type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends",
+          "  (<T>() => T extends B ? 1 : 2) ? true : false",
+          "type Same<A, B> = Equal<A, B> extends true ? true : never",
+          "export const sameDocument: Same<G.RichTextDocument, M.RichTextDocument> = true",
+          "export const sameNode: Same<G.RichTextNode, M.RichTextNode> = true",
+          "export const sameMark: Same<G.RichTextMark, M.RichTextMark> = true",
+          "export const sameAttr: Same<G.RichTextAttrValue, M.RichTextAttrValue> = true",
           "declare const generated: Generated",
           "declare const model: Model",
           "export const toModel: Model = generated",
