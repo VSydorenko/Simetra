@@ -39,6 +39,9 @@ const BASE_OPTIONS: ts.CompilerOptions = {
   types: [],
 }
 
+/** Крок «поза проходом»: виклик з місця, яке не є гачком чи замиканням запису. */
+const OUTSIDE = "outside"
+
 /** Номер кроку проходу за іменем гачка (`SettleHooks`). */
 const STEP_OF_HOOK: Readonly<Record<string, string>> = {
   quiet: "0",
@@ -50,7 +53,8 @@ const STEP_OF_HOOK: Readonly<Record<string, string>> = {
   readFailed: "3",
   beforeGate: "3",
   gate: "4",
-  discarded: "4",
+  // Власна мітка: брама епох у гачку відкинутої відповіді — не крок 4.
+  discarded: "4d",
   apply: "5",
   // Журнал збою застосування й перевірка скинутої сторінки не пишуть відповідь.
   applyFailed: "5x",
@@ -374,6 +378,8 @@ function analyze(
     if (visiting.has(fn)) return new Set()
     visiting.add(fn)
     const out = new Set<string>()
+    // Функція без жодного посилання недосяжна з жодного кроку.
+    if ((refsOf.get(fn) ?? []).length === 0) out.add(OUTSIDE)
     for (const r of refsOf.get(fn) ?? []) {
       for (const s of stepsOf(contextOf(r.node), visiting)) out.add(s)
     }
@@ -390,7 +396,8 @@ function analyze(
       ? new Set([ctx.step])
       : ctx.fn !== undefined
         ? stepsOfFn(ctx.fn, visiting)
-        : new Set()
+        : // Верхній рівень модуля чи безіменна функція поза гачком: не крок.
+          new Set([OUTSIDE])
 
   // ---------------------------------------------------------- знахідки
   const findings: Finding[] = []
@@ -427,9 +434,69 @@ function analyze(
     }
     const steps = stepsOf(ctx)
     const allowed = ALLOWED_STEPS[kind]!
-    if (steps.size === 0 || [...steps].some((s) => !allowed.includes(s)))
+    // Порожня множина лише в циклі без входу: його вхід судить інший виклик.
+    if (steps.size > 0 && [...steps].some((s) => !allowed.includes(s)))
       findings.push({ place: place(r.node, ctx), kind, line: lineOf(r.node) })
     else allowedUse(kind)
+  }
+
+  // Виклик значення типу `Write` — той самий запис відповіді, хоч би його
+  // дістали не з `GatedRead.write`.
+  const writeType = (() => {
+    const decl = source(A.writeAlias.file)?.statements.find(
+      (s): s is ts.TypeAliasDeclaration =>
+        ts.isTypeAliasDeclaration(s) && s.name.text === A.writeAlias.name
+    )
+    return decl === undefined
+      ? undefined
+      : checker.getDeclaredTypeOfSymbol(checker.getSymbolAtLocation(decl.name)!)
+  })()
+  const isWriteValue = (e: ts.Expression) => {
+    const type = checker.getTypeAtLocation(e)
+    return type === writeType || type.aliasSymbol?.name === A.writeAlias.name
+  }
+  const isProtectedMember = (e: ts.Expression) => {
+    const sym = ts.isPropertyAccessExpression(e)
+      ? checker.getSymbolAtLocation(e.name)
+      : undefined
+    const decl = sym === undefined ? undefined : declOf(resolve(sym)!)
+    return decl !== undefined && protectedKind.has(decl)
+  }
+  for (const file of files) {
+    const visit = (n: ts.Node): void => {
+      if (
+        ts.isCallExpression(n) &&
+        n.arguments.some(isWriteValue) &&
+        !(contextOf(n).step === "5" || stepsOf(contextOf(n)).size === 0)
+      ) {
+        // Значення `Write`, передане аргументом (`commit(w)`), — те саме
+        // виконання запису, лише чужим викликом.
+        const steps = stepsOf(contextOf(n))
+        if ([...steps].some((s) => s !== "5"))
+          findings.push({
+            place: place(n, contextOf(n)),
+            kind: "write",
+            line: lineOf(n),
+          })
+      }
+      if (
+        ts.isCallExpression(n) &&
+        isWriteValue(n.expression) &&
+        !isProtectedMember(n.expression)
+      ) {
+        const ctx = contextOf(n)
+        const steps = stepsOf(ctx)
+        if (steps.size > 0 && [...steps].some((s) => s !== "5"))
+          findings.push({
+            place: place(n, ctx),
+            kind: "write",
+            line: lineOf(n),
+          })
+        else allowedUse("write")
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(source(file)!)
   }
 
   // Присвоєння полів стану вигляду — лише в єдиному `settleTarget`.
@@ -694,6 +761,7 @@ export interface SettleHooks {
   gate?(entry: unknown, scope: Scope): "apply" | "discard"
   apply?(entry: unknown, scope: Scope): void
   settleTarget?(flight: unknown, outcome: string): void
+  discarded?(entry: unknown, scope: Scope): void
   sweep?(scope: Scope): void
   settled?(entry: unknown): void
 }
@@ -933,6 +1001,85 @@ export async function read(): Promise<Write> {
 `,
       })
     ).toEqual([])
+  })
+
+  it("a helper reached from step 5 and also from a plain commit is red", () => {
+    expect(
+      flagged({
+        "/v/helper.ts": `import type { Scope } from "./session.ts"
+import type { StoreOps } from "./readers.ts"
+declare const ops: StoreOps
+export function helper(scope: Scope) { ops.put(scope, "k") }
+`,
+        "/v/a.ts": `${pre}import { helper } from "./helper.ts"
+declare function commit(fn: (scope: Scope) => void): void
+export function point() {
+  settlePass(0, [], { apply: (_e: unknown, scope: Scope) => helper(scope) })
+}
+export function runTail() { commit((scope) => helper(scope)) }
+`,
+      })
+    ).toEqual(["/v/helper.ts::helper write"])
+  })
+
+  it("a write helper nobody calls is red", () => {
+    expect(
+      flagged({
+        "/v/helper.ts": `import type { Scope } from "./session.ts"
+import type { StoreOps } from "./readers.ts"
+declare const ops: StoreOps
+export function orphan(scope: Scope) { ops.put(scope, "k") }
+`,
+      })
+    ).toEqual(["/v/helper.ts::orphan write"])
+  })
+
+  it("a direct call of a Write value outside step 5 is red", () => {
+    expect(
+      flagged({
+        "/v/a.ts": `${pre}import type { Write } from "./readers.ts"
+declare const wr: Write
+declare function commit(fn: (scope: Scope) => void): void
+export function runTail() { commit((scope) => wr(scope)) }
+`,
+      })
+    ).toEqual(["/v/a.ts::runTail write"])
+  })
+
+  it("a Write value passed to a call outside step 5 is red", () => {
+    expect(
+      flagged({
+        "/v/a.ts": `${pre}import type { Write } from "./readers.ts"
+declare const wr: Write
+declare function commit(fn: (scope: Scope) => void): void
+export function runTail() { commit(wr) }
+`,
+      })
+    ).toEqual(["/v/a.ts::runTail write"])
+  })
+
+  it("a Write value called in the apply hook passes", () => {
+    expect(
+      flagged({
+        "/v/a.ts": `${pre}import type { Write } from "./readers.ts"
+declare const wr: Write
+export function point() {
+  settlePass(0, [], { apply: (_e: unknown, scope: Scope) => wr(scope) })
+}
+`,
+      })
+    ).toEqual([])
+  })
+
+  it("the gate in the discarded hook is not step 4", () => {
+    expect(
+      flagged({
+        "/v/a.ts": `${pre}export function point() {
+  settlePass(0, [], { discarded: () => session.acceptEpochs(new Set(), 0) })
+}
+`,
+      })
+    ).toEqual(["/v/a.ts::hook:discarded accept"])
   })
 
   it("a sweep outside step 8", () => {
