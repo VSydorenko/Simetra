@@ -49,6 +49,7 @@ export {
   keyColumn,
   lineNumberColumn,
   monthColumn,
+  publishedColumn,
   serviceDateColumns,
   singletonColumn,
   standardLogicalName,

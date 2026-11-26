@@ -8,6 +8,7 @@ import {
   toSnakeCase,
   standardElementId,
   isObjectOrigin,
+  parsePublicRead,
   type CarrierCopyOf,
   type CustomAction,
   type AssignmentSource,
@@ -15,6 +16,7 @@ import {
   type PhysicalColumn,
   type PhysicalTable,
   type Project,
+  type PublicRead,
   type RightsSystemCatalog,
   type ScopeKind,
   type SourceCondition,
@@ -45,6 +47,7 @@ import {
   carrierDeclarations,
   customActionEffects,
   customActionsOf,
+  declarationsOf,
   headerReference,
   isMembershipCatalog,
   isRightsContainer,
@@ -56,6 +59,7 @@ import {
   sourceLiteralType,
 } from "./facts"
 import { commandWriteColumns } from "./command-columns"
+import { hasRightsFunctions } from "./functions"
 import { must, projectTarget } from "./references"
 
 /** Вхід правил прав стадії 4: усе, що вже знає цілісність. */
@@ -198,6 +202,7 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
   diagnostics.push(...checkSources(ctx))
   diagnostics.push(...checkUsers(ctx))
   diagnostics.push(...checkPublicRead(ctx))
+  diagnostics.push(...checkPublishedPublicRead(ctx))
   return diagnostics
 }
 
@@ -228,6 +233,42 @@ function checkPublicRead(ctx: RightsCheckContext): Diagnostic[] {
             }
           ),
         ]
+  })
+}
+
+/**
+ * Умовний `publicRead` (спека публічної частини §5.1) покладається на колонку
+ * `published` і дії `publish`/`unpublish`, які пише лише ядро команд, і на
+ * права, що показують чернетку своїм: без цього умова чи відкрила б чернетку,
+ * чи не мала б хто її публікує. Кожна відмова судить сама, бо причини різні
+ * й їх виправляють по-різному.
+ */
+function checkPublishedPublicRead(ctx: RightsCheckContext): Diagnostic[] {
+  const rightsFunctions = hasRightsFunctions(
+    {
+      roles: declarationsOf(ctx.objects, "role"),
+      users: ctx.objects.find(isUsers),
+      membershipSources: ctx.project.membershipSources,
+    },
+    ctx.project.database.provider
+  )
+  return ctx.objects.flatMap((object) => {
+    const conditional =
+      parsePublicRead((object.data as { publicRead?: PublicRead }).publicRead)
+        ?.conditional === true
+    if (!conditional) return []
+    const def = KIND_REGISTRY[object.kind]
+    const code = !def.commandWrites
+      ? "rights.public-read-published-kind"
+      : !rightsFunctions
+        ? "rights.public-read-published-rights"
+        : def.rightsExtents.length === 0 ||
+            !def.actions(object.data).some((a) => a.name === "read")
+          ? "rights.public-read-published-read"
+          : undefined
+    return code === undefined
+      ? []
+      : [diagnostic(code, object.file, "/publicRead", { object: object.name })]
   })
 }
 

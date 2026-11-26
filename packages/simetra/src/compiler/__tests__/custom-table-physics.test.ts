@@ -339,6 +339,8 @@ describe("CustomTable physics round-trip", () => {
     // рядковому полю пошуку довідника й документа (типово — найменуванню).
     // Далі нормалізована колонка стала обмеженим префіксом
     // `left(lower(…), N)`: повне значення не влазило в рядок btree.
+    // Далі довідник `Partner` дістав умовний `publicRead` (kitchen-sink) — і
+    // колонку `published boolean NOT NULL DEFAULT false`, тож хеш змінився.
     const derived = {
       tables: physical.tables.filter(
         (t) =>
@@ -362,7 +364,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "9fb976a648f58c4f88a1bbac8fa07cd0e422477b259c94459e6ae97b22de3999"
+      "a9ca7353a818ecb14fdd3b5aceffbd0401c6d331c164880c428a98c2b9442427"
     )
   })
 })

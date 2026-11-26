@@ -3,9 +3,12 @@ import {
   PLATFORM_ROLES,
   PROVIDER_API_ROLES,
   PUBLIC_READ_PURPOSES,
+  deletionMarkColumn,
   isObjectTable,
   makeObjectName,
   objectTable,
+  parsePublicRead,
+  publishedColumn,
   quoteIdent,
   tabularParentColumn,
   toSnakeCase,
@@ -15,6 +18,7 @@ import {
   type Dml,
   type ObjectTable,
   type PhysicalSnapshot,
+  type PublicRead,
   type PublicReadRole,
   type RequestRolePurpose,
 } from "simetra/model"
@@ -56,7 +60,7 @@ import { sha256HexSync } from "./sha256"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 import { isDeclaredTable, sqlLiteral } from "./stages/model"
-import { styleFreeColumn } from "./standard-column"
+import { findStandardColumn, styleFreeColumn } from "./standard-column"
 import type { ParsedObject } from "./stages/files"
 
 /**
@@ -113,6 +117,11 @@ export function accessContracts(
         table.origin.tabularSectionId === undefined &&
         table.origin.part === undefined
       const users = objectId === usersObjectId
+      const published =
+        parsePublicRead((object.data as { publicRead?: PublicRead }).publicRead)
+          ?.conditional === true
+          ? publishedColumnsOf(table, attributeCase)
+          : undefined
       const command = KIND_REGISTRY[object.kind].commandWrites
         ? commandColumns(table, {
             attributeCase,
@@ -132,8 +141,11 @@ export function accessContracts(
           table: { schema: table.schema, name: table.name },
           ...(scope === undefined ? {} : { scope }),
           publicRead: publicReadPurposes(
-            (object.data as { publicRead?: PublicReadRole }).publicRead
+            parsePublicRead(
+              (object.data as { publicRead?: PublicRead }).publicRead
+            )?.role
           ),
+          ...(published === undefined ? {} : { published }),
           root: main && roots.has(objectId),
           // Похідних таблиць «Користувачі» з RLS не мають: `identities` —
           // службова таблиця без RLS (спека системної схеми).
@@ -193,6 +205,26 @@ function publishedRow(contract: AccessContract, sessionUser: boolean): string {
     ),
     contract.published
   )
+}
+
+/**
+ * Фізичні колонки умови публікації таблиці умовного об'єкта (Р-D1-2). Таблиця
+ * без них — дефект компілятора: політика з умовою без колонки не побудується, а
+ * мовчазне пропускання таблиці відкрило б усі її рядки, тож кидаємо помилку,
+ * а не повертаємо порожнє.
+ */
+function publishedColumnsOf(
+  table: ObjectTable,
+  attributeCase: AttributeCase
+): NonNullable<AccessContract["published"]> {
+  const column = findStandardColumn(table, publishedColumn(), attributeCase)
+  const mark = findStandardColumn(table, deletionMarkColumn(), attributeCase)
+  if (column === undefined || mark === undefined) {
+    throw new Error(
+      `internal: conditional public read of ${table.name} has no publication columns`
+    )
+  }
+  return { column: column.name, mark: mark.name }
 }
 
 /** Гість бачить не більше за користувача: `anon` відкриває обидві ролі запиту. */

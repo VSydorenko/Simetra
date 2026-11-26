@@ -1,8 +1,16 @@
-import { administerRightsAction, readAction, recordActions } from "./actions"
+import {
+  administerRightsAction,
+  publishAction,
+  readAction,
+  recordActions,
+  unpublishAction,
+} from "./actions"
 import { catalogSchema, type Catalog } from "../schemas/catalog"
+import { parsePublicRead } from "../schemas/public-read"
 import {
   authorColumns,
   deletionMarkColumn,
+  publishedColumn,
   keyColumn,
   keyOrderOf,
   numberingType,
@@ -58,6 +66,10 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
   }
 
   columns.push(deletionMarkColumn())
+  // Умовний `publicRead` додає ознаку публікації (спека публічної частини §5.1).
+  if (parsePublicRead(catalog.publicRead)?.conditional === true) {
+    columns.push(publishedColumn())
+  }
   // Колонки ролі беремо з її опису, а не з перевірки імені ролі: опис ролі —
   // єдине місце фактів ролі (див. CATALOG_ROLES).
   if (catalog.role !== undefined) {
@@ -454,7 +466,12 @@ export const catalogKind: KindDefinition = {
     const actions = roleOf(obj).actions
     if (actions === "read") return [readAction]
     if (actions === "rights") return [readAction, administerRightsAction]
-    return recordActions(catalogKind.tabularSectionColumns !== undefined)
+    const record = recordActions(
+      catalogKind.tabularSectionColumns !== undefined
+    )
+    return parsePublicRead((obj as Catalog).publicRead)?.conditional === true
+      ? [...record, publishAction, unpublishAction]
+      : record
   },
   rightsExtents: ["any", "own", "dimension"],
   rightsContainer: true,

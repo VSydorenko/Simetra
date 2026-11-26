@@ -238,7 +238,9 @@ interface Declaration {
  * користувача джерела порівнюється з ним напряму.
  */
 export function hasSessionUser(
-  contracts: Pick<Contracts, "users" | "membershipSources">,
+  // Структурно, а не `Pick<Contracts>`: правила стадії 4 судять до побудови
+  // контрактів і дають лише факти файлів.
+  contracts: { users?: unknown; membershipSources: readonly unknown[] },
   provider: DatabaseProvider
 ): boolean {
   return (
@@ -255,7 +257,11 @@ export function hasSessionUser(
  * функції поточного користувача — теж (fail-closed, спека прав §4.6).
  */
 export function hasRightsFunctions(
-  contracts: Pick<Contracts, "roles" | "users" | "membershipSources">,
+  contracts: {
+    roles: readonly unknown[]
+    users?: unknown
+    membershipSources: readonly unknown[]
+  },
   provider: DatabaseProvider
 ): boolean {
   return contracts.roles.length > 0 && hasSessionUser(contracts, provider)

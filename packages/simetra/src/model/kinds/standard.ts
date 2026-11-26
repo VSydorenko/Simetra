@@ -585,6 +585,22 @@ export function deletionMarkColumn(): StandardColumnDef {
 }
 
 /**
+ * Ознака публікації умовного `publicRead` (спека публічної частини §5.1):
+ * стандартна колонка лише об'єкта з умовною формою. Значення за замовчуванням
+ * `false` — новий рядок закритий, доки його не опублікує дія `publish`.
+ */
+export function publishedColumn(): StandardColumnDef {
+  return {
+    logicalName: "published",
+    physicalName: "published",
+    type: { type: "Boolean" },
+    notNull: true,
+    default: "false",
+    title: { uk: "Опубліковано", en: "Published" },
+  }
+}
+
+/**
  * Версія рядка для оптимістичної конкурентності. Збільшує її разом зі
  * службовою датою оновлення тригер механіки (`compiler/mechanics-units.ts`).
  * Іде одразу перед службовими датами.

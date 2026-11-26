@@ -9,6 +9,8 @@ export const STANDARD_ACTIONS = [
   "post",
   "unpost",
   "write",
+  "publish",
+  "unpublish",
 ] as const
 
 /** A word of the platform's standard action vocabulary. */
@@ -95,6 +97,30 @@ export const markDeletionAction: KindAction = {
     tabularSections: false,
   },
   transition: { column: "deletionMark" },
+}
+
+// Лише умовний `publicRead` (Р-D1-8): перехід однієї колонки, без `requires`
+// — дія вимагає лише `read` через загальне ребро `actionRequires`.
+export const publishAction: KindAction = {
+  name: "publish",
+  requires: [],
+  effects: {
+    dml: ["update"],
+    header: ["published"],
+    tabularSections: false,
+  },
+  transition: { column: "published", from: false, to: true },
+}
+
+export const unpublishAction: KindAction = {
+  name: "unpublish",
+  requires: [],
+  effects: {
+    dml: ["update"],
+    header: ["published"],
+    tabularSections: false,
+  },
+  transition: { column: "published", from: true, to: false },
 }
 
 export function createAction(tabularSections: boolean): KindAction {

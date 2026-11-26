@@ -324,6 +324,10 @@ export function kitchenSink(): Map<string, string> {
   const partner = {
     ...header("Catalog", "Partner", "partner"),
     rightsContainer: true,
+    // Умовна форма (спека публічної частини §5.1): поля `role` і `published`
+    // мусить читати компілятор, інакше ратчет полів червоний. Без ТЧ: копії
+    // умови в ТЧ приходять окремою задачею.
+    publicRead: { role: "anon", published: true },
   }
 
   const item = {

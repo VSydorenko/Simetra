@@ -79,6 +79,21 @@ const EXCEPTIONS: Record<string, string> = Object.fromEntries([
     "InformationRegister.access.ref",
     "register path is an error (спека прав §5.2)",
   ],
+  // Об'єктна форма `publicRead` спільна для видів з RLS, а умовне читання
+  // дозволене лише виду з командним записом (довідник): на решті шлях — завжди
+  // `rights.public-read-published-kind`, тож валідна модель його не має. Форму
+  // ратчет бачить на довіднику (`Partner`).
+  ...[
+    "AccumulationRegister",
+    "Constant",
+    "Document",
+    "InformationRegister",
+  ].flatMap((kind) =>
+    ["role", "published"].map((field) => [
+      `${kind}.publicRead.${field}`,
+      "object form is an error outside a command-written kind (Р-D1-13)",
+    ])
+  ),
   // `load` — подання (спека П4-B Рд25, В3): реквізит ТЧ лінивим не буває, а
   // реквізит регістра `load` не задає зовсім — регістрів у каталозі рантайму
   // ще немає (Рд1). Обидва тримає схема (до шва); виняток регістрів знімуть
