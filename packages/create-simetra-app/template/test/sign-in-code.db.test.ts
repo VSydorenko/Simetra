@@ -35,6 +35,7 @@ const SECRET = "simetra-sign-in-code-test-secret-0123456789"
 const SEND = "/email-otp/send-verification-otp"
 const SIGN_IN = "/sign-in/email-otp"
 const SLOT_TAKEN = "SIGN_IN_CODE_SLOT_TAKEN"
+const DAY_SECONDS = 24 * 60 * 60
 const CODE_ONLY: AuthSettings = {
   signUp: "closed",
   password: false,
@@ -376,6 +377,38 @@ describe("sign-in code send slot (Р-D5-6)", () => {
       body: expect.objectContaining({ code: SLOT_TAKEN }),
     })
     expect(codesTo("daily@example.test")).toHaveLength(20)
+  }, 120_000)
+
+  it("counts the day from the first code: refused until first + 24 h, then a fresh day (І-3)", async () => {
+    // Годинник — реальний час: прибирання Better Auth рахує реальний час, і
+    // денний маркер мусить дожити до межі сам, а не зникнути раніше
+    const email = "window@example.test"
+    await createUser(email)
+    const first = clock.getTime()
+    for (let code = 1; code <= 20; code += 1) {
+      expect((await sendCode(email)).status).toBe(200)
+      advance(61)
+    }
+    // Стелю досягнуто; вікно не ковзає за останнім кодом і не коротше доби
+    clock = new Date(first + (DAY_SECONDS - 1) * 1000)
+    expect(await sendCode(email)).toEqual({
+      status: 429,
+      body: expect.objectContaining({ code: SLOT_TAKEN }),
+    })
+    clock = new Date(first + DAY_SECONDS * 1000)
+    expect((await sendCode(email)).status).toBe(200)
+    expect(
+      await superuser(
+        async (client) =>
+          (
+            await client.query(
+              "SELECT value FROM better_auth.verification WHERE identifier = $1",
+              [`otp-day:sign-in-otp-${email}`]
+            )
+          ).rows
+      )
+    ).toEqual([{ value: "1" }])
+    expect(codesTo(email)).toHaveLength(21)
   }, 120_000)
 
   it("keeps two addresses apart when hashtext of their keys collides (І-4)", async () => {
