@@ -336,8 +336,13 @@
 
 ### 4.2 Схема й порядок розгортання
 
-1. `roles` створює `simetra_auth` і схему `better_auth` з
-   `AUTHORIZATION simetra_auth`.
+1. `roles` створює `simetra_auth` і схеми `better_auth` та `agent_oauth`
+   (схема сервера авторизації агентів, П4-F §5.4), обидві з
+   `AUTHORIZATION simetra_auth`; кожну схему `roles` створює за окремим
+   фактом, тож база, підготована раніше, отримує `agent_oauth` повторним
+   `roles`. Таблиці `agent_oauth` створює крок налаштування бази шаблону від
+   `simetra_auth`, після міграції Better Auth (зовнішній ключ на
+   `better_auth."user"`).
 2. Міграція Better Auth від `simetra_auth` створює свої таблиці. Схемою
    володіє вона, а не платформа (ПП5). Конфіг — без `database.schemaName`:
    з ним Better Auth шле `CREATE SCHEMA IF NOT EXISTS`, а Postgres
@@ -348,10 +353,11 @@
    ролі — другий шар, бо роль сама може його переписати: `roles` ставить
    `ALTER ROLE simetra_auth SET search_path = better_auth` і
    `ALTER ROLE simetra_auth IN DATABASE <база> SET search_path = better_auth`.
-   `roles` перевіряє: `simetra_auth` не має `CREATE` ні на базу, ні на
+   `roles` перевіряє: обидві схеми, `better_auth` і `agent_oauth`, належать
+   `simetra_auth`; `simetra_auth` не має `CREATE` ні на базу, ні на
    `public`; жодне відношення з `relowner = simetra_auth` не лежить поза
-   `better_auth`; рядок `pg_db_role_setting` ролі `simetra_auth` для цілі не
-   задає іншого `search_path`.
+   `better_auth` і `agent_oauth`; рядок `pg_db_role_setting` ролі
+   `simetra_auth` для цілі не задає `search_path`, іншого за `better_auth`.
 3. Повторний `roles` (суперкористувач) видає адресно
    `GRANT USAGE ON SCHEMA better_auth TO simetra_owner` і
    `GRANT TRIGGER, REFERENCES ON better_auth."user" TO simetra_owner` — лише
@@ -417,7 +423,7 @@ TRIGGER`) теж вимагає власника таблиці, тож той �
 
 | Мапа | Значення `postgres` |
 | --- | --- |
-| `PROVIDER_SCHEMAS` | `better_auth`, `extensions`, `information_schema` |
+| `PROVIDER_SCHEMAS` | `agent_oauth`, `better_auth`, `extensions`, `information_schema` (`agent_oauth` — схема сервера авторизації агентів, П4-F §5.4) |
 | `PROVIDER_EVENT_SOURCES` | `better_auth."user"` з колонками `id`, `name`, `email`, `emailVerified`, `image`, `createdAt`, `updatedAt`, `isAnonymous`; джерела `storage.objects` немає |
 | `PROVIDER_FUNCTIONS` | порожньо (`auth.uid` тощо — лише `supabase`) |
 | `PROVIDER_EXPRESSION_FUNCTIONS` | порожньо: `gen_random_uuid()` — ядро Postgres |
@@ -430,7 +436,7 @@ TRIGGER`) теж вимагає власника таблиці, тож той �
 | розширення поза керуванням | `plpgsql`, `plpgsql_check` |
 | гранти схеми `public` у засіві тіні | лише вбудовані Postgres 15+ (`USAGE` для `PUBLIC`, власник — `pg_database_owner`) |
 | засів тіні (`renderProviderSeed("postgres")`) | порожній: заглушку `better_auth."user"` дає профіль pg-delta (нижче) |
-| профіль pg-delta (`scopeProfile`, `packages/designer/src/schema-engine/pg-delta/policy.ts`) | власний `IntegrationProfile` `simetra-postgres`: `assumedSchemas: ["better_auth"]`; схема `extensions` з об'єктами — жорстке виключення; ACL, коментарі й мітки безпеки схем `better_auth` і `extensions` виключено; `handlers: []`; без `supabasePolicy`, `assumedRoles`, `assumedPublications`, `assumedExtensions`, `assumedDefaultGrants`, `defaultOwner`. Без `defaultOwner` ребро `owner` до ролі сесії прибирає мапер рушія (`map-model.ts`), а власник, інший за роль сесії, лишається `engine.unrepresentable` з іменем ролі. Ролей кластера політика профілю не виключає: план двигуна йде в межі бази (scope `database`), що прибирає факти ролей і членств з порівнюваного виду, а виключення ролі політикою прибрало б і ребро `owner` до неї, тож чужий власник став би тихим |
+| профіль pg-delta (`scopeProfile`, `packages/designer/src/schema-engine/pg-delta/policy.ts`) | власний `IntegrationProfile` `simetra-postgres`: `assumedSchemas: ["agent_oauth", "better_auth"]` (`PROVIDER_ASSUMED_SCHEMAS.postgres`); схеми `extensions` і `agent_oauth` з об'єктами — жорстке виключення (`agent_oauth` — схема сервера авторизації агентів, П4-F §5.4: її створює `roles`, таблиці — крок налаштування бази шаблону, тож без виключення план бачив би їх дрейфом); ACL, коментарі й мітки безпеки схем `agent_oauth`, `better_auth` і `extensions` виключено; `handlers: []`; без `supabasePolicy`, `assumedRoles`, `assumedPublications`, `assumedExtensions`, `assumedDefaultGrants`, `defaultOwner`. Без `defaultOwner` ребро `owner` до ролі сесії прибирає мапер рушія (`map-model.ts`), а власник, інший за роль сесії, лишається `engine.unrepresentable` з іменем ролі. Ролей кластера політика профілю не виключає: план двигуна йде в межі бази (scope `database`), що прибирає факти ролей і членств з порівнюваного виду, а виключення ролі політикою прибрало б і ребро `owner` до неї, тож чужий власник став би тихим |
 
 Споживачі, що зараз читають `PROVIDER_SCHEMAS.supabase` чи `SUPABASE_*`
 напряму, переходять на `scope.provider`:
