@@ -8,6 +8,7 @@ import {
 } from "./author-units"
 import type { QualifiedName } from "./contracts"
 import { hierarchyNames } from "./hierarchy-units"
+import { languageStateNames } from "./language-state-units"
 import {
   KEY_COLUMN,
   KEY_FUNCTION,
@@ -48,6 +49,7 @@ export type PlatformTriggerFamily =
   | "key"
   | "carriers"
   | "hierarchy"
+  | "languageState"
   | "effects"
   | "rightsGuards"
   | "rightsSignals"
@@ -89,6 +91,7 @@ export function platformTriggers(table: QualifiedName): PlatformTrigger[] {
   const carriers = carrierTriggerNames(table)
   const carrierFns = carrierFunctionNames(table)
   const hierarchy = hierarchyNames(table)
+  const language = languageStateNames(table)
   const effects = effectsTriggerNames(table)
   const effectsFn = effectsFunctionName(table)
   const storage = storageTriggerNames(table)
@@ -152,6 +155,10 @@ export function platformTriggers(table: QualifiedName): PlatformTrigger[] {
     // Ієрархія (спека П4 §6.6): обидва тригери кличуть одну функцію таблиці
     entry("hierarchy", "mechanics", hierarchy.fn, hierarchy.insert),
     entry("hierarchy", "mechanics", hierarchy.fn, hierarchy.update),
+    // Стан мови (Р-B2-4): рядковий тригер і запобіжник `TRUNCATE` кличуть одну
+    // функцію таблиці
+    entry("languageState", "mechanics", language.fn, language.row),
+    entry("languageState", "mechanics", language.fn, language.truncate),
     // Ефекти дії (спека прав §5.3): одна функція таблиці на обидва тригери
     entry("effects", "effects", effectsFn, effects.all),
     entry("effects", "effects", effectsFn, effects.update),

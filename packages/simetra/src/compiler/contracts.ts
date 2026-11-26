@@ -41,6 +41,7 @@ import {
   membershipsOf,
 } from "./membership-functions"
 import { hierarchyNames, hierarchyTables } from "./hierarchy-units"
+import { languageStateNames, languageStateTables } from "./language-state-units"
 import { carrierFunctions } from "./rights/carrier-units"
 import { effectsFunctionName } from "./rights/effects-names"
 import { writesByCommand } from "./rights/facts"
@@ -986,6 +987,21 @@ export function derivedFunctions(
       object,
       hierarchyNames(table).fn,
       `hierarchy check of ${table.schema}.${table.name}`
+    )
+  }
+  // Функція стану мови (Р-B2-4) — згенерована одиниця з іменем від таблиці,
+  // як функція ієрархії.
+  for (const { table } of languageStateTables(
+    physical,
+    objects,
+    attributeCase
+  )) {
+    const object = byId.get(table.origin.objectId)
+    if (object === undefined) continue
+    add(
+      object,
+      languageStateNames(table).fn,
+      `language state check of ${table.schema}.${table.name}`
     )
   }
   // Функції ефектів — з надлишком, на кожну таблицю з кореневою
