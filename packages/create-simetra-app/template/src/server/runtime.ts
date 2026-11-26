@@ -1,4 +1,3 @@
-import { useRequest } from "nitro/context"
 import { Pool } from "pg"
 import {
   createCommandRuntime,
@@ -8,6 +7,7 @@ import {
 import { wrapDatabase } from "#instrument"
 import runtimeCatalog from "../../generated/runtime-catalog.json"
 import { requiredEnv } from "./config"
+import { defer } from "./defer"
 
 /** Хеш каталогу сервера: його несе кожна відповідь, і відмови до обробника теж. */
 export const serverHash: string = runtimeCatalog.snapshotHash
@@ -20,20 +20,6 @@ function getPool(): Pool {
     connectionString: requiredEnv("SIMETRA_RUNTIME_DATABASE_URL"),
   })
   return pool
-}
-
-/**
- * `waitUntil` береться на кожен виклик з поточного запиту: рантайм на рівні
- * модуля переживає перший запит, а його `waitUntil` після відповіді вже мертвий.
- */
-function defer(work: Promise<unknown>): void {
-  const request = useRequest()
-  if (typeof request.waitUntil === "function") {
-    request.waitUntil(work)
-    return
-  }
-  // Платформа без `waitUntil`: робота не губиться, а її збій — у журнал
-  work.catch((error: unknown) => console.error("[simetra] deferred", error))
 }
 
 type DataHandler = ReturnType<typeof createDataHandler>

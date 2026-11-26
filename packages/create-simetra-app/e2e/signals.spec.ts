@@ -105,7 +105,7 @@ test.describe("signal token routes", () => {
     expect(header).toMatchObject({ alg: "EdDSA", kid: signalsOf(app).kid })
     await expectSignedByJwks(app, String(body.token))
 
-    // Канал змін `Client`: ClientOwner має на нього право `own` (рядкове право
+    // Канал змін `Client`: ClientOwner (рівень `everyUser`) дає на нього право `own` (рядкове право
     // канал відкриває; `simetra-user:` оракул до B6 не пропускає нікому)
     const channel = changesChannel("Client")
     const channels = await post(app, CHANNELS, same(app, a.cookie), {

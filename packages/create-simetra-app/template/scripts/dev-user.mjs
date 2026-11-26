@@ -48,6 +48,12 @@ export async function createDevUser(o) {
       await auth.api.signUpEmail({
         body: { email: o.email, password, name: o.name },
       })
+      // `signUpEmail` завжди пише `emailVerified: false`, а вхід паролем
+      // вимагає підтвердженої пошти: запис скрипта підтверджує сам розробник
+      const created = await context.internalAdapter.findUserByEmail(o.email)
+      await context.internalAdapter.updateUser(created.user.id, {
+        emailVerified: true,
+      })
       return { email: o.email, password, created: true }
     }
     // Внутрішній адаптер, а не `auth.api.setPassword` чи скидання листом:
@@ -62,6 +68,11 @@ export async function createDevUser(o) {
         accountId: existing.user.id,
         password: hash,
       })
+    await context.internalAdapter.updateUser(existing.user.id, {
+      emailVerified: true,
+    })
+    // Старий пароль міг бути скомпрометованим: його сесії не переживають зміну
+    await context.internalAdapter.deleteUserSessions(existing.user.id)
     return { email: o.email, password, created: false }
   } finally {
     await pool.end()

@@ -6,6 +6,7 @@
   "physicalName": "country",
   "kindLabel": "country",
   "scope": "none",
+  "publicRead": "authenticated",
   "title": {
     "en": "Countries"
   }
