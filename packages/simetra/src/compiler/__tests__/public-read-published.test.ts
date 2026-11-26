@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+import { KIND_REGISTRY } from "simetra/model"
+import { checkPublishedPublicRead } from "../rights/checks"
+import type { RightsCheckContext } from "../rights/checks"
 import {
   MEMBER_FILE,
   ORG_ASSIGNMENTS_FILE,
@@ -197,5 +200,39 @@ describe("rules of the conditional publicRead (Р-D1-13)", () => {
     },
   ])("$case", async ({ files, expected }) => {
     expect(await diagnosticsOf(files())).toEqual(expected)
+  })
+})
+
+describe("rights.public-read-published-read (Р-D1-13)", () => {
+  it("fires for an object whose kind has no read action in its rights contract", () => {
+    // Через файли недосяжне: кожен вид з `publicRead` має `read`. Тому дію
+    // прибирає шпигун над реєстром, а контекст — мінімальний виклик перевірки.
+    const object = (data: Record<string, unknown>, file: string) => ({
+      file,
+      kind: "Catalog",
+      name: String(data.name),
+      data,
+    })
+    const ctx = {
+      objects: [
+        object({ name: "Users", role: "users" }, "users.json"),
+        object({ name: "Role", kind: "Role" }, "role.json"),
+        object({ name: "Page", publicRead: CONDITIONAL }, "page.json"),
+      ].map((o, i) => (i === 1 ? { ...o, kind: "Role" } : o)),
+      project: {
+        database: { provider: "supabase" },
+        membershipSources: [],
+      },
+    } as unknown as RightsCheckContext
+    const spy = vi.spyOn(KIND_REGISTRY.Catalog, "actions").mockReturnValue([])
+    try {
+      expect(
+        checkPublishedPublicRead(ctx).map((d) => [d.file, d.code, d.pointer])
+      ).toEqual([
+        ["page.json", "rights.public-read-published-read", "/publicRead"],
+      ])
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

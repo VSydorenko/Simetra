@@ -243,7 +243,7 @@ function checkPublicRead(ctx: RightsCheckContext): Diagnostic[] {
  * чи не мала б хто її публікує. Кожна відмова судить сама, бо причини різні
  * й їх виправляють по-різному.
  */
-function checkPublishedPublicRead(ctx: RightsCheckContext): Diagnostic[] {
+export function checkPublishedPublicRead(ctx: RightsCheckContext): Diagnostic[] {
   const rightsFunctions = hasRightsFunctions(
     {
       roles: declarationsOf(ctx.objects, "role"),
