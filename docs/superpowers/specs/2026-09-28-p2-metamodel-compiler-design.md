@@ -460,7 +460,10 @@ restrict (фізично `NO ACTION`, як усі `Ref` — спека пром�
 рядків дає сама роль, а `publicRead` відкрив би гостю `draft`),
 `languages.predefined-items` (основну мову додає засів, а не `predefinedItems`),
 `languages.primary-missing` (довідник ролі без `primaryDataLanguage` у проєкті),
-`languages.primary-without-catalog`. Мультимовні дані — [спека мультимовних
+`languages.primary-without-catalog`. Засів основної мови вставляє рядок лише з
+ключем, кодом, найменуванням і колонками ролі, тож власні реквізити «Мов» мають
+ту саму вимогу, що й реквізити «Користувачів» до провізії (та сама перевірка
+реквізиту), — інакше `languages.seed-unsafe`. Мультимовні дані — [спека мультимовних
 даних](2026-11-24-multilingual-data-design.md) §5.2.
 
 **Лінивий реквізит.** Властивість реквізиту `load: "eager" | "lazy"` каже,

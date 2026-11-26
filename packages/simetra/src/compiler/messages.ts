@@ -312,15 +312,18 @@ const REHEARSAL_STALE: Readonly<Record<string, { en: string; uk: string }>> = {
   },
 }
 
-/** Причини `users.provision-unsafe`: що саме порушила б вставка провізії. */
+/**
+ * Причини `users.provision-unsafe` і `languages.seed-unsafe`: що саме порушила
+ * б платформна вставка рядка.
+ */
 const PROVISION_HAZARD: Readonly<Record<string, { en: string; uk: string }>> = {
   requiredWithoutDefault: {
     en: "it is required and has no defaultValue",
     uk: "він обов'язковий і не має defaultValue",
   },
   uniqueWithDefault: {
-    en: "it is unique and its defaultValue can be the same for different rows, so the second sign-up would duplicate it",
-    uk: "він унікальний, а його defaultValue може бути однаковим для різних рядків, тож друга реєстрація дала б дубль",
+    en: "it is unique and its defaultValue can be the same for different rows, so the second row would duplicate it",
+    uk: "він унікальний, а його defaultValue може бути однаковим для різних рядків, тож другий рядок дав би дубль",
   },
   defaultViolatesCheck: {
     en: "its defaultValue fails the attribute's own check",
@@ -2644,6 +2647,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Add other languages as data, not as predefined items.",
       uk: "Додавайте інші мови даними, а не передвизначеними елементами.",
+    },
+  },
+  "languages.seed-unsafe": {
+    en: (p) =>
+      `Attribute "${p.element}" of languages catalog "${p.name}" would break the seed of the primary language: ${(PROVISION_HAZARD[String(p.reason)] ?? { en: p.reason }).en}`,
+    uk: (p) =>
+      `Реквізит "${p.element}" довідника мов "${p.name}" зірвав би засів основної мови: ${(PROVISION_HAZARD[String(p.reason)] ?? { uk: p.reason }).uk}`,
+    hint: {
+      en: "Apply seeds the primary language row with only the role columns, the code and the description: every other column must accept that row.",
+      uk: "Apply засіває рядок основної мови лише з колонками ролі, кодом і найменуванням: кожна інша колонка мусить прийняти такий рядок.",
     },
   },
   "languages.primary-missing": {

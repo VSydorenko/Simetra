@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
+  attribute,
   catalog,
   languagesCatalog,
   metaFiles,
@@ -146,6 +147,45 @@ describe("languages catalog role refusals (Р-B2-2)", () => {
 
   it("no languages catalog and no primaryDataLanguage give no language diagnostics", async () => {
     expect(await found({ [PROJECT]: project() })).toEqual([])
+  })
+})
+
+describe("own attributes of the languages catalog and the seed (Р-B2-7)", () => {
+  // Засів вставляє рядок основної мови лише з колонками ролі: власний
+  // реквізит мусить прийняти рядок без свого значення, інакше apply зірветься.
+  const own = (overrides: Record<string, unknown>) =>
+    base({
+      [FILE]: languages({
+        attributes: [
+          attribute("nativeName", { type: "String", length: 40, ...overrides }),
+        ],
+      }),
+    })
+
+  it("a required attribute without defaultValue breaks the seed", async () => {
+    const { diagnostics } = await compile(metaFiles(own({ required: true })))
+    expect(
+      diagnostics.map((d) => [d.code, d.file, d.pointer, d.severity, d.params])
+    ).toEqual([
+      [
+        "languages.seed-unsafe",
+        FILE,
+        "/attributes/0",
+        "error",
+        {
+          name: "Languages",
+          element: "nativeName",
+          reason: "requiredWithoutDefault",
+        },
+      ],
+    ])
+  })
+
+  it("a required attribute with defaultValue compiles", async () => {
+    const result = await compile(
+      metaFiles(own({ required: true, defaultValue: "—" }))
+    )
+    expect(result.diagnostics).toEqual([])
   })
 })
 

@@ -300,25 +300,14 @@ function checkUsersCatalogs(
         )
       )
     }
-    for (const field of KIND_REGISTRY[object.kind].columnFields) {
-      const attributes = (object.data as Record<string, unknown>)[field] as
-        CatalogAttribute[] | undefined
-      attributes?.forEach((attribute, index) => {
-        const reason = provisionHazard(attribute)
-        if (reason === undefined) return
-        found.push(
-          diagnostic(
-            "users.provision-unsafe",
-            object.file,
-            `/${field}/${index}`,
-            {
-              name,
-              reason,
-              element: attribute.name,
-            }
-          )
-        )
-      })
+    for (const { pointer, element, reason } of rowInsertHazards(object)) {
+      found.push(
+        diagnostic("users.provision-unsafe", object.file, pointer, {
+          name,
+          reason,
+          element,
+        })
+      )
     }
     for (const table of model.physical.tables) {
       if (!isObjectOrigin(table.origin) || table.origin.objectId !== object.id)
@@ -405,6 +394,17 @@ function checkLanguagesCatalogs(
       found.push(
         diagnostic("languages.public-read", file, "/publicRead", { name })
       )
+    }
+    if (def.predefinedSeed?.(object.data) !== undefined) {
+      for (const { pointer, element, reason } of rowInsertHazards(object)) {
+        found.push(
+          diagnostic("languages.seed-unsafe", file, pointer, {
+            name,
+            reason,
+            element,
+          })
+        )
+      }
     }
     if (data.predefinedItems.length > 0) {
       found.push(
@@ -563,7 +563,32 @@ function checkMembership(
   return found
 }
 
-/** Перша причина, з якої вставка провізії порушила б обмеження реквізиту. */
+/**
+ * Власні реквізити, чиї обмеження порушить платформна вставка рядка лише з
+ * колонками виду й ролі (провізія «Користувачів», засів «Мов»): одна
+ * перевірка для обох правил.
+ */
+function rowInsertHazards(
+  object: ParsedObject
+): { pointer: string; element: string; reason: string }[] {
+  const found: { pointer: string; element: string; reason: string }[] = []
+  for (const field of KIND_REGISTRY[object.kind].columnFields) {
+    const attributes = (object.data as Record<string, unknown>)[field] as
+      CatalogAttribute[] | undefined
+    attributes?.forEach((attribute, index) => {
+      const reason = provisionHazard(attribute)
+      if (reason === undefined) return
+      found.push({
+        pointer: `/${field}/${index}`,
+        element: attribute.name,
+        reason,
+      })
+    })
+  }
+  return found
+}
+
+/** Перша причина, з якої платформна вставка порушила б обмеження реквізиту. */
 function provisionHazard(attribute: CatalogAttribute): string | undefined {
   const { defaultValue } = attribute
   if (attribute.required && defaultValue === undefined)

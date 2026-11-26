@@ -138,6 +138,7 @@ export const COMPILER_RULES = [
   "languages.description-required",
   "languages.public-read",
   "languages.predefined-items",
+  "languages.seed-unsafe",
   "languages.primary-missing",
   "languages.primary-without-catalog",
   "membership.not-scoped",
