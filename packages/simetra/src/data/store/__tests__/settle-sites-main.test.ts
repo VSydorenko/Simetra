@@ -842,6 +842,33 @@ const WRITE_CONFIRM: Record<string, Scenario> = {
     await settle()
     return log(rec)
   },
+  "write-confirm apply throws": async () => {
+    // Запис відповідає без рядків: ключ перечитується, запитувач чекає наслідку.
+    const { h, rec } = await loadedRig(FULL, 3, {
+      epoch: "e".repeat(64),
+      server: (fake) => ({
+        ...fake.server,
+        run: async (request) => {
+          const answer = {
+            ...((await fake.server.run(request)) as Record<string, unknown>),
+          }
+          delete answer.rows
+          return answer
+        },
+      }),
+    })
+    h.fake.hold = (read) => isKeysRead(read)
+    let settled = false
+    void h.core
+      .update(TASK, key(1), { title: "x" }, { expectedVersion: 1 })
+      .settled.then(() => (settled = true))
+    await settle()
+    throwOnPut(h)
+    h.fake.hold = undefined
+    h.fake.take().answer()
+    await settle()
+    return [...log(rec), `requester ${settled ? "told" : "waiting"}`]
+  },
   "write-confirm closed: the answer arrives after close": async () => {
     const { h, rec } = await loadedRig()
     h.fake.hold = () => true
@@ -883,6 +910,17 @@ const TAIL: Record<string, Scenario> = {
     await settle()
     h.fake.hold = undefined
     h.fake.take().fail("command.unavailable")
+    await settle()
+    return log(rec)
+  },
+  "tail apply throws": async () => {
+    const { h, rec } = await loadedRig()
+    h.fake.hold = () => true
+    hide(h)
+    await settle()
+    throwOnPut(h)
+    h.fake.hold = undefined
+    h.fake.take().answer()
     await settle()
     return log(rec)
   },
@@ -1001,6 +1039,15 @@ const RECEIVER: Record<string, Scenario> = {
       await settle()
       return log(rec)
     },
+  "signal read apply throws": async () => {
+    const { h, rec, transport } = await signalCore(KEYS12, 3)
+    const version = h.fake.edit(TASK, key(1), { title: "new" })
+    throwOnPut(h)
+    transport.emit(CHANNEL, change(key(1), version))
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    return log(rec)
+  },
   "signal read discarded by epoch": async () => {
     const { h, rec, transport } = await signalCore(KEYS12, 3)
     h.fake.epoch = EA
@@ -1191,6 +1238,57 @@ const MATRIX: Record<string, Record<SettleOutcome, string>> = {
     closed: "signal read stopped: the receiver stops before the answer",
   },
 }
+
+/*
+ * Збій застосування відповіді ключів (виняток у `put`): що було на `main` і що
+ * стало (рішення архітекторки: виняток осідає як звичайна відповідь). Записи
+ * «було» зняті з `main` (scratch-дерево, до міграції точок); тест стверджує
+ * «стає» (`EXPECTED`) і те, що воно відрізняється від «було» саме так.
+ */
+const MAIN_APPLY_THROWS: Record<string, readonly string[]> = {
+  // Запитувач чекав строку: виняток вилітав з області запису.
+  "write-confirm apply throws": [
+    "ops.sweep",
+    "flush",
+    "notify full",
+    "read keys K4/write-confirm",
+    "flush",
+    "lease.release",
+    "log listener-failed",
+    "requester waiting",
+  ],
+  // Виняток відхиляв проміс хвоста без запису в журнал.
+  "tail apply throws": [
+    "~ row1=hidden",
+    "ops.sweep",
+    "log horizon-hidden",
+    "flush",
+    "notify full",
+    "read keys K3/row-unfinished",
+    "flush",
+    "lease.release",
+  ],
+  // Виняток відхиляв `land`: журнал після зняття оренди.
+  "signal read apply throws": [
+    "log revalidate-burst",
+    "read keys K1/signal",
+    "ops.sweep",
+    "flush",
+    "lease.release",
+    "log listener-failed",
+  ],
+}
+
+describe("keys apply throws: main versus the accepted exception path", () => {
+  it.each(Object.keys(MAIN_APPLY_THROWS))("%s", (name) => {
+    expect(EXPECTED[name]).not.toEqual(MAIN_APPLY_THROWS[name])
+    // Стало: запитувач K4 дізнається одразу; хвіст і приймач логують у `listener-failed`.
+    expect(EXPECTED[name]!.some((l) => l === "log listener-failed")).toBe(true)
+  })
+  it("tells the requester at once (K4)", () => {
+    expect(EXPECTED["write-confirm apply throws"]).toContain("requester told")
+  })
+})
 
 describe("settle points on main: the point × outcome table", () => {
   it("has a cell for every point and every outcome of the closed list", () => {

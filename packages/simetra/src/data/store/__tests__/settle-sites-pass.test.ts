@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { channelTopic } from "simetra/model"
 import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
 import { QUIET_MS } from "../receiver"
+import { REREAD_TIMEOUT_MS } from "../writer"
+import { coreInternals } from "../core"
 import type { ViewSpec } from "../types"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import {
@@ -282,6 +284,43 @@ describe("the write-confirm point settles through the pass", () => {
     // Запитувач чекає наслідку: його дає лише осідання проходу (тут — збій).
     expect(await settledAfterFailure(false)).toBe(true)
     expect(await settledAfterFailure(true)).toBe(false)
+  })
+
+  it("writes the key only in the step-5 hook", async () => {
+    const written = async (skipApply: boolean) => {
+      const { view, update, unsubscribe } = await rig()
+      if (skipApply) seen.skip.add("keys K4 apply")
+      update()
+      await settle()
+      const title = (
+        view.getSnapshot().rows[0] as { values?: { title?: unknown } }
+      ).values?.title
+      unsubscribe()
+      return title
+    }
+    expect(await written(false)).toBe("x")
+    // Без застосування `patchRows` і `removeKeys` не кличуться: рядок старий.
+    expect(await written(true)).not.toBe("x")
+  })
+
+  it("calls the requester once: a late answer after the deadline passes without it", async () => {
+    const { h, update, unsubscribe } = await rig()
+    const marks = vi.spyOn(
+      coreInternals(h.core).objects.get(TASK)!.rows,
+      "markUnconfirmed"
+    )
+    h.fake.hold = (read) => keysOf(read.query).length > 0
+    update()
+    await settle()
+    await vi.advanceTimersByTimeAsync(REREAD_TIMEOUT_MS)
+    await settle()
+    expect(marks).toHaveBeenCalledTimes(1)
+    // Пізня відповідь — збій: запитувача вдруге не кличуть (`done`).
+    h.fake.hold = undefined
+    h.fake.take().fail("command.unavailable")
+    await settle()
+    expect(marks).toHaveBeenCalledTimes(1)
+    unsubscribe()
   })
 
   it("has no step-7 seam: a key read writes no target state", async () => {
