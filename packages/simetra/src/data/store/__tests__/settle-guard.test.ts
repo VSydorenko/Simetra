@@ -750,6 +750,8 @@ const REAL: Anchors = {
  * один раз; зайвий чи відсутній — червоний.
  */
 const EXCEPTIONS: Readonly<Record<string, string>> = {
+  "core.ts::settleBypassingPass write":
+    "самотест: мутація «осідання повз прохід» (`settle-bypasses-pass`, Р-SK2-11) пише відповідь хвоста власним `commit`; що страж бачить саме таку форму обходу, доводить його самотест `inlineProgram` («a bypass of the pass with an own commit»), а не ця мутація",
   // ---- Поля стану вигляду поза швом: записи, що не є осіданням відповіді.
   "subsets.ts::adopt field:loaded":
     "гідратація знімка (`restore`): вигляд стає завантаженим зі знімка, відповіді читання немає",

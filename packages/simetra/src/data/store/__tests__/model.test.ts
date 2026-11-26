@@ -6067,6 +6067,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "discard-no-retry",
   "read-bypasses-gate",
   "read-bypasses-gate-testing",
+  "settle-bypasses-pass",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -6139,6 +6140,11 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // немає — події немає, лише О1.
   "read-bypasses-gate-testing":
     /^end: O1: request \d+: \d+ parts, (no|\d+) events/,
+  // Осідання повз прохід (SK-2, Р-SK2-11): хвіст пише відповідь без брами
+  // епох, і рядок лишається без обіцянки читання — це бачить О2 (рішення
+  // архітекторки 26.11: О2 на закріпленому насінні 2, не загальний регекс).
+  "settle-bypasses-pass":
+    /^step 37 .*: O2: row \S+ of Catalog\.Task: min-version, value-hidden with no promise and no condition/,
   // Знімок прав (B5b-2): кожен дефект — своїм шляхом. Без бар'єра читання
   // пари, що стартувало до знімка, пише її рядок уже після нього (`race`).
   "rights-no-barrier": /written past the rights barrier/,
@@ -6168,6 +6174,10 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
 // рідший шлях вікна, і насіння 1–12 до нього за 10 000 прогонів не доходять.
 const SELF_CHECK_SEEDS: Partial<Record<DefectFlag, number>> = {
   "bury-removed-current-epoch": 13,
+  // Мутація «осідання повз прохід» (SK-2, Р-SK2-11): закріплене насіння, яке
+  // знаходить її за кілька секунд; решта насіння з 1–5 її не знаходить за
+  // 10 000 прогонів (рішення архітекторки 26.11).
+  "settle-bypasses-pass": 2,
   // Контрприклад #374 (прогін 8357 цього насіння).
   "receiver-ignores-horizon": -543971651,
   // Вікно спокою О4 відкрите (вкладка прихована, нічого в польоті) раніше, ніж
