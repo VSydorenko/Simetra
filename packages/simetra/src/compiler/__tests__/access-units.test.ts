@@ -720,6 +720,28 @@ describe("conditional publicRead policies (Р-D1-4)", () => {
     ])
   })
 
+  it("the left disjunct of scope_read is the render of the builder's row literals, nothing narrower (Р-D1-16)", async () => {
+    // Для користувача, чий `<t>_read_*` істинний на чужому тенанті, лівий
+    // диз'юнкт — єдине, що відрізняє опублікований рядок від чернетки; DB-
+    // свідка немає (складений зовнішній ключ тримає контейнер у тенанті
+    // рядка), тож межу тримає цей тест.
+    const published = contract({
+      scope: ORG_SCOPE,
+      publicRead: ["user"],
+      published: PUBLISHED,
+    })
+    const left = renderConditions(
+      publicReadConditions(published, true).filter(
+        (c) => c.kind === "rowLiteral"
+      ),
+      published.published
+    )
+    expect(left).toContain("deletion_mark")
+    expect(policySql(await units([published]))).toContain(
+      `CREATE POLICY item_scope_read ON public.item AS RESTRICTIVE FOR SELECT ${BOUNDED} USING ((${left}) OR (${ORG_BOUNDARY}));`
+    )
+  })
+
   it("authenticated: the session user condition is in public_read only, the left disjunct is the row literals", async () => {
     const source = (await compile(adoptedSourcesDomain())).model!.contracts
       .membershipSources[0]!
