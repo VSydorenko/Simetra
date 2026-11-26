@@ -22,6 +22,7 @@ import {
   key,
   keysOf,
   org,
+  ORG,
   seed,
   settle,
   setup,
@@ -1048,6 +1049,69 @@ const RECEIVER: Record<string, Scenario> = {
     await settle()
     return log(rec)
   },
+  "signal batch of two objects: apply throws": async () => {
+    // Пачка з двох об'єктів (задачі й організації); застосування кидає, а
+    // друга пачка сигналів приходить, поки перша ще тримає single-flight.
+    const transport = createFakeSignalTransport()
+    const h = setup({
+      now: () => Date.now(),
+      limits: { revalidateIntervalMs: 10_000_000 },
+      signals: transport,
+      rightsSnapshot: true,
+    })
+    grantRead(h)
+    h.fake.rightsSnapshot = {
+      ...h.fake.rightsSnapshot!,
+      rights: [
+        ...h.fake.rightsSnapshot!.rights,
+        ...h.fake.rightsSnapshot!.rights.map((r) => ({
+          ...r,
+          object: "organization",
+        })),
+      ],
+    }
+    seed(h.fake, 1, 3)
+    h.fake.insert(ORG, { ref: S })
+    const orgChannel = channelTopic({
+      kind: "changes",
+      scopeKindId: SCOPE_KIND_ID,
+      scope: S,
+      object: org.id,
+    })
+    const tasks = h.core.view(KEYS12)
+    tasks.subscribe(() => {})
+    h.core.view({ kind: "keys", object: ORG, keys: [S] }).subscribe(() => {})
+    await settle()
+    const rec = record(h)
+    rec.watch(tasks, "keys")
+    rec.mark()
+    const heldOrg = (read: FakeRead) =>
+      read.query?.object.name === "Organization"
+    const taskVersion = h.fake.edit(TASK, key(1), { title: "new" })
+    const orgVersion = h.fake.edit(ORG, S, { name: "renamed" })
+    h.fake.hold = heldOrg
+    throwOnPut(h)
+    transport.emit(CHANNEL, change(key(1), taskVersion))
+    transport.emit(orgChannel, {
+      id: "org-1",
+      object: org.id,
+      op: "update",
+      keys: { ref: S },
+      row_ver: orgVersion,
+    })
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    rec.note("second signal")
+    const second = h.fake.edit(TASK, key(2), { title: "second" })
+    transport.emit(CHANNEL, change(key(2), second))
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    rec.note("org read released")
+    h.fake.hold = undefined
+    h.fake.deliverAll()
+    await settle()
+    return log(rec)
+  },
   "signal read discarded by epoch": async () => {
     const { h, rec, transport } = await signalCore(KEYS12, 3)
     h.fake.epoch = EA
@@ -1269,6 +1333,40 @@ const MAIN_APPLY_THROWS: Record<string, readonly string[]> = {
     "lease.release",
   ],
   // Виняток відхиляв `land`: журнал після зняття оренди.
+  // Пачка з двох об'єктів: читання ключів і перечитання організації йдуть
+  // одним запитом джерела, тож сусіда не втримати окремо від відповіді, що
+  // кидає; різниця з `main` — місце запису `listener-failed` (там — після
+  // зняття оренди, коли відхилення проміса дійшло до `catch` пачки).
+  "signal batch of two objects: apply throws": [
+    "~ keys2.rereadEpochs=1",
+    "attempt.start reread R8",
+    "~ keys2.unconfirmedSince=set",
+    "log revalidate-burst",
+    "ops.sweep",
+    "flush",
+    "read keys K1/signal",
+    "read view R8/signal",
+    "second signal",
+    "org read released",
+    "ops.sweep",
+    "flush",
+    "lease.release",
+    "~ keys2.rereadEpochs=0",
+    "ops.put",
+    "~ keys2.unconfirmedSince=-",
+    "ops.sweep",
+    "flush",
+    "attempt.settled reread applied",
+    "lease.release",
+    "log listener-failed",
+    "log revalidate-burst",
+    "read keys K1/signal",
+    "ops.put",
+    "ops.sweep",
+    "flush",
+    "notify keys",
+    "lease.release",
+  ],
   "signal read apply throws": [
     "log revalidate-burst",
     "read keys K1/signal",
