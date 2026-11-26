@@ -1,20 +1,237 @@
+import { createHash } from "node:crypto"
 import type { Pool } from "pg"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { authPoolConfig } from "../src/server/auth-db"
 import { authOptions, createVerifySession } from "../src/server/auth"
+import { OAUTH_PROVIDERS, type AuthSettings } from "../src/server/config"
+import { defer } from "../src/server/defer"
+import type { MailMessage, MailTransport } from "../src/server/mail"
 
 afterEach(() => vi.unstubAllEnvs())
 
 const pool = {} as Pool
 const ORIGIN = "https://app.test"
-const options = authOptions(pool, ORIGIN, "secret")
+const PASSWORD_ONLY: AuthSettings = {
+  signUp: "closed",
+  password: true,
+  emailCode: false,
+  providers: [],
+}
+const sent: MailMessage[] = []
+const mail: MailTransport = {
+  send: (message) => {
+    sent.push(message)
+    return Promise.resolve()
+  },
+}
+/** Усі способи шаблону: пароль, код і кожен провайдер сталої. */
+const everyMethod = (signUp: AuthSettings["signUp"]): AuthSettings => ({
+  signUp,
+  password: true,
+  emailCode: true,
+  providers: OAUTH_PROVIDERS.map((id) => ({
+    id,
+    clientId: `${id}-client-id`,
+    clientSecret: `${id}-client-secret`,
+  })),
+})
+const options = authOptions(pool, ORIGIN, "secret", PASSWORD_ONLY, mail)
+
+function emailCodeOptions(
+  signUp: AuthSettings["signUp"],
+  secret: string | undefined
+) {
+  const plugin = authOptions(
+    pool,
+    ORIGIN,
+    secret,
+    everyMethod(signUp),
+    mail
+  ).plugins.find((item) => item.id === "email-otp")
+  if (plugin === undefined || !("options" in plugin)) {
+    throw new Error("no email-otp plugin")
+  }
+  return plugin.options as {
+    disableSignUp?: boolean
+    allowedAttempts?: number
+    expiresIn?: number
+    rateLimit?: unknown
+    storeOTP?: unknown
+    sendVerificationOTP: (data: {
+      email: string
+      otp: string
+      type: "sign-in"
+    }) => Promise<void>
+  }
+}
+
+function storedHash(secret: string | undefined) {
+  const store = emailCodeOptions("open", secret).storeOTP
+  if (typeof store !== "object" || store === null || !("hash" in store)) {
+    throw new Error("storeOTP has no hash")
+  }
+  return store.hash as (otp: string) => Promise<string>
+}
 
 describe("Better Auth config (spec P4-D 4.3)", () => {
-  it("keeps sign-up disabled and email sign-in on", () => {
-    expect(options.emailAndPassword).toEqual({
-      enabled: true,
-      disableSignUp: true,
+  it.each(["closed", "open"] as const)(
+    "password never signs up and needs a verified email at signUp %s",
+    (signUp) => {
+      expect(
+        authOptions(pool, ORIGIN, "secret", everyMethod(signUp), mail)
+          .emailAndPassword
+      ).toEqual({
+        enabled: true,
+        disableSignUp: true,
+        requireEmailVerification: true,
+      })
+    }
+  )
+
+  it("turns password sign-in off when the method is not listed", () => {
+    const settings = { ...PASSWORD_ONLY, password: false, emailCode: true }
+    expect(
+      authOptions(pool, ORIGIN, "secret", settings, mail).emailAndPassword
+        .enabled
+    ).toBe(false)
+  })
+
+  it("sets no verification email, so an unverified record cannot sign in", () => {
+    expect(
+      authOptions(pool, ORIGIN, "secret", everyMethod("open"), mail)
+    ).not.toHaveProperty("emailVerification")
+  })
+
+  it("adds the email-otp plugin only with email-code", () => {
+    expect(options.plugins.map((plugin) => plugin.id)).not.toContain(
+      "email-otp"
+    )
+    expect(emailCodeOptions("closed", "secret")).toBeDefined()
+  })
+
+  it.each([
+    ["closed", true],
+    ["open", false],
+  ] as const)(
+    "email-otp at signUp %s: disableSignUp %s, 5 attempts, 600 s, 3 a minute",
+    (signUp, disableSignUp) => {
+      expect(emailCodeOptions(signUp, "secret")).toMatchObject({
+        disableSignUp,
+        allowedAttempts: 5,
+        expiresIn: 600,
+        rateLimit: { window: 60, max: 3 },
+        storeOTP: { hash: expect.any(Function) },
+      })
+    }
+  )
+
+  it("stores a code as a keyed hash, not the code or its plain SHA-256", async () => {
+    const hash = storedHash("secret")
+    const value = await hash("123456")
+    expect(value).toBe(await storedHash("secret")("123456"))
+    expect(value).not.toBe("123456")
+    expect(value).not.toContain("123456")
+    for (const encoding of ["hex", "base64", "base64url"] as const) {
+      expect(value).not.toBe(
+        createHash("sha256").update("123456").digest(encoding)
+      )
+    }
+    expect(value).not.toBe(await hash("123457"))
+    expect(value).not.toBe(await storedHash("another secret")("123456"))
+  })
+
+  it("keys the hash with a fixed dev constant when there is no secret", async () => {
+    const dev = await storedHash(undefined)("123456")
+    expect(dev).toBe(await storedHash(undefined)("123456"))
+    expect(dev).not.toBe(await storedHash("secret")("123456"))
+  })
+
+  it("sends the code through the mail transport", async () => {
+    sent.length = 0
+    await emailCodeOptions("closed", "secret").sendVerificationOTP({
+      email: "a@b.test",
+      otp: "123456",
+      type: "sign-in",
     })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.to).toBe("a@b.test")
+    expect(sent[0]?.text).toContain("123456")
+  })
+
+  it("refuses email-code without a mail transport", () => {
+    expect(() =>
+      authOptions(pool, ORIGIN, "secret", everyMethod("open"), undefined)
+    ).toThrow(/mail transport/)
+  })
+
+  it.each(
+    OAUTH_PROVIDERS.flatMap((id) => [
+      [id, "closed", true] as const,
+      [id, "open", false] as const,
+    ])
+  )(
+    "provider %s at signUp %s: disableSignUp %s in the provider options",
+    (id, signUp, disableSignUp) => {
+      expect(
+        authOptions(pool, ORIGIN, "secret", everyMethod(signUp), mail)
+          .socialProviders[id]
+      ).toEqual({
+        clientId: `${id}-client-id`,
+        clientSecret: `${id}-client-secret`,
+        disableSignUp,
+      })
+    }
+  )
+
+  it("configures only the listed providers", () => {
+    expect(options.socialProviders).toEqual({})
+  })
+
+  it("has no trusted providers and no account linking settings", () => {
+    const all = authOptions(pool, ORIGIN, "secret", everyMethod("open"), mail)
+    expect(all).not.toHaveProperty("account")
+    expect(JSON.stringify(all)).not.toContain("trustedProviders")
+  })
+
+  it.each([
+    [true, undefined],
+    [false, { error: "email_not_verified" }],
+    [undefined, { error: "email_not_verified" }],
+  ])(
+    "validateUserInfo on create with emailVerified %s gives %j",
+    async (emailVerified, expected) => {
+      for (const method of ["oauth", "email-otp", "anonymous"]) {
+        expect(
+          await options.user.validateUserInfo({
+            user: { emailVerified },
+            source: {
+              action: "create-user",
+              method,
+              oauth: { providerId: "google" },
+            },
+          })
+        ).toEqual(expected)
+      }
+    }
+  )
+
+  it("validateUserInfo leaves sign-in and account linking to the library", async () => {
+    for (const action of ["sign-in", "link-account"] as const) {
+      expect(
+        await options.user.validateUserInfo({
+          user: { emailVerified: false },
+          source: {
+            action,
+            method: "oauth",
+            oauth: { providerId: "google" },
+          },
+        })
+      ).toBeUndefined()
+    }
+  })
+
+  it("runs background tasks through the template defer", () => {
+    expect(options.advanced.backgroundTasks.handler).toBe(defer)
   })
 
   it("enables the anonymous plugin and closes anonymous sign-in", () => {
@@ -57,7 +274,13 @@ describe("Better Auth config (spec P4-D 4.3)", () => {
       sameSite: "lax",
       secure: true,
     })
-    const http = authOptions(pool, "http://127.0.0.1:3000", undefined)
+    const http = authOptions(
+      pool,
+      "http://127.0.0.1:3000",
+      undefined,
+      PASSWORD_ONLY,
+      mail
+    )
     expect(http.advanced.defaultCookieAttributes.secure).toBe(false)
     expect(http.advanced.defaultCookieAttributes.sameSite).toBe("lax")
     expect(http.advanced.defaultCookieAttributes.httpOnly).toBe(true)

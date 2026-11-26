@@ -2,6 +2,7 @@ import { getAuthTables } from "better-auth/db"
 import type { Pool } from "pg"
 import { describe, expect, it } from "vitest"
 import { authOptions } from "../src/server/auth"
+import type { MailTransport } from "../src/server/mail"
 import { authSchemaOptions } from "../scripts/auth-options.mjs"
 
 // `db-setup` мігрує схему за опціями скрипта, а рантайм працює за
@@ -9,6 +10,15 @@ import { authSchemaOptions } from "../scripts/auth-options.mjs"
 // таблиці (так було з `rateLimit`).
 const pool = {} as Pool
 const ORIGIN = "https://app.test"
+const mail: MailTransport = { send: () => Promise.resolve() }
+// Усі плагіни рантайму: `emailOTP` додається лише з `email-code`
+const runtimeOptions = authOptions(
+  pool,
+  ORIGIN,
+  "secret",
+  { signUp: "closed", password: true, emailCode: true, providers: [] },
+  mail
+)
 
 /** Форма схеми: таблиця → її колонки. */
 function shape(options: Parameters<typeof getAuthTables>[0]) {
@@ -25,7 +35,7 @@ function shape(options: Parameters<typeof getAuthTables>[0]) {
 }
 
 describe("script Better Auth options", () => {
-  const runtime = shape(authOptions(pool, ORIGIN, "secret"))
+  const runtime = shape(runtimeOptions)
 
   it("shape the same schema as the runtime options", () => {
     expect(

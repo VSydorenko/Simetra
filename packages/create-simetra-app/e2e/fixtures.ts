@@ -19,6 +19,7 @@ import {
   type CommandRuntime,
 } from "simetra/server"
 import { authOptions } from "../template/src/server/auth"
+import type { AuthSettings } from "../template/src/server/config"
 import runtimeCatalog from "../template/generated/runtime-catalog.json" with { type: "json" }
 import {
   TEMPLATE,
@@ -383,6 +384,14 @@ async function bringUp(
   }
 }
 
+/** Налаштування входу фікстури: лише пароль, як типове `authSettings()`. */
+const PASSWORD_ONLY: AuthSettings = {
+  signUp: "closed",
+  password: true,
+  emailCode: false,
+  providers: [],
+}
+
 /**
  * Заголовок `Cookie` анонімної сесії Better Auth: серверним API, бо HTTP-шлях
  * анонімного входу вимкнено.
@@ -395,7 +404,13 @@ export async function anonymousSession(
     options: "-c search_path=better_auth",
   })
   try {
-    const auth = betterAuth(authOptions(pool, app.origin, app.secret))
+    // Гейт `validateUserInfo` застосунку відмовляє анонімному запису
+    // (`emailVerified: false`); тут він — лише тестова сесія, а HTTP-шлях
+    // анонімного входу закрито `disabledPaths`
+    const auth = betterAuth({
+      ...authOptions(pool, app.origin, app.secret, PASSWORD_ONLY, undefined),
+      user: undefined,
+    })
     const result = await auth.api.signInAnonymous({ returnHeaders: true })
     return {
       cookie: result.headers
