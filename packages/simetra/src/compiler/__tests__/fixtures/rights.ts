@@ -2144,6 +2144,26 @@ export function globalConstant(): Layer {
   }
 }
 
+export const LANGUAGES_FILE = "catalogs/Languages/Languages.meta.json"
+export const LANGUAGES_TABLE = "languages"
+
+/**
+ * Довідник ролі `languages` (Р-B2-1) з основною мовою проєкту: нескоуплений,
+ * форма коду — роллю. Над доменом політик таблиця отримує і політики прав
+ * читання, і читання опублікованих (Р-B2-5).
+ */
+export function languagesLayer(): Layer {
+  return {
+    [PROJECT_FILE]: { primaryDataLanguage: "uk" },
+    [LANGUAGES_FILE]: catalog(uuid(7950), "Languages", LANGUAGES_TABLE, {
+      scope: "none",
+      role: "languages",
+      codeLength: 12,
+      autonumber: false,
+    }),
+  }
+}
+
 /** Перерахування — вид без контракту прав. */
 export function statusEnumeration() {
   return {

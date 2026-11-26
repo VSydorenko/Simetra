@@ -46,10 +46,13 @@ export const catalogSchema = z
     // поточний користувач, авторство) знаходить «Користувачів» за нею, а
     // функції прав — «Ролі» й «Призначення ролей» свого рівня, тож
     // перейменування довідника їх не ламає.
-    role: z.enum(["users", "rightsRoles", "roleAssignments"]).optional().meta({
-      description:
-        "System role of the catalog: users marks the users catalog that the platform layer provisions and references (at most one per project, unscoped); rightsRoles and roleAssignments mark the custom roles and role assignments catalogs of a rights level, the level being the catalog's own scope (at most one per role and level).",
-    }),
+    role: z
+      .enum(["users", "rightsRoles", "roleAssignments", "languages"])
+      .optional()
+      .meta({
+        description:
+          "System role of the catalog: users marks the users catalog that the platform layer provisions and references (at most one per project, unscoped); rightsRoles and roleAssignments mark the custom roles and role assignments catalogs of a rights level, the level being the catalog's own scope (at most one per role and level); languages marks the catalog of data languages (unscoped, at most one per project, a code of the form language[-Script][-REGION]).",
+      }),
 
     // Нуль означає, що реквізиту (коду чи найменування) в довідника немає.
     codeLength: z.number().int().nonnegative().default(9).meta({

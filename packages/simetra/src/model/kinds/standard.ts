@@ -327,6 +327,65 @@ export interface SubscriptionSpec {
 export type RightsSystemCatalog = "rightsRoles" | "roleAssignments"
 
 /**
+ * Форма коду, яку вимагає роль довідника (Р-B2-1): поля налаштувань довідника,
+ * яким роль не дозволяє бути іншими, і CHECK стандартної колонки `code`.
+ */
+export interface RoleCodeForm {
+  codeType: "String" | "Number"
+  codeLength: number
+  autonumber: boolean
+  codeUnique: boolean
+  /** Вираз CHECK колонки `code` (без обгортки `CHECK (...)`). */
+  check: string
+}
+
+/**
+ * Колонки, яких грант ролі команд не дає (Р-B2-3): логічні канонічні імена
+ * стандартних колонок, окремо для INSERT і UPDATE.
+ */
+export interface RoleFixedColumns {
+  insert: readonly string[]
+  update: readonly string[]
+}
+
+/**
+ * Читання опублікованих рядків (Р-B2-5): колонка стану й логічні імена колонок,
+ * які бачить гість; решта колонок гостю закрита.
+ */
+export interface RolePublishedRead {
+  stateColumn: string
+  /** Значення стану, яке читають (одне джерело з `RoleLanguageState`). */
+  publishedState: string
+  guestColumns: readonly string[]
+}
+
+/**
+ * Передвизначений рядок, який платформа засіває з поля проєкту (Р-B2-7):
+ * `predefinedName` — стала мітка ролі, `projectField` — поле `project.meta.json`
+ * з кодом рядка.
+ */
+export interface RolePredefinedSeed {
+  predefinedName: string
+  projectField: "primaryDataLanguage"
+}
+
+/**
+ * Стан мови (Р-B2-4): колонки стану й основної мови, значення стану й дозволені
+ * переходи (`from` → `to`); решта пар відмовляє тригер.
+ */
+export interface RoleLanguageState {
+  stateColumn: string
+  primaryColumn: string
+  codeColumn: string
+  states: readonly string[]
+  /** Стан, у якому вставляють не основну мову. */
+  insertState: string
+  /** Опублікований стан: лише в ньому основна мова й читання гостем. */
+  publishedState: string
+  transitions: readonly { from: string; to: string }[]
+}
+
+/**
  * Стандартна таблична частина, яку дає вид (дельта «Ролей»): її колонки йдуть
  * після стандартних колонок рядка ТЧ, а таблиця — `<таблиця об'єкта>_<суфікс>`,
  * id — `<objectId>#<logicalName>`, бо у файлі її немає.
@@ -512,6 +571,23 @@ export interface KindDefinition {
    * немає.
    */
   globalRoot?(obj: unknown): boolean
+  /**
+   * Об'єкт — довідник ролі `languages` (Р-B2-1): за цим фактом, а не за іменем
+   * ролі, правила Р-B2-2, засів, B3 і B4 знаходять «Мови».
+   */
+  languagesCatalog?(obj: unknown): boolean
+  /** Скоуп, який вимагає роль довідника; `undefined` — роль не вимагає. */
+  requiredScope?(obj: unknown): "none" | undefined
+  /** Форма коду, яку вимагає роль; `undefined` — роль її не вимагає. */
+  codeForm?(obj: unknown): RoleCodeForm | undefined
+  /** Колонки поза грантами ролі команд (Р-B2-3). */
+  fixedColumns?(obj: unknown): RoleFixedColumns | undefined
+  /** Читання опублікованих рядків гостем, користувачем і ролью команд (Р-B2-5). */
+  publishedRead?(obj: unknown): RolePublishedRead | undefined
+  /** Передвизначений рядок, який засіває apply (Р-B2-7). */
+  predefinedSeed?(obj: unknown): RolePredefinedSeed | undefined
+  /** Стан і переходи мови для тригера (Р-B2-4). */
+  languageState?(obj: unknown): RoleLanguageState | undefined
   /** Нумерація; `undefined` — об'єкт номера чи коду не має. */
   numbering?(obj: unknown): NumberingSpec | undefined
   /** Підписка на подію; є лише у виду підписок. */

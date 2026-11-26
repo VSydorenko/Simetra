@@ -62,6 +62,7 @@ export {
   type ReferenceRole,
   type RegisterKeySpec,
   type RightsSystemCatalog,
+  type RoleLanguageState,
   type StandardColumnDef,
   type StandardTabularSectionDef,
   type SubscriptionSpec,

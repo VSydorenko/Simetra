@@ -21,6 +21,8 @@ export const COMMAND_CORE_ERRORS = {
     // Рядок членства творця кореня (спека П4 §6.13): сам аргумент і префікс
     // протоколу `creatorMember.<колонка>`.
     creatorMember: "creatorMember",
+    // Тригер стану мови (Р-B2-4): незмінні колонки, переходи стану, видалення.
+    languageState: "language-state",
   },
   context: {
     errcode: "42501",

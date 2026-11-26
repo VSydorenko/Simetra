@@ -9,6 +9,7 @@ import {
 import {
   accessPolicyNames,
   publicReadNeedsUser,
+  publishedReadUsing,
   rightsPolicyLabel,
   scopeSetCall,
 } from "../access-units"
@@ -178,10 +179,16 @@ function explainBody(
       access.rights === undefined
         ? undefined
         : rightsById.get(access.rights.objectId)
-    // Рядки об'єкта без контракту прав відкриває лише `publicRead`
-    // (`buildAccessUnits` ставить його політику незалежно від прав); без нього
-    // такого рядка не бачить ніхто — пояснювати нічого.
-    if (rights === undefined && access.publicRead.length === 0) return []
+    // Рядки об'єкта без контракту прав відкриває лише `publicRead` чи
+    // читання опублікованих (`buildAccessUnits` ставить їхні політики
+    // незалежно від прав); без них такого рядка не бачить ніхто —
+    // пояснювати нічого.
+    if (
+      rights === undefined &&
+      access.publicRead.length === 0 &&
+      access.publishedRead === undefined
+    )
+      return []
     const main = must(mainTableOf(physical, access.objectId))
     if (main.schema !== access.table.schema || main.name !== access.table.name)
       return []
@@ -374,6 +381,21 @@ function explainRows(
         )
       )
     }
+  }
+  if (access.publishedRead !== undefined) {
+    // Та сама умова, що в політиці `<t>_published_read` (Р-B2-5): рядок
+    // видно кожному, хто його бачить за станом, незалежно від прав.
+    rows.push({
+      policy: names.publishedRead,
+      kind: "permissive",
+      extent: null,
+      hasRight: "TRUE",
+      carrierMatch: publishedReadUsing(
+        row(access.publishedRead.stateColumn),
+        access.publishedRead.publishedState
+      ),
+      roles: NO_ROLES,
+    })
   }
   return rows
 }
