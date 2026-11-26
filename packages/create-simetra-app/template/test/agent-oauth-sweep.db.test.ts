@@ -8,6 +8,8 @@ import { startStand, type Stand } from "./agent-oauth-helpers"
  * видаляється, що лишається, і запас годинника (рішення архітекторки). Рядки
  * ставляться прямо в таблиці: правило прибирання — про рядки, а не про потоки
  * OAuth. Відмову порту після прибирання перевіряє `agent-entry.db.test.ts`.
+ * Рівень DB: правило — це `DELETE … LIMIT … FOR UPDATE SKIP LOCKED`, яке
+ * виконує й блокує лише Postgres (зокрема два прибирання одночасно).
  */
 let stand: Stand
 let userId: string

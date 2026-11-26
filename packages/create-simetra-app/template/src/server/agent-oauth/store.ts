@@ -1,6 +1,6 @@
 // Portions copied from munin-mcp (https://github.com/VSydorenko/munin-mcp, gateway/src/oauth/adapter.ts, gateway/src/oauth/revoke.ts)
 // Copyright 2026 Volodymyr Sydorenko
-// Licensed under Apache-2.0. Modified: Kysely replaced by pg over the Better Auth pool, tables moved to the agent_oauth schema, grant_activity replaced by agent_grants (revoked_at instead of deletion), every timestamp comes from the JS clock, pairing, script keys, audit and events removed.
+// Licensed under Apache-2.0. Modified: Kysely replaced by pg over the Better Auth pool, tables moved to the agent_oauth schema, grant_activity replaced by agent_grants (revoked_at instead of deletion), every timestamp comes from the JS clock, the expiry sweep runs in batches with SKIP LOCKED and a 5-minute clock margin and has no idle rule, pairing, script keys, audit and events removed.
 import { createHash } from "node:crypto"
 import type { Pool } from "pg"
 import { errors, type ProviderAdapter } from "oidc-provider"
@@ -166,7 +166,10 @@ export async function sweepExpired(
         [before, batch]
       )
       const ids = (rows as { grant_id: string }[]).map((r) => r.grant_id)
-      // Спершу записи гранту, потім рядок — той самий порядок, що в `revokeGrant`
+      // Порядок блокувань зворотний до `revokeGrant` (там записи, потім
+      // рядок): рядок тут уже взято `FOR UPDATE`. Одночасне відкликання того
+      // самого гранту може зрідка дати 40P01, як і в munin-mcp; прибирання
+      // повториться наступним тіком
       const swept = await client.query(
         "DELETE FROM agent_oauth.models WHERE grant_id = ANY($1)",
         [ids]
