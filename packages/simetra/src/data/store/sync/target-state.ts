@@ -274,8 +274,8 @@ export function startFlight(
         throw new Error("a system re-read starts at an epoch")
       return {
         ...withWaiters,
-        // Старт перечитування й є тією перевіркою, що чекала.
-        recheck: start.recheck === undefined ? undefined : withWaiters.recheck,
+        // Відкладену перевірку перечитування не споживає, як на `main`: вона
+        // чекає кінця завантаження в польоті (рішення архітекторки 27.11).
         rereadEpochs: [...state.rereadEpochs, start.epoch],
       }
     case "load":

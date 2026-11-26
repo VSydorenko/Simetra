@@ -796,7 +796,7 @@ describe("TargetState: дрібні гарантії переходів", () => 
     ).toBeUndefined()
   })
 
-  it("перечитування споживає перевірку, перша відкладена зберігається", () => {
+  it("перечитування відкладеної перевірки не споживає; перша відкладена зберігається", () => {
     let s = startFlight(createTargetState(), {
       kind: "load",
       epoch: 1,
@@ -810,11 +810,20 @@ describe("TargetState: дрібні гарантії переходів", () => 
       recheck: { reason: "retry", site: "R16" },
     })
     expect(s.recheck).toEqual(why)
+    expect(startFlight(s, { kind: "reread", epoch: 3, cause }).recheck).toEqual(
+      why
+    )
     expect(
-      startFlight(s, { kind: "reread", epoch: 3, cause }).recheck
+      startFlight(createTargetState(), { kind: "reread", epoch: 3, cause })
+        .recheck
     ).toBeUndefined()
     expect(
-      startFlight(s, { kind: "reread", epoch: 3, cause, recheck: why }).recheck
+      startFlight(s, {
+        kind: "reread",
+        epoch: 3,
+        cause,
+        recheck: { reason: "retry", site: "R16" },
+      }).recheck
     ).toEqual(why)
   })
 
