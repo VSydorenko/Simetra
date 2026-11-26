@@ -5,6 +5,7 @@ import type { CompiledModel } from "simetra/compiler"
 import {
   RIGHTS_ADMIN_ID,
   ROLE_FILE,
+  adminRoles,
   catalog,
   compileRights,
   grant,
@@ -16,12 +17,7 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { uuid } from "../../src/compiler/__tests__/helpers"
 import { signUp } from "./auth"
-import {
-  type Seed,
-  assignmentRow,
-  insert,
-  profileLayer,
-} from "./rights-seed"
+import { type Seed, assignmentRow, insert, profileLayer } from "./rights-seed"
 
 /**
  * Модель і засів опису «умовний `publicRead`» (D1): два умовні довідники —
@@ -120,7 +116,11 @@ export function publicReadPublishedLayer(): Layer {
       { scopeKind: "org" },
       {
         grants: [
-          grant(notice, ["read", "publish", "unpublish", "markDeletion"], "any"),
+          grant(
+            notice,
+            ["read", "publish", "unpublish", "markDeletion"],
+            "any"
+          ),
         ],
       }
     ),
@@ -166,6 +166,7 @@ export async function publicReadPublishedModel(
   ...extra: Layer[]
 ): Promise<CompiledModel> {
   const files = policyDomain(
+    adminRoles(),
     publicReadPublishedLayer(),
     profileLayer(),
     ...extra
@@ -186,8 +187,6 @@ export const NOTICE_STATES = [
   ["mA", "A", true, true, null],
   // Чернетка з позначкою: база для «позначений не публікується».
   ["kA", "A", false, true, null],
-  // Свідок Р-D1-16: опублікований і позначений рядок B з контейнером A.
-  ["wB", "B", true, true, "P1"],
 ] as const
 
 /**

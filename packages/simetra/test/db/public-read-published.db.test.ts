@@ -93,10 +93,9 @@ const itemOf = (keys: readonly string[]) => keys.map((k) => `${k}.l1`)
 /**
  * Матриця видимості (інваріанти 1–3): користувач (`null` — гість), рядки
  * шапки `Notice` і рядки `Memo`. Опублікований непозначений рядок видно всім;
- * чернетку й позначений рядок — лише в межі тенанта з правом `read`; `wB`
- * (опублікований, позначений, тенант B, контейнер P1 з A) — лише учаснику B:
- * контейнерна роль `cA` читає його за `<t>_read_*`, але межа тенанта A його
- * не пропускає (Р-D1-16).
+ * чернетку й позначений рядок — лише в межі тенанта з правом `read`.
+ * Рядок B з контейнером A недосяжний: складений зовнішній ключ
+ * `(org_id, project_id)` його не пропускає (Р-D1-16).
  */
 const MATRIX: [
   name: string,
@@ -105,10 +104,15 @@ const MATRIX: [
   memo: string[] | "refused",
 ][] = [
   ["a guest", null, ["pA", "pB"], "refused"],
-  ["a reader of tenant A", "rA", ["dA", "kA", "mA", "pA", "pB"], ["mdA", "mpA"]],
-  ["a reader of tenant B", "rB", ["dB", "pA", "pB", "wB"], ["mpA"]],
+  [
+    "a reader of tenant A",
+    "rA",
+    ["dA", "kA", "mA", "pA", "pB"],
+    ["mdA", "mpA"],
+  ],
+  ["a reader of tenant B", "rB", ["dB", "pA", "pB"], ["mpA"]],
   ["a signed-in user without rights", "nobody", ["pA", "pB"], ["mpA"]],
-  // `dA` бачить контейнерна роль у своєму тенанті; `wB` — ні (Р-D1-16).
+  // `dA` (проєкт P1) бачить контейнерна роль у своєму тенанті.
   ["a container reader of tenant A", "cA", ["dA", "pA", "pB"], ["mpA"]],
 ]
 
@@ -164,7 +168,12 @@ describe("conditional publicRead", () => {
   const versionSql = (row: string) =>
     `(SELECT version FROM public.${NOTICE_TABLE} WHERE id = '${key(row)}')`
   /** Виклик ядра `<t>_<fn>` над рядком з поточною версією. */
-  const coreStep = (action: string, fn: string, row: string, tail = ""): CommandStep => ({
+  const coreStep = (
+    action: string,
+    fn: string,
+    row: string,
+    tail = ""
+  ): CommandStep => ({
     context: context(action, row),
     sql: `SELECT public.${NOTICE_TABLE}_${fn}('${key(row)}'::uuid, ${versionSql(row)}${tail}) AS r`,
   })
@@ -194,9 +203,9 @@ describe("conditional publicRead", () => {
     })
 
     it("the matrix names every seeded state", () => {
-      expect(
-        new Set(MATRIX.flatMap(([, , notice]) => notice))
-      ).toEqual(new Set(KEYS))
+      expect(new Set(MATRIX.flatMap(([, , notice]) => notice))).toEqual(
+        new Set(KEYS)
+      )
     })
   })
 
@@ -285,13 +294,11 @@ describe("conditional publicRead", () => {
         },
         {
           check: async (client) =>
-            (
-              await queryAs<{ headline: string }>(
-                client,
-                "anonymous",
-                claims(null),
-                `SELECT headline FROM public.${NOTICE_TABLE} WHERE id = '${key("pA")}'`
-              )
+            await queryAs<{ headline: string }>(
+              client,
+              "anonymous",
+              claims(null),
+              `SELECT headline FROM public.${NOTICE_TABLE} WHERE id = '${key("pA")}'`
             ),
         },
       ])
@@ -342,12 +349,26 @@ describe("conditional publicRead", () => {
       const update = (set: string, row: string) =>
         `UPDATE public.${NOTICE_TABLE} SET ${set} WHERE id = '${key(row)}'`
       const cases: [string, string, string][] = [
-        ["mark with published", "markDeletion", update("deletion_mark = true", "pB")],
-        ["unmark with published", "markDeletion", update("deletion_mark = false", "mA")],
-        ["publish of a marked row", "publish", update("published = true", "kA")],
+        [
+          "mark with published",
+          "markDeletion",
+          update("deletion_mark = true", "pB"),
+        ],
+        [
+          "unmark with published",
+          "markDeletion",
+          update("deletion_mark = false", "mA"),
+        ],
+        [
+          "publish of a marked row",
+          "publish",
+          update("published = true", "kA"),
+        ],
       ]
       for (const [name, action, sql] of cases)
-        expect.soft((await owner(action, sql)).refusal, name).toMatchObject(EFFECT)
+        expect
+          .soft((await owner(action, sql)).refusal, name)
+          .toMatchObject(EFFECT)
       // контроль: позначка з `published = false` проходить
       const control = await owner(
         "markDeletion",
@@ -430,10 +451,16 @@ describe("conditional publicRead", () => {
 
     it("9: the explanation is no oracle of a draft, a foreign row or a random id", async () => {
       // Чернетка B й випадковий id — те саме порожнє пояснення
-      expect(await explain("admin", NOTICE_TABLE, [key("dB")], key("rB"))).toEqual([])
-      expect(await explain("admin", NOTICE_TABLE, [randomUUID()], key("rB"))).toEqual([])
+      expect(
+        await explain("admin", NOTICE_TABLE, [key("dB")], key("rB"))
+      ).toEqual([])
+      expect(
+        await explain("admin", NOTICE_TABLE, [randomUUID()], key("rB"))
+      ).toEqual([])
       // Чернетка A з користувачем поза A
-      expect(await explain("admin", NOTICE_TABLE, [key("dA")], key("rB"))).toEqual([])
+      expect(
+        await explain("admin", NOTICE_TABLE, [key("dA")], key("rB"))
+      ).toEqual([])
     })
 
     it("9: a published row of A with a user outside A explains only public_read", async () => {
@@ -505,7 +532,9 @@ describe("conditional publicRead", () => {
         return result
       }
       expect(await allowed("rA", NOTICE_ID)).toEqual({ rows: [{ v: true }] })
-      expect(await allowed("nobody", NOTICE_ID)).toEqual({ rows: [{ v: false }] })
+      expect(await allowed("nobody", NOTICE_ID)).toEqual({
+        rows: [{ v: false }],
+      })
       expect(await allowed("nobody", MEMO_ID)).toEqual({ rows: [{ v: false }] })
       expect(await allowed("rB", NOTICE_ID)).toEqual({ rows: [{ v: false }] })
     })
