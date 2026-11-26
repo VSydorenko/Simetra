@@ -22,7 +22,7 @@ import {
   singleTenantRights,
   writeRoles,
 } from "../../../compiler/__tests__/fixtures/rights"
-import { createMcpEntry, type McpEntryOptions } from ".."
+import { createMcpEntry, hasScopeKinds, type McpEntryOptions } from ".."
 
 const APP = "https://app.example"
 const RESOURCE = `${APP}/mcp`
@@ -583,5 +583,23 @@ describe("creation", () => {
         (o) => o.scopeKindId !== undefined || o.rights?.root !== undefined
       )
     ).toBe(false)
+  })
+
+  it("hasScopeKinds: a scoped object or a scope kind root, nothing else", () => {
+    expect(hasScopeKinds(scoped)).toBe(true)
+    expect(hasScopeKinds(unscoped)).toBe(false)
+    const [first, ...rest] = unscoped.objects
+    const withRoot = (o: typeof first) => ({
+      ...unscoped,
+      objects: [o, ...rest],
+    })
+    expect(
+      hasScopeKinds(
+        withRoot({ ...first!, rights: { ...first!.rights!, root: {} } })
+      )
+    ).toBe(true)
+    expect(hasScopeKinds(withRoot({ ...first!, scopeKindId: "kind-1" }))).toBe(
+      true
+    )
   })
 })

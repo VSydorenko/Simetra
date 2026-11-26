@@ -191,8 +191,14 @@ export function createMcpEntry(options: McpEntryOptions): McpEntry {
 
 // Правило закрите (Р-F4-4): будь-який скоуплений об'єкт або корінь виду
 // скоупу означає, що застосунок має види скоупу й токен без закріплення
-// не проходить.
-function hasScopeKinds(catalog: RuntimeCatalog): boolean {
+// не проходить. Одне правило для адаптера й порту токена host-а.
+/**
+ * Whether the application declares scope kinds: any scoped object or any
+ * scope kind root in the compiled catalog. Such an application requires a
+ * token pinned to a tenant; the MCP entry applies it, and a host's
+ * `VerifyAgentToken` port uses the same rule.
+ */
+export function hasScopeKinds(catalog: RuntimeCatalog): boolean {
   return catalog.objects.some(
     (o) => o.scopeKindId !== undefined || o.rights?.root !== undefined
   )

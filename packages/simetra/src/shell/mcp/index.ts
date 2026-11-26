@@ -1,1 +1,6 @@
-export { createMcpEntry, type McpEntry, type McpEntryOptions } from "./entry"
+export {
+  createMcpEntry,
+  hasScopeKinds,
+  type McpEntry,
+  type McpEntryOptions,
+} from "./entry"

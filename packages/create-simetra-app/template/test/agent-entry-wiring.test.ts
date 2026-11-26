@@ -10,14 +10,49 @@ vi.mock("@tanstack/react-start/server", () => ({
 }))
 // Рантайм без бази: PRM і відмова без токена до порту й рантайму не доходять,
 // але `loadEntry` будує вхід над ним так, як у робочому процесі
+const state = vi.hoisted(() => ({
+  scopeRoot: false,
+  requiresTenant: [] as boolean[],
+}))
 vi.mock("../src/server/runtime", () => ({
   serverHash: "hash",
-  getRuntime: async () => ({
-    catalog: runtimeCatalogSchema.parse(generatedCatalog),
-    read: async () => ({ rows: [] }),
-    run: async () => ({ rows: [], changes: [], epoch: "e" }),
-  }),
+  getRuntime: async () => {
+    const catalog = runtimeCatalogSchema.parse(generatedCatalog)
+    if (!state.scopeRoot) return { catalog, ...runtimeStub }
+    // Корінь виду скоупу в першому об'єкті: застосунок з видами скоупу
+    const [first, ...rest] = catalog.objects
+    return {
+      catalog: {
+        ...catalog,
+        objects: [
+          { ...first!, rights: { ...first!.rights!, root: {} } },
+          ...rest,
+        ],
+      },
+      ...runtimeStub,
+    }
+  },
 }))
+const runtimeStub = {
+  read: async () => ({ rows: [] }),
+  run: async () => ({ rows: [], changes: [], epoch: "e" }),
+}
+// Порт бачить прапорець, який `loadEntry` вивів із каталогу рантайму
+vi.mock("../src/server/agent-oauth/verify-token", async (importOriginal) => {
+  const real =
+    await importOriginal<
+      typeof import("../src/server/agent-oauth/verify-token")
+    >()
+  return {
+    ...real,
+    createVerifyAgentToken: (
+      o: Parameters<typeof real.createVerifyAgentToken>[0]
+    ) => {
+      state.requiresTenant.push(o.requiresTenant)
+      return real.createVerifyAgentToken(o)
+    },
+  }
+})
 
 const ORIGIN = "https://app.test"
 
@@ -30,6 +65,8 @@ beforeEach(async () => {
   // Сервер авторизації процесу стартує таймер прибирання: підроблений, щоб
   // тест його бачив і не лишав після себе
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] })
+  state.scopeRoot = false
+  state.requiresTenant.length = 0
 })
 afterEach(() => {
   vi.clearAllTimers()
@@ -77,4 +114,19 @@ describe("the MCP entry of the server entry", () => {
       'Bearer resource_metadata="https://app.test/.well-known/oauth-protected-resource/mcp", scope="mcp"'
     )
   })
+
+  it.each([
+    ["a scope kind root", true],
+    ["no scope kinds", false],
+  ])(
+    "the token port requires a pin by the catalog of the runtime (%s)",
+    async (_name, scopeRoot) => {
+      state.scopeRoot = scopeRoot
+      const response = await (
+        await entry()
+      ).fetch(new Request(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`))
+      expect(response.status).toBe(200)
+      expect(state.requiresTenant).toEqual([scopeRoot])
+    }
+  )
 })
