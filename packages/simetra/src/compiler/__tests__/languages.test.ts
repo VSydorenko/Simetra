@@ -12,6 +12,7 @@ import {
 } from "./helpers"
 
 const FILE = "catalogs/Languages/Languages.meta.json"
+const LANGUAGES_SQL = "catalogs/Languages/Languages.sql"
 const PROJECT = "project.meta.json"
 const SUBSCRIPTION = "event-subscriptions/Guard/Guard.meta.json"
 const HANDLER_FILE = "sql/app/guard.sql"
@@ -177,6 +178,28 @@ describe("own attributes of the languages catalog and the seed (Р-B2-7)", () =>
           element: "nativeName",
           reason: "requiredWithoutDefault",
         },
+      ],
+    ])
+  })
+
+  it("a row rule of the module breaks the seed", async () => {
+    const { diagnostics } = await compile(
+      metaFiles(
+        base({
+          [LANGUAGES_SQL]:
+            "ALTER TABLE public.languages ADD CONSTRAINT languages_named CHECK (description IS NOT NULL);",
+        })
+      )
+    )
+    expect(
+      diagnostics.map((d) => [d.code, d.file, d.pointer, d.severity, d.params])
+    ).toEqual([
+      [
+        "languages.seed-unsafe",
+        LANGUAGES_SQL,
+        "",
+        "error",
+        { name: "Languages", element: "languages_named", reason: "rowRule" },
       ],
     ])
   })

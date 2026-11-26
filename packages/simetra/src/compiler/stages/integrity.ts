@@ -239,7 +239,7 @@ export function checkIntegrity(
   diagnostics.push(...checkPosting(objects, references, byKey))
   diagnostics.push(...checkSubscriptions(objects, model, provider, style))
   diagnostics.push(...checkUsersCatalogs(objects, model))
-  diagnostics.push(...checkLanguagesCatalogs(objects, project))
+  diagnostics.push(...checkLanguagesCatalogs(objects, project, model))
   diagnostics.push(...checkAuthorTracking(objects))
   diagnostics.push(...checkMembership(objects, scopeKinds))
   diagnostics.push(...checkStorageRoot(objects, scopeKinds))
@@ -300,28 +300,14 @@ function checkUsersCatalogs(
         )
       )
     }
-    for (const { pointer, element, reason } of rowInsertHazards(object)) {
+    for (const hazard of rowInsertHazards(object, model)) {
       found.push(
-        diagnostic("users.provision-unsafe", object.file, pointer, {
+        diagnostic("users.provision-unsafe", hazard.file, hazard.pointer, {
           name,
-          reason,
-          element,
+          reason: hazard.reason,
+          element: hazard.element,
         })
       )
-    }
-    for (const table of model.physical.tables) {
-      if (!isObjectOrigin(table.origin) || table.origin.objectId !== object.id)
-        continue
-      for (const check of table.checks) {
-        if (check.origin === undefined) continue
-        found.push(
-          diagnostic("users.provision-unsafe", check.origin.rowRule.file, "", {
-            name,
-            reason: "rowRule",
-            element: check.name,
-          })
-        )
-      }
     }
   }
   return found
@@ -333,7 +319,8 @@ function checkUsersCatalogs(
  */
 function checkLanguagesCatalogs(
   objects: readonly ParsedObject[],
-  project: Project
+  project: Project,
+  model: ModelStageResult
 ): Diagnostic[] {
   const found: Diagnostic[] = []
   const catalogs = objects
@@ -396,12 +383,12 @@ function checkLanguagesCatalogs(
       )
     }
     if (def.predefinedSeed?.(object.data) !== undefined) {
-      for (const { pointer, element, reason } of rowInsertHazards(object)) {
+      for (const hazard of rowInsertHazards(object, model)) {
         found.push(
-          diagnostic("languages.seed-unsafe", file, pointer, {
+          diagnostic("languages.seed-unsafe", hazard.file, hazard.pointer, {
             name,
-            reason,
-            element,
+            reason: hazard.reason,
+            element: hazard.element,
           })
         )
       }
@@ -563,15 +550,25 @@ function checkMembership(
   return found
 }
 
+/** Небезпека платформної вставки рядка: місце, елемент і причина. */
+interface RowInsertHazard {
+  file: string
+  pointer: string
+  element: string
+  reason: string
+}
+
 /**
- * Власні реквізити, чиї обмеження порушить платформна вставка рядка лише з
- * колонками виду й ролі (провізія «Користувачів», засів «Мов»): одна
- * перевірка для обох правил.
+ * Власні реквізити й правила рядка модуля, чиї обмеження порушить платформна
+ * вставка рядка лише з колонками виду й ролі (провізія «Користувачів», засів
+ * «Мов»): одна перевірка для обох правил. Правило рядка статично не
+ * доводиться, тож небезпечне будь-яке.
  */
 function rowInsertHazards(
-  object: ParsedObject
-): { pointer: string; element: string; reason: string }[] {
-  const found: { pointer: string; element: string; reason: string }[] = []
+  object: ParsedObject,
+  model: ModelStageResult
+): RowInsertHazard[] {
+  const found: RowInsertHazard[] = []
   for (const field of KIND_REGISTRY[object.kind].columnFields) {
     const attributes = (object.data as Record<string, unknown>)[field] as
       CatalogAttribute[] | undefined
@@ -579,11 +576,25 @@ function rowInsertHazards(
       const reason = provisionHazard(attribute)
       if (reason === undefined) return
       found.push({
+        file: object.file,
         pointer: `/${field}/${index}`,
         element: attribute.name,
         reason,
       })
     })
+  }
+  for (const table of model.physical.tables) {
+    if (!isObjectOrigin(table.origin) || table.origin.objectId !== object.id)
+      continue
+    for (const check of table.checks) {
+      if (check.origin === undefined) continue
+      found.push({
+        file: check.origin.rowRule.file,
+        pointer: "",
+        element: check.name,
+        reason: "rowRule",
+      })
+    }
   }
   return found
 }

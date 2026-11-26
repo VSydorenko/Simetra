@@ -330,8 +330,8 @@ const PROVISION_HAZARD: Readonly<Record<string, { en: string; uk: string }>> = {
     uk: "його defaultValue не проходить власну перевірку реквізиту",
   },
   rowRule: {
-    en: "a row rule cannot be proven statically to accept the provisioned row",
-    uk: "правило рядка статично не доводить, що прийме рядок провізії",
+    en: "a row rule cannot be proven statically to accept the row the platform inserts",
+    uk: "правило рядка статично не доводить, що прийме рядок, який вставляє платформа",
   },
 }
 
@@ -2651,9 +2651,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "languages.seed-unsafe": {
     en: (p) =>
-      `Attribute "${p.element}" of languages catalog "${p.name}" would break the seed of the primary language: ${(PROVISION_HAZARD[String(p.reason)] ?? { en: p.reason }).en}`,
+      `${p.reason === "rowRule" ? `Row rule "${p.element}"` : `Attribute "${p.element}"`} of languages catalog "${p.name}" would break the seed of the primary language: ${(PROVISION_HAZARD[String(p.reason)] ?? { en: p.reason }).en}`,
     uk: (p) =>
-      `Реквізит "${p.element}" довідника мов "${p.name}" зірвав би засів основної мови: ${(PROVISION_HAZARD[String(p.reason)] ?? { uk: p.reason }).uk}`,
+      `${p.reason === "rowRule" ? `Правило рядка "${p.element}"` : `Реквізит "${p.element}"`} довідника мов "${p.name}" зірвав би засів основної мови: ${(PROVISION_HAZARD[String(p.reason)] ?? { uk: p.reason }).uk}`,
     hint: {
       en: "Apply seeds the primary language row with only the role columns, the code and the description: every other column must accept that row.",
       uk: "Apply засіває рядок основної мови лише з колонками ролі, кодом і найменуванням: кожна інша колонка мусить прийняти такий рядок.",
