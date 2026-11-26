@@ -18,9 +18,14 @@ import { describe, expect, it } from "vitest"
  *     `patchRows`, `removeKeys`, виклик замикання `Write`) — лише гачок кроку 5
  *     і помічники та замикання, досяжні тільки з нього.
  * (3) `sweep` — лише гачок кроку 8.
- * (4) `settleRequirement`, `liftRequirement`, `confirm` і присвоєння
- *     `refreshedAt`, `okReadEpoch`, `failures`, `failedAt` — лише в єдиному
- *     `settleTarget` (другий шов — червоний).
+ * (4) `settleRequirement`, `liftRequirement`, `confirm` і присвоєння полів
+ *     стану вигляду, які шов веде (`refreshedAt`, `okReadEpoch`, `failures`,
+ *     `failedAt`, `loaded`, `status`, `error`, `needsRefresh`, `hasNewRows`) —
+ *     лише в єдиному `settleTarget` (другий шов, друга копія правила збоїв чи
+ *     відновлення `status` — червоні). Законні записи поза швом (гідратація,
+ *     старт, межа відкинутих, `Writer.markViews`, замикання запису читача) —
+ *     у переліку винятків, точних до функції й поля. Не тримається: що саме
+ *     пише такий виняток — перелік судить місце, не значення.
  * (5) `settle(lease, …)` не існує.
  * (6) Кожна точка Р-SK2-1 знайдена й досягає проходу.
  */
@@ -106,6 +111,8 @@ interface Anchors {
 interface Finding {
   readonly place: string
   readonly kind: Kind
+  /** Для поля — його ім'я: виняток точний до функції й поля. */
+  readonly what?: string
   readonly line: number
 }
 
@@ -148,39 +155,78 @@ function analyze(
       ? undefined
       : checker.getSymbolAtLocation(decl.name)
   }
-  const named = (...symbols: (ts.Symbol | undefined)[]) =>
-    symbols.filter((s): s is ts.Symbol => s !== undefined)
+  // Якір, що не розв'язався (перейменування, переїзд), не вимикає правило
+  // мовчки: він потрапляє в `unresolved`, який реальний тест вимагає порожнім.
+  const unresolved: string[] = []
+  const anchor = (what: string, symbol: ts.Symbol | undefined) => {
+    if (symbol === undefined) unresolved.push(what)
+    return symbol
+  }
+  const named = (...entries: readonly [string, ts.Symbol | undefined][]) =>
+    entries.flatMap(([what, s]) => {
+      const found = anchor(what, s)
+      return found === undefined ? [] : [found]
+    })
 
   // ---------------------------------------------------- захищені символи
   // Ключ — оголошення: член `Pick<…>` (контекст читача) дає інший символ з тим самим оголошенням.
   const protectedKind = new Map<ts.Node, Kind>()
   const declOf = (s: ts.Symbol) => s.declarations?.[0]
   for (const m of A.session.members)
-    for (const s of named(memberOf(A.session.file, A.session.iface, m)))
+    for (const s of named([
+      `${A.session.iface}.${m}`,
+      memberOf(A.session.file, A.session.iface, m),
+    ]))
       protectedKind.set(declOf(s)!, "accept")
   for (const m of A.ops.write)
-    for (const s of named(memberOf(A.ops.file, A.ops.iface, m)))
+    for (const s of named([
+      `${A.ops.iface}.${m}`,
+      memberOf(A.ops.file, A.ops.iface, m),
+    ]))
       protectedKind.set(declOf(s)!, "write")
   for (const s of named(
-    memberOf(A.writer.file, A.writer.iface, A.writer.member),
-    memberOf(A.gated.file, A.gated.iface, A.gated.member),
-    ...A.internal.names.map((n) => functionSymbol(A.internal.file, n))
+    [
+      `${A.writer.iface}.${A.writer.member}`,
+      memberOf(A.writer.file, A.writer.iface, A.writer.member),
+    ],
+    [
+      `${A.gated.iface}.${A.gated.member}`,
+      memberOf(A.gated.file, A.gated.iface, A.gated.member),
+    ],
+    ...A.internal.names.map(
+      (n) => [n, functionSymbol(A.internal.file, n)] as const
+    )
   ))
     protectedKind.set(declOf(s)!, "write")
-  for (const s of named(memberOf(A.ops.file, A.ops.iface, A.ops.sweep)))
+  for (const s of named([
+    `${A.ops.iface}.${A.ops.sweep}`,
+    memberOf(A.ops.file, A.ops.iface, A.ops.sweep),
+  ]))
     protectedKind.set(declOf(s)!, "sweep")
-  const seamSymbol = functionSymbol(A.subset.file, A.subset.seam)
+  const seamSymbol = anchor(
+    A.subset.seam,
+    functionSymbol(A.subset.file, A.subset.seam)
+  )
   const helperSymbols = new Set(
-    named(...A.subset.helpers.map((n) => functionSymbol(A.subset.file, n)))
+    named(
+      ...A.subset.helpers.map(
+        (n) => [n, functionSymbol(A.subset.file, n)] as const
+      )
+    )
   )
   for (const s of helperSymbols) protectedKind.set(declOf(s)!, "seam")
   const fieldDecls = new Set(
     A.subset.fields.flatMap((f) =>
-      named(memberOf(A.subset.file, A.subset.iface, f)).map(declOf)
+      named([
+        `${A.subset.iface}.${f}`,
+        memberOf(A.subset.file, A.subset.iface, f),
+      ]).map(declOf)
     )
   )
   const passSymbols = new Set(
-    named(...A.pass.names.map((n) => functionSymbol(A.pass.file, n)))
+    named(
+      ...A.pass.names.map((n) => [n, functionSymbol(A.pass.file, n)] as const)
+    )
   )
 
   // ------------------------------------------------------- крок гачка
@@ -517,14 +563,20 @@ function analyze(
       ? symbol
       : undefined
   }
-  const report = (n: ts.Node, kind: Kind) => {
+  const report = (n: ts.Node, kind: Kind, what: string) => {
     const ctx = contextOf(n)
     if (ancestorFns(n).includes(seamSymbol!)) {
       allowedUse(kind)
       return
     }
-    findings.push({ place: place(n, ctx), kind, line: lineOf(n) })
+    findings.push({ place: place(n, ctx), kind, what, line: lineOf(n) })
   }
+  const nameOfTarget = (target: ts.Expression): string =>
+    ts.isParenthesizedExpression(target)
+      ? nameOfTarget(target.expression)
+      : ts.isPropertyAccessExpression(target)
+        ? target.name.text
+        : (target as ts.ElementAccessExpression).argumentExpression.getText()
   for (const file of files) {
     const visit = (n: ts.Node): void => {
       if (
@@ -532,14 +584,14 @@ function analyze(
         isAssignOp(n.operatorToken.kind) &&
         fieldOf(n.left) !== undefined
       )
-        report(n, "field")
+        report(n, "field", nameOfTarget(n.left))
       if (
         (ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) &&
         (n.operator === ts.SyntaxKind.PlusPlusToken ||
           n.operator === ts.SyntaxKind.MinusMinusToken) &&
         fieldOf(n.operand) !== undefined
       )
-        report(n, "field")
+        report(n, "field", nameOfTarget(n.operand))
       ts.forEachChild(n, visit)
     }
     visit(source(file)!)
@@ -617,14 +669,24 @@ function analyze(
     ts.isFunctionDeclaration
   ).length
 
-  return { findings, pointProblems, seamBodies, allowedUses, label }
+  if (interfaceSymbol(A.hooks.file, A.hooks.iface) === undefined)
+    unresolved.push(A.hooks.iface)
+  if (writeType === undefined) unresolved.push(A.writeAlias.name)
+  return {
+    findings,
+    pointProblems,
+    seamBodies,
+    allowedUses,
+    unresolved,
+    label,
+  }
 }
 
 /** `<місце> <вид>`, з ` ×N`, коли в місці N входжень одного виду. */
 function render(findings: readonly Finding[]): string[] {
   const counts = new Map<string, number>()
   for (const f of findings) {
-    const key = `${f.place} ${f.kind}`
+    const key = `${f.place} ${f.kind}${f.what === undefined ? "" : `:${f.what.replace(/["']/g, "")}`}`
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
   return [...counts].map(([key, n]) => (n === 1 ? key : `${key} ×${n}`)).sort()
@@ -653,7 +715,17 @@ const REAL: Anchors = {
   subset: {
     file: at("subsets.ts"),
     iface: "Subset",
-    fields: ["refreshedAt", "okReadEpoch", "failures", "failedAt"],
+    fields: [
+      "refreshedAt",
+      "okReadEpoch",
+      "failures",
+      "failedAt",
+      "loaded",
+      "status",
+      "error",
+      "needsRefresh",
+      "hasNewRows",
+    ],
     seam: "settleTarget",
     helpers: ["settleRequirement", "liftRequirement"],
   },
@@ -676,6 +748,42 @@ const REAL: Anchors = {
  * один раз; зайвий чи відсутній — червоний.
  */
 const EXCEPTIONS: Readonly<Record<string, string>> = {
+  // ---- Поля стану вигляду поза швом: записи, що не є осіданням відповіді.
+  "subsets.ts::adopt field:loaded":
+    "гідратація знімка (`restore`): вигляд стає завантаженим зі знімка, відповіді читання немає",
+  "subsets.ts::adopt field:status":
+    "гідратація знімка: `ready` зі знімка, без відповіді читання",
+  "subsets.ts::start field:loaded":
+    "старт вигляду над рядком, уже наявним у сховищі (картка): готовий без читання",
+  "subsets.ts::start field:status":
+    "старт вигляду над наявним рядком: `ready` без читання",
+  "subsets.ts::load field:status":
+    "початок завантаження (`loading`/`refreshing`) у `commit` старту, до відповіді",
+  "subsets.ts::attempt field:status":
+    "межа відкинутих після проходу (Р-SK2-5(в)): `command.unavailable` у власному `commit` після області запису",
+  "subsets.ts::attempt field:error":
+    "межа відкинутих після проходу (Р-SK2-5(в)): код `EPOCH_UNAVAILABLE`",
+  "subsets.ts::hook:discarded field:status":
+    "відкинута відповідь за межею (Р-SK2-5(в)): `error` у гачку `discarded` кроку 4",
+  "subsets.ts::hook:discarded field:error":
+    "відкинута відповідь за межею (Р-SK2-5(в)): `EPOCH_UNAVAILABLE` у гачку `discarded`",
+  "writer.ts::hook:discarded field:status":
+    "відкинута відповідь системного перечитування за межею (Р-SK2-5(в))",
+  "writer.ts::hook:discarded field:error":
+    "відкинута відповідь системного перечитування за межею: `EPOCH_UNAVAILABLE`",
+  "writer.ts::revalidateViews field:status":
+    "межа відкинутих після проходу пачки (Р-SK1-7): `error` у власному `commit` після області запису",
+  "writer.ts::revalidateViews field:error":
+    "межа відкинутих після проходу пачки: `EPOCH_UNAVAILABLE`",
+  "writer.ts::markViews field:needsRefresh":
+    "`Writer.markViews` — позначка механізму свіжості від приймача й хвилі, не відповідь читання",
+  "writer.ts::markViews field:hasNewRows":
+    "`Writer.markViews` — банер нових рядків, позначка приймача",
+  "writer.ts::.write field:needsRefresh ×2":
+    "замикання запису читача (крок 5): банер зміни складу, клітинка `setsBanners` виду польоту",
+  "writer.ts::.write field:hasNewRows ×3":
+    "замикання запису читача (крок 5): банер нових рядків, клітинка `setsBanners` виду польоту",
+  // ---- Решта винятків.
   "core.ts::applyVersion sweep":
     "відповідь `version` — рівень пакета, не відповідь читання виду (спека §5.5): її осідання не крок проходу",
   "core.ts::commit sweep":
@@ -709,6 +817,10 @@ describe("settle guard on the store", () => {
 
   it("finds every settlement point and each reaches the pass", () => {
     expect(result.pointProblems).toEqual([])
+  })
+
+  it("resolves every anchor of the rules", () => {
+    expect(result.unresolved).toEqual([])
   })
 
   it("has one body of the step-7 seam", () => {
@@ -775,7 +887,11 @@ export interface Subset {
   okReadEpoch: number | undefined
   failures: number
   failedAt: number | undefined
+  loaded: boolean
   status: string
+  error: unknown
+  needsRefresh: boolean
+  hasNewRows: boolean
 }
 export function liftRequirement(_s: Subset) {}
 export function settleRequirement(s: Subset) { liftRequirement(s); return false }
@@ -810,7 +926,17 @@ const SELF: Anchors = {
   subset: {
     file: "/v/subsets.ts",
     iface: "Subset",
-    fields: ["refreshedAt", "okReadEpoch", "failures", "failedAt"],
+    fields: [
+      "refreshedAt",
+      "okReadEpoch",
+      "failures",
+      "failedAt",
+      "loaded",
+      "status",
+      "error",
+      "needsRefresh",
+      "hasNewRows",
+    ],
     seam: "settleTarget",
     helpers: ["settleRequirement", "liftRequirement"],
   },
@@ -844,6 +970,21 @@ function selfTest(extra: Record<string, string>) {
 }
 const flagged = (extra: Record<string, string>) =>
   render(selfTest(extra).findings)
+
+describe("settle guard self-test: a missing anchor", () => {
+  it("is reported instead of silently switching its rule off", () => {
+    const files = Object.keys(WORLD)
+    const renamed = {
+      ...WORLD,
+      "/v/subsets.ts": WORLD["/v/subsets.ts"]!.replaceAll(
+        "failedAt",
+        "failedSince"
+      ),
+    }
+    const r = analyze(inlineProgram(renamed), files, SELF, (f) => f)
+    expect(r.unresolved).toEqual(["Subset.failedAt"])
+  })
+})
 
 describe("settle guard self-test: the world is clean", () => {
   it("passes the fixture as it is", () => {
@@ -1116,7 +1257,7 @@ import { settleRequirement, liftRequirement } from "./subsets.ts"
 `,
     })
     expect(render(r.findings)).toEqual([
-      "/v/second.ts::settleTarget field",
+      "/v/second.ts::settleTarget field:failedAt",
       "/v/second.ts::settleTarget seam",
     ])
   })
@@ -1139,7 +1280,10 @@ export function point(s: Subset) {
 `,
       })
     ).toEqual([
-      "/v/a.ts::hook:settleTarget field ×4",
+      "/v/a.ts::hook:settleTarget field:failedAt",
+      "/v/a.ts::hook:settleTarget field:failures",
+      "/v/a.ts::hook:settleTarget field:okReadEpoch",
+      "/v/a.ts::hook:settleTarget field:refreshedAt",
       "/v/a.ts::hook:settleTarget seam",
     ])
   })
@@ -1151,7 +1295,7 @@ export function point(s: Subset) {
 export const reset = (s: Subset) => { s.failures = 0 }
 `,
       })
-    ).toEqual(["/v/h.ts::reset field"])
+    ).toEqual(["/v/h.ts::reset field:failures"])
   })
 
   it("settle(lease, …) is red wherever it is declared", () => {
