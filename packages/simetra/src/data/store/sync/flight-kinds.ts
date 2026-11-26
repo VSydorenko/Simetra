@@ -85,7 +85,7 @@ export const FLIGHT_KIND_RULES: Readonly<Record<FlightKind, FlightKindRules>> =
       discarded: "pause-then-retry",
     },
     reread: {
-      reasons: ["requirement", "interval", "user", "signal"],
+      reasons: ["requirement", "interval", "retry", "user", "signal"],
       confirms: "view-stable",
       successMovesDeadline: true,
       failureCounts: "always",

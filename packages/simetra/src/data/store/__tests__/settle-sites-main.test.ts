@@ -1292,9 +1292,6 @@ describe("the kind table against the recorded behaviour of main", () => {
       K: "keys",
       S: "service",
     }
-    // Повтори R16–R18 системного перечитування несуть причину `retry`; рядок
-    // таблиці її не називає (повтор — та сама дія).
-    const repeats: Partial<Record<FlightKind, string>> = { reread: "retry" }
     const seen = new Set<string>()
     for (const log of Object.values(EXPECTED))
       for (const line of log) {
@@ -1306,8 +1303,7 @@ describe("the kind table against the recorded behaviour of main", () => {
           : "requirement"
         seen.add(`${kind}:${reason}`)
         expect(
-          (R[kind].reasons as readonly string[]).includes(reason) ||
-            repeats[kind] === reason,
+          (R[kind].reasons as readonly string[]).includes(reason),
           line
         ).toBe(true)
       }
