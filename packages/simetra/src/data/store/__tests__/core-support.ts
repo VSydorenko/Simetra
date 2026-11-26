@@ -83,11 +83,14 @@ export function setup(
     onSessionChanged?: () => void
     /** The signal transport of the core; needs `rightsSnapshot` to be used. */
     signals?: SignalTransport
+    /** The version epoch of the fake server; own writes answer only with one. */
+    epoch?: string
   } = {}
 ): CoreHarness {
   const fake = createFakeSource({
     objects: options.objects ?? OBJECTS,
     mode: options.mode,
+    ...(options.epoch === undefined ? {} : { epoch: options.epoch }),
   })
   const limits = { ...DEFAULT_CORE_LIMITS, ...options.limits }
   const adapter: SourceAdapter =

@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest"
  * (1) Бренд польоту не згадується поза `sync/`.
  * (2) Сирий стан умов читають лише шлюз і власник стану; межу відкинутих
  *     (`versions.unavailable`) — ще й тіла зворотних викликів, переданих у
- *     `session.commit` чи `settle` (Р-SK1-7); решта — перелік з причиною.
+ *     `session.commit` (Р-SK1-7); решта — перелік з причиною.
  * (3) Запити умов шлюзу — лише в місцях переліку, кожне з причиною.
  * (4) Функції інвентаря (Додаток Б, колонка «Файл :: функція») і помічники
  *     сховища, яких вони кличуть транзитивно, не мають читань з (2) і (3),
@@ -74,7 +74,6 @@ interface Anchors {
   readonly childToken: Member
   readonly commit: Member
   readonly unavailable: Member
-  readonly settle: Named
   readonly visible: Named
   readonly staleObjects: Named
   readonly isClosed: Named
@@ -94,7 +93,7 @@ interface Anchors {
 
 interface Read {
   readonly kind: Kind
-  /** Усередині зворотного виклику `commit` чи `settle` (осідання). */
+  /** Усередині зворотного виклику `commit` (осідання). */
   readonly settled: boolean
   readonly line: number
   /** Позиція в файлі: одне входження — одна знахідка. */
@@ -275,7 +274,6 @@ function analyze(
   const childToken = findMember(program, anchors.childToken)
   const commit = findMember(program, anchors.commit)
   const unavailable = findMember(program, anchors.unavailable)
-  const settle = findNamed(program, anchors.settle)
   const visible = findNamed(program, anchors.visible)
   const staleObjects = findNamed(program, anchors.staleObjects)
   const isClosed = findNamed(program, anchors.isClosed)
@@ -355,7 +353,7 @@ function analyze(
     if (!isFn(n) || !ts.isCallExpression(n.parent)) return false
     if (!n.parent.arguments.includes(n as ts.Expression)) return false
     const callee = calleeDecls(checker, n.parent)
-    return callee.includes(commit) || callee.includes(settle)
+    return callee.includes(commit)
   }
 
   // `getNameOfDeclaration` бачить і доступ `a.b` (JS-експандо): його ім'я —
@@ -571,7 +569,7 @@ function analyze(
     ...closedMembers,
   ])
   // Синтаксичний виняток осідання (Р-SK1-7) — лише межа відкинутих: сирі
-  // `session.versions.unavailable()` у тілі колбека `commit`/`settle`. Решта
+  // `session.versions.unavailable()` у тілі колбека `commit`. Решта
   // сирого стану в колбеках — місця переліку, як і будь-де.
   const exemptIn = (settled: boolean, kind: Kind) =>
     settled && kind === "unavailable"
@@ -726,7 +724,6 @@ const REAL: Anchors = {
   childToken: [at("session.ts"), "Session", "childToken"],
   commit: [at("session.ts"), "Session", "commit"],
   unavailable: [at("session.ts"), "VersionEpochs", "unavailable"],
-  settle: [at("source.ts"), "settle"],
   visible: [at("core.ts"), "visible"],
   staleObjects: [at("core.ts"), "staleObjects"],
   isClosed: [at("subsets.ts"), "isClosed"],
@@ -885,14 +882,6 @@ const PLACES: readonly Group[] = [
   {
     inventory: false,
     reason:
-      "Іменована перевірка над `gate.tabHidden()` у `loadMore` → `confirm` (Р-SK1-8): мить зняття позначки сторінки до сповіщення, наслідок осідання; кличе її колбек `commit`",
-    sites: [
-      "subsets.ts::createRegistry.confirm gate.tabHidden via RegistryContext.tabHidden",
-    ],
-  },
-  {
-    inventory: false,
-    reason:
       "Записувач стану: `markStale` ставить позначку лише раз (`has` перед `add`)",
     sites: ["core.ts::createCore.markStale staleObjects"],
   },
@@ -920,16 +909,38 @@ const PLACES: readonly Group[] = [
     ],
   },
   {
+    inventory: false,
+    reason:
+      "Гачок `quiet` проходу осідання підтвердження запису (`rereadKey`): токен сесії судить лише, чи відкривати область запису й її журнал пізньої відповіді — не-читальний наслідок; читання судить `admit`",
+    sites: ["writer.ts::rereadKey.quiet token"],
+  },
+  {
+    inventory: false,
+    reason:
+      "Гачок `lost` проходу осідання вигляду (`settleView`): токен сесії судить лише, чому область запису не відбулась (`closed` чи `evicted`) — не-читальний наслідок; читання судить `admit`",
+    sites: ["subsets.ts::createRegistry.settleView.lost token"],
+  },
+  {
+    inventory: true,
+    reason:
+      "Межа відкинутих Р-SK1-7 у гачку `discarded` проходу осідання: `session.versions.unavailable()` у мить запису вирішує «`EPOCH_UNAVAILABLE` чи пауза» — той самий вибір, що на `main` стояв у колбеку `commit`; гачок кличе область запису проходу, а не шлях",
+    sites: [
+      "subsets.ts::createRegistry.settleView.discarded unavailable",
+      "writer.ts::revalidateViews.discarded unavailable",
+    ],
+  },
+  {
     inventory: true,
     atInventory: true,
     reason:
-      "Іменовані перевірки (рішення архітекторки 25.11, PR #433): `fireWave` — ефекти хвилі поза читанням (варіант (в)); `onFlush` — схований об'єкт не-цілі (R10); `receiver.run` — не-читальні ефекти пачки на прихованій вкладці й несумісного об'єкта (Р-SK1-8)",
+      "Іменовані перевірки (рішення архітекторки 25.11, PR #433): `fireWave` — ефекти хвилі поза читанням (варіант (в)); `onFlush` — схований об'єкт не-цілі (R10); `receiver.run` — не-читальні ефекти пачки на прихованій вкладці й несумісного об'єкта (Р-SK1-8); `subsets.confirm` — іменована перевірка над `gate.tabHidden()` у `loadMore` → `confirm` (Р-SK1-8): мить зняття позначки сторінки до сповіщення, наслідок осідання",
     sites: [
       "core.ts::createCore.fireWave token",
       "core.ts::createCore.fireWave staleObjects",
       "core.ts::createCore.onFlush staleObjects",
       "receiver.ts::createReceiver.run gate.tabHidden via ReceiverContext.tabHidden",
       "receiver.ts::createReceiver.run staleObjects via ReaderContextBase.isStale",
+      "subsets.ts::createRegistry.confirm gate.tabHidden via RegistryContext.tabHidden",
     ],
   },
   {
@@ -957,7 +968,7 @@ const PLACES: readonly Group[] = [
   {
     inventory: true,
     reason:
-      "(ii) Токен охороняє не-читальні ефекти після закриття: журнал (`rights-failed`, `listener-failed`), застосування версії й знімка прав, `core.close`, `commit` після таймауту K4 і в `settle` відповіді, підсумок спроби `closed` (`watchAttempts`), підписки приймача; читання судить `admit`",
+      "(ii) Токен охороняє не-читальні ефекти після закриття: журнал (`rights-failed`, `listener-failed`), застосування версії й знімка прав, `core.close`, `commit` після таймауту K4 й тихий вихід осідання відповіді (гачок `quiet`), підсумок спроби `closed` (`watchAttempts`), підписки приймача; читання судить `admit`",
     sites: [
       "core.ts::createCore.dispatch token",
       "core.ts::createCore.batcher.onVersion token",
@@ -965,9 +976,7 @@ const PLACES: readonly Group[] = [
       "core.ts::createCore.rightsSessionChanged token",
       "core.ts::createCore.connectionRefused token",
       "core.ts::createCore.startVersion token",
-      "writer.ts::rereadKey token ×2",
-      "subsets.ts::createRegistry.load.attempt.lost token",
-      "subsets.ts::createRegistry.loadMore.attempt.lost token",
+      "writer.ts::rereadKey token",
       "receiver.ts::createReceiver.sync token",
     ],
   },
@@ -1066,7 +1075,7 @@ const ROOT_READS: readonly (readonly [site: string, reason: string])[] = [
   ],
   [
     "writer.ts::rereadKey token",
-    "Токен продовження польоту (родина «поховано з початку», SK-5): `commit` після таймауту й у `settle` відповіді лише живої сесії",
+    "Токен продовження польоту (родина «поховано з початку», SK-5): `commit` після таймауту й тихий вихід осідання відповіді (`quiet`) лише живої сесії",
   ],
 ]
 
@@ -1200,7 +1209,6 @@ const V: Anchors = {
   childToken: ["/v/session.ts", "Session", "childToken"],
   commit: ["/v/session.ts", "Session", "commit"],
   unavailable: ["/v/session.ts", "VersionEpochs", "unavailable"],
-  settle: ["/v/source.ts", "settle"],
   visible: ["/v/core.ts", "visible"],
   staleObjects: ["/v/core.ts", "staleObjects"],
   isClosed: ["/v/subsets.ts", "isClosed"],
@@ -1229,7 +1237,6 @@ export interface Session {
   onFlush(fn: () => void): void
 }
 `,
-  "/v/source.ts": `export function settle(apply: () => void): void { apply() }\n`,
   "/v/sync/flight.ts": `import type { GenerationToken } from "../types.ts"
 declare const FLIGHT: unique symbol
 export type Flight = { readonly site: string } & { readonly [FLIGHT]: true }
@@ -1266,8 +1273,8 @@ const core = (body: string) => `import type { Session } from "./session.ts"
 import type { Ctx } from "./ctx.ts"
 import type { Flight } from "./sync/flight.ts"
 import { createGate } from "./sync/flight.ts"
-import { settle } from "./source.ts"
 import { gone, quiet, use } from "./helper.ts"
+//
 export function createCore(session: Session) {
   const staleObjects = { has: (o: string) => o === "", add: (o: string) => {} }
   let visible = true, closed: string | undefined = undefined
@@ -1480,14 +1487,14 @@ ${dispatch}
 })
 
 describe("read gate guard self-test: what it passes", () => {
-  it("the gate state, the writers and the discard limit in commit and settle callbacks", () => {
+  it("the gate state, the writers and the discard limit in commit callbacks", () => {
     const t = selfTest(`  function load() {
     visible = false
     staleObjects.add("a")
     session.commit(() => {
       if (session.versions.unavailable()) gone(session)
     }, session.token())
-    settle(() => session.versions.unavailable())
+    //
     return gate.settledPastBound()
   }`)
     expect(t.sites.filter((s) => s.startsWith("core.ts"))).toEqual([
@@ -1503,15 +1510,16 @@ describe("read gate guard self-test: what it passes", () => {
     ])
   })
 
-  it("other raw state in commit and settle callbacks is read like anywhere", () => {
+  it("other raw state in commit callbacks is read like anywhere", () => {
     // Мутація приймання PR #435: стан об'єкта, вкладки, токена й закриття в
     // колбеку осідання — не виняток Р-SK1-7.
     const t = selfTest(
       `  function load(ctx: Ctx) {
     session.commit(() => {
       if (staleObjects.has("a") || visible || ctx.isStale("b")) return
+      if (session.token().valid || closed !== undefined) return
     }, session.token())
-    settle(() => session.token().valid || closed !== undefined)
+    //
   }
   const ctx: Ctx = {
     isStale: (o) => staleObjects.has(o),

@@ -13,9 +13,10 @@ import { changesObjectOf, lazyFieldStale, visibleRow } from "./object-store"
 import { sectionLinesStale } from "./section-store"
 import {
   diffOwn,
-  gated,
   readForm,
+  readGated,
   readWindowMore,
+  type GatedRead,
   type ReaderTarget,
   type StoreOps,
 } from "./readers"
@@ -34,14 +35,19 @@ import {
   withRefs,
   type RowViews,
 } from "./snapshot"
-import { ReadLimiterClosed, settle, type StoreSource } from "./source"
+import { ReadLimiterClosed, type StoreSource } from "./source"
 import { isPermit, type Permit } from "./sync/flight"
+import {
+  rulesOf,
+  settlePass,
+  type SettleEntry,
+  type SettleHooks,
+} from "./sync/settle-pass"
 import type {
   AdmissionCondition,
   ReadCause,
   ReadTarget,
   ReadWhy,
-  SettleOutcome,
 } from "./sync/vocabulary"
 import type {
   CoreLimits,
@@ -419,6 +425,25 @@ export const errorOf = (error: unknown): CommandError | DataError => {
   return { code: "command.internal" }
 }
 
+/**
+ * Осідання вигляду чи сторінки: політ і те, що прохід віддає шляху. `verdict` —
+ * не стан читання (його несе політ), а результат проходу: політ замінений
+ * замороженим значенням, а обидва рішення ухвалює область запису в свою мить
+ * (`versions.unavailable()` і `confirm` після запису), тож шлях не може
+ * перерахувати їх після неї.
+ */
+interface ViewEntry extends SettleEntry {
+  readonly number: number
+  readonly read?: GatedRead
+  readonly verdict: { again: boolean; discarded: boolean }
+}
+
+/** Поле польоту, яке шлях вигляду мусив видати: його відсутність — дефект. */
+export function required<T>(value: T | undefined, what: string): T {
+  if (value === undefined) throw new Error(`a view flight carries ${what}`)
+  return value
+}
+
 // Покоління читань сторінок вікна: одне число на ядро, тож жодне не повторюється.
 let pageGenerations = 0
 
@@ -488,6 +513,120 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     return settleRequirement(s, readEpoch)
   }
 
+  /**
+   * Осідання відповіді вигляду чи сторінки одним проходом (§5.5). Спільне для
+   * обох точок — тут; відмінності — клітинки виду (`rulesOf`) і гачки `extra`.
+   * Стан читання (епоха, час старту, токен, оренда) бере з польоту.
+   */
+  function settleView(
+    s: Subset,
+    target: Extract<ReadTarget, { kind: "view" | "page" }>,
+    what: string,
+    entry: ViewEntry,
+    extra: Pick<
+      SettleHooks<ViewEntry, SettleDetail>,
+      "beforeGate" | "apply"
+    > & {
+      finish(scope: Scope): void
+    }
+  ) {
+    const { flight, verdict } = entry
+    const kind = required(flight.kind, "its kind")
+    if (kind !== "load" && kind !== "page")
+      throw new Error("a view settles as a load or a page")
+    const epoch = required(flight.epoch, "its start epoch")
+    return settlePass<ViewEntry, SettleDetail>(session, [entry], {
+      token: required(flight.token, "its token"),
+      what,
+      lost: () =>
+        !session.token().valid
+          ? "closed"
+          : !s.alive
+            ? "evicted"
+            : "after-purge",
+      refused: (error) => error instanceof ReadLimiterClosed,
+      failureDetail: failureOf,
+      beforeGate: extra.beforeGate,
+      gate: (e) =>
+        session.acceptEpochs(required(e.read, "its answer").epochs, epoch) ===
+        "discard"
+          ? "discard"
+          : "apply",
+      // Відповідь відкинута: поки межа не вичерпана, шлях повторить її після
+      // паузи; інакше вигляд — `command.unavailable`.
+      discarded: () => {
+        verdict.discarded = !session.versions.unavailable()
+        if (!verdict.discarded) {
+          s.status = "error"
+          s.error = EPOCH_UNAVAILABLE
+        }
+      },
+      apply: extra.apply,
+      // Дефект застосування — вигляд у `error`, рядки без власника прибирає
+      // `sweep`; відмова не стає необробленою.
+      applyFailed: (_e, error) => ctx.log({ kind: "listener-failed", error }),
+      settleTarget: (f, outcome, _evidence, failure) => {
+        const rules = rulesOf(f)
+        if (outcome === "applied") {
+          if (rules.successMovesDeadline) {
+            s.loaded = true
+            s.refreshedAt = required(f.startedAt, "its start time")
+            s.okReadEpoch = epoch
+            s.failures = 0
+            s.failedAt = undefined
+          }
+          // Підтверджене завантаженням — весь вигляд готовий; сторінка
+          // лише виправляє помилку, яку лишила її попередниця.
+          if (
+            rules.confirms === "view-with-composition" ||
+            s.status === "error"
+          ) {
+            s.status = "ready"
+            s.error = undefined
+          }
+          if (rules.liftsBanners) {
+            s.needsRefresh = false
+            s.hasNewRows = false
+          }
+          verdict.again = confirm(
+            s,
+            epoch,
+            rules.confirms === "view-with-composition"
+          )
+        } else if (outcome === "failed" && failure !== undefined) {
+          // Паузу збоїв рахує лише збій самого читання вже завантаженого
+          // вигляду: дефект застосування її не веде (як на `main`).
+          if (
+            entry.failure !== undefined &&
+            (rules.failureCounts === "always" ||
+              (rules.failureCounts === "if-loaded" && s.loaded))
+          ) {
+            s.failures++
+            s.failedAt = required(f.startedAt, "its start time")
+          }
+          s.status = "error"
+          s.error = errorOf(failure.error)
+        }
+      },
+      sweep: ops.sweep,
+      finish: (_e, _outcome, scope) => extra.finish(scope),
+      // Відмова після відкинутого регіону лишає код збою в діагностиці, як
+      // на `main`; закритий обмежувач коду не має.
+      settled: (e, outcome, detail) =>
+        ctx.attempts.settle(
+          e.number,
+          kind,
+          target,
+          outcome,
+          detail ??
+            (e.failure !== undefined &&
+            !(e.failure.error instanceof ReadLimiterClosed)
+              ? failureOf(e.failure.error)
+              : undefined)
+        ),
+    })
+  }
+
   function resolveWaiters(s: Subset) {
     for (const resolve of s.waiters.splice(0)) resolve()
   }
@@ -535,82 +674,45 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     }
     const attempt = (permit: Permit): Promise<void> => {
       const { why } = permit
-      const readEpoch = session.epochs.now()
+      const lease = ctx.source.lease()
+      const number = ctx.attempts.start("load", target, why)
+      s.answerPending = true
+      const flight = permit.flight({
+        attempt: number,
+        caller: s,
+        lease,
+        kind: "load",
+        token,
+      })
+      const readEpoch = required(flight.epoch, "its start epoch")
       s.flightEpoch = readEpoch
-      const startedAt = ctx.now()
       if (header !== undefined) {
         s.readRevision = rowViews.revision(s.form.object.name, header)
         s.readStart = readEpoch
       }
-      let discarded = false
-      let again = false
-      const lease = ctx.source.lease()
-      const number = ctx.attempts.start("load", target, why)
-      s.answerPending = true
-      // Наслідок осідання (§5.5); `commit` не пройшов — токен недійсний.
-      let outcome: SettleOutcome = "applied"
-      let detail: SettleDetail | undefined
-      const lost = (): SettleOutcome =>
-        !session.token().valid ? "closed" : !s.alive ? "evicted" : "after-purge"
-      return readForm(
-        ctx,
-        s,
-        readEpoch,
-        token,
-        permit.flight({ attempt: number, caller: s, lease })
-      ).then(
-        (apply) => {
-          settle(lease, () => {
-            const ran = session.commit(
-              (scope) => {
-                try {
-                  if (!apply(scope)) {
-                    outcome = "discarded-by-epoch"
-                    discarded = !session.versions.unavailable()
-                    if (!discarded) {
-                      s.status = "error"
-                      s.error = EPOCH_UNAVAILABLE
-                    }
-                    return
-                  }
-                  s.loaded = true
-                  s.refreshedAt = startedAt
-                  s.okReadEpoch = readEpoch
-                  s.failures = 0
-                  s.failedAt = undefined
-                  s.status = "ready"
-                  s.error = undefined
-                  s.needsRefresh = false
-                  s.hasNewRows = false
-                  again = confirm(s, readEpoch, true)
-                } catch (error) {
-                  // Дефект застосування — вигляд у `error`, рядки без власника
-                  // прибирає `sweep`; відмова не стає необробленою.
-                  outcome = "failed"
-                  detail = failureOf(error)
-                  ctx.log({ kind: "listener-failed", error })
-                  s.status = "error"
-                  s.error = errorOf(error)
-                } finally {
-                  ops.sweep(scope)
-                  s.dirty = true
-                }
-              },
-              token,
-              what
-            )
-            ctx.attempts.settle(
-              number,
-              "load",
-              target,
-              ran ? outcome : lost(),
-              ran ? detail : undefined
-            )
-            s.answerPending = false
+      const verdict = { again: false, discarded: false }
+      const settleLoad = (entry: ViewEntry) => {
+        try {
+          settleView(s, target, what, entry, {
+            apply: ({ read }, scope) =>
+              required(read, "its answer").write(scope),
+            finish: () => {
+              s.dirty = true
+            },
           })
+        } finally {
+          // Остання спроба осіла: політ лишається до свого `finally`, але
+          // рядків не принесе (#465); прохід синхронний, тож `purge` не
+          // втискається між областю запису й цим скиданням.
+          s.answerPending = false
+        }
+      }
+      return readForm(ctx, s, readEpoch, token, flight).then(
+        (read) => {
+          settleLoad({ flight, number, read, verdict })
           // Вимога стала, поки летіло читання (M7): повтор тієї самої дії.
-          if (again && token.valid) return retry("M7")
-          if (!discarded || !token.valid) return
+          if (verdict.again && token.valid) return retry("M7")
+          if (!verdict.discarded || !token.valid) return
           // Цей прохід вичерпав межу (лічильник рухається після commit):
           // повтору не буде, вигляд — `command.unavailable`. Наслідок осідання
           // за межею (Р-SK1-7); повтор M8 після паузи судить шлюз.
@@ -628,6 +730,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           }
           // Мутація самотесту: відкинуте за епохою завантаження не повторюється.
           if (ctx.defects.has("discard-no-retry")) return
+          if (rulesOf(flight).discardedAnswer !== "pause-then-retry") return
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           s.retryAt = ctx.now() + pause
@@ -640,38 +743,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             return token.valid ? retry("M8") : undefined
           })
         },
-        (error: unknown) =>
-          settle(lease, () => {
-            // Збійна відповідь рядків не несе.
-            s.answerPending = false
-            // Закритий обмежувач — сесію закрито: писати нікуди.
-            if (error instanceof ReadLimiterClosed) {
-              ctx.attempts.settle(number, "load", target, "closed")
-              return
-            }
-            const ran = session.commit(
-              () => {
-                // Збій читання вже завантаженого вигляду — лічильник паузи
-                // (§6.7); збій першого завантаження його не веде.
-                if (s.loaded) {
-                  s.failures++
-                  s.failedAt = startedAt
-                }
-                s.status = "error"
-                s.error = errorOf(error)
-                s.dirty = true
-              },
-              token,
-              what
-            )
-            ctx.attempts.settle(
-              number,
-              "load",
-              target,
-              ran ? "failed" : lost(),
-              failureOf(error)
-            )
-          })
+        (error: unknown) => {
+          settleLoad({ flight, number, verdict, failure: { error } })
+        }
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
@@ -798,75 +872,49 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     }
     const attempt = (permit: Permit): Promise<void> => {
       const { why } = permit
-      const readEpoch = session.epochs.now()
-      let discarded = false
-      let again = false
       const lease = ctx.source.lease()
       const number = ctx.attempts.start("page", target, why)
-      let outcome: SettleOutcome = "applied"
-      let detail: SettleDetail | undefined
-      const lost = (): SettleOutcome =>
-        !session.token().valid ? "closed" : !s.alive ? "evicted" : "after-purge"
-      return gated(
+      const flight = permit.flight({
+        attempt: number,
+        caller: s,
+        lease,
+        kind: "page",
+        token,
+      })
+      const readEpoch = required(flight.epoch, "its start epoch")
+      const verdict = { again: false, discarded: false }
+      const settlePage = (entry: ViewEntry) =>
+        settleView(s, target, what, entry, {
+          // Відповідь, що вже відкинута чи ще не застосована, вимогу не
+          // тримає: прапорець скидає лише ця спроба, до брами епох.
+          beforeGate: () => {
+            s.answerRejected = false
+          },
+          apply: ({ read }, scope) => {
+            const before = s.window?.generation
+            required(read, "its answer").write(scope)
+            if (s.window?.generation !== before) written = s.window?.generation
+            // Мутація самотесту: осідання сторінки знімає чужу вимогу «склад не
+            // підтверджено», яку може зняти лише читання всього вигляду.
+            if (ctx.defects.has("page-drops-requirement"))
+              s.unconfirmedSince = undefined
+          },
+          finish: () => {
+            s.dirty = true
+            // Відкинуте читання чи повтор за вимогою ще піде: позначка
+            // тримає дублікати.
+            if (!verdict.discarded && !verdict.again) release()
+          },
+        })
+      return readGated(
         ctx,
-        readEpoch,
         (c) =>
           readWindowMore(c, s, readEpoch, token, direction, cursor, written),
-        permit.flight({ attempt: number, caller: s, lease })
+        flight
       ).then(
-        (apply) => {
-          settle(lease, () => {
-            const ran = session.commit(
-              (scope) => {
-                try {
-                  s.answerRejected = false
-                  const before = s.window?.generation
-                  if (!apply(scope)) {
-                    outcome = "discarded-by-epoch"
-                    discarded = !session.versions.unavailable()
-                    if (!discarded) {
-                      s.status = "error"
-                      s.error = EPOCH_UNAVAILABLE
-                    }
-                    return
-                  }
-                  if (s.status === "error") {
-                    s.status = "ready"
-                    s.error = undefined
-                  }
-                  if (s.window?.generation !== before)
-                    written = s.window?.generation
-                  // Мутація самотесту: осідання сторінки знімає чужу вимогу «склад не
-                  // підтверджено», яку може зняти лише читання всього вигляду.
-                  if (ctx.defects.has("page-drops-requirement"))
-                    s.unconfirmedSince = undefined
-                  again = confirm(s, readEpoch, false)
-                } catch (error) {
-                  outcome = "failed"
-                  detail = failureOf(error)
-                  ctx.log({ kind: "listener-failed", error })
-                  s.status = "error"
-                  s.error = errorOf(error)
-                } finally {
-                  ops.sweep(scope)
-                  s.dirty = true
-                  // Відкинуте читання чи повтор за вимогою ще піде: позначка
-                  // тримає дублікати.
-                  if (!discarded && !again) release()
-                }
-              },
-              token,
-              what
-            )
-            ctx.attempts.settle(
-              number,
-              "page",
-              target,
-              ran ? outcome : lost(),
-              ran ? detail : undefined
-            )
-          })
-          if (again) {
+        (read) => {
+          settlePage({ flight, number, read, verdict })
+          if (verdict.again) {
             // Вимогу поставила власна відповідь сторінки (П15): P3.
             if (token.valid) {
               const repeated = retry("P3")
@@ -881,41 +929,21 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           // вигляду; склад змінює лише воно, як для завантаження. Токен
           // сторінки тут уже недійсний (позначку знято в `commit`): живість
           // вигляду й сесії перевіряє саме перечитування.
-          if (!discarded) {
+          if (!verdict.discarded) {
             ctx.readRequirement(s)
             return
           }
           if (!token.valid) return
+          if (rulesOf(flight).discardedAnswer !== "pause-then-retry") return
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           return session
             .sleep(pause)
             .then(() => (token.valid ? retry("P2") : undefined))
         },
-        (error: unknown) =>
-          settle(lease, () => {
-            if (error instanceof ReadLimiterClosed) {
-              ctx.attempts.settle(number, "page", target, "closed")
-              return
-            }
-            const ran = session.commit(
-              () => {
-                s.status = "error"
-                s.error = errorOf(error)
-                s.dirty = true
-                release()
-              },
-              token,
-              what
-            )
-            ctx.attempts.settle(
-              number,
-              "page",
-              target,
-              ran ? "failed" : lost(),
-              failureOf(error)
-            )
-          })
+        (error: unknown) => {
+          settlePage({ flight, number, verdict, failure: { error } })
+        }
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.

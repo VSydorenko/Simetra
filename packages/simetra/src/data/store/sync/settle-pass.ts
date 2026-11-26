@@ -50,6 +50,12 @@ export interface SettleHooks<E extends SettleEntry, D = unknown> {
   readonly token: GenerationToken
   /** Підпис області запису для журналу пізньої відповіді. */
   readonly what: string
+  /**
+   * Тихий вихід до області запису: шлях уже зупинено (приймач після `stop`,
+   * токен ключа недійсний), і область з її журналом пізньої відповіді не
+   * відкривається, як на `main`. Наслідок `closed`; оренда знімається.
+   */
+  quiet?(entry: E): boolean
   /** Крок 1: чому політ уже не може писати; `undefined` — може. */
   invalid?(entry: E): SettleOutcome | undefined
   /** Наслідок польоту, коли область запису не відбулась (токен недійсний). */
@@ -66,6 +72,11 @@ export interface SettleHooks<E extends SettleEntry, D = unknown> {
   refused?(error: unknown): boolean
   /** Код збою для діагностики (крок 3 і збій застосування). */
   failureDetail?(error: unknown): D
+  /**
+   * Крок 3: дія шляху над збоєм читання в області запису (до кроку 7), коли
+   * збій пише не стан цілі, а рядки чи позначки виглядів (ключі приймача).
+   */
+  readFailed?(entry: E, scope: Scope): void
   /** Дія шляху перед брамою епох: застосування відповіді ще не почалось. */
   beforeGate?(entry: E, scope: Scope): void
   /** Крок 4: брама епох версій відповіді. */
@@ -144,14 +155,16 @@ export function rulesOf(flight: Flight): ResolvedRules {
  * Збій читання, що лишає вигляд без `sweep` на `main`: завантаження й сторінка
  * на відмові читання пишуть стан вигляду і не торкаються рядків; системне
  * перечитування осідає загальною областю, де `sweep` стоїть у `finally`.
- * Ключі й службове `sweep` у проході не мають (його не дає їхній шлях).
+ * Ключі: `sweep` дає лише гачок приймача, а `main` осідає його загальною
+ * областю `commit`, де `sweep` стоїть у `finally` і на збої читання; хвіст і
+ * підтвердження запису `sweep` не мають (гачка немає). Службове — до SK-4.
  */
 export const SWEEPS_AFTER_READ_FAILURE: Readonly<Record<FlightKind, boolean>> =
   {
     load: false,
     page: false,
     reread: true,
-    keys: false,
+    keys: true,
     service: false,
   }
 
@@ -182,7 +195,10 @@ export function settlePass<E extends SettleEntry, D = unknown>(
   try {
     const live: number[] = []
     entries.forEach((entry, i) => {
-      if (entry.failure !== undefined && hooks.refused?.(entry.failure.error))
+      if (
+        hooks.quiet?.(entry) === true ||
+        (entry.failure !== undefined && hooks.refused?.(entry.failure.error))
+      )
         outcomes[i] = "closed"
       else live.push(i)
     })
@@ -233,6 +249,7 @@ export function settlePass<E extends SettleEntry, D = unknown>(
         // Крок 3.
         if (entry.failure !== undefined) {
           const failure = failed(entry.failure.error)
+          hooks.readFailed?.(entry, scope)
           hooks.settleTarget?.(flight, "failed", undefined, failure)
           continue
         }
