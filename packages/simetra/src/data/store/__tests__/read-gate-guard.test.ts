@@ -88,11 +88,15 @@ interface Read {
   /** Усередині зворотного виклику `commit` чи `settle` (осідання). */
   readonly settled: boolean
   readonly line: number
+  /** Позиція в файлі: одне входження — одна знахідка. */
+  readonly pos: number
 }
 
 interface Edge<T> {
   readonly to: T
   readonly settled: boolean
+  readonly line: number
+  readonly pos: number
 }
 
 /** Функція (чи функціональне значення) сховища: одиниця аналізу. */
@@ -122,6 +126,8 @@ interface Finding {
   readonly via?: string
   /** Рядок файлу: лише для повідомлень, не для переліку. */
   readonly line?: number
+  /** Позиція входження (місце виклику для `via`): рахує входження. */
+  readonly pos?: number
   /** Шлях від функції інвентаря (правило 4): лише для повідомлень. */
   readonly path?: readonly string[]
 }
@@ -430,8 +436,10 @@ function analyze(
       members: [],
     }
     all.push(module)
-    const lineOf = (n: ts.Node) =>
-      sf.getLineAndCharacterOfPosition(n.getStart()).line + 1
+    const at = (n: ts.Node) => ({
+      line: sf.getLineAndCharacterOfPosition(n.getStart()).line + 1,
+      pos: n.getStart(),
+    })
     const visit = (
       n: ts.Node,
       unit: Unit,
@@ -457,7 +465,7 @@ function analyze(
         }
         units.set(n, here)
         all.push(here)
-        unit.children.push({ to: here, settled })
+        unit.children.push({ to: here, settled, ...at(n) })
         const literal = n.parent
         if (
           (ts.isPropertyAssignment(n) ||
@@ -493,16 +501,17 @@ function analyze(
         }
         const kind = kindOf(decls, n)
         if (kind !== undefined)
-          here.reads.push({ kind, settled: inner, line: lineOf(n) })
+          here.reads.push({ kind, settled: inner, ...at(n) })
         for (const d of decls) {
-          if (isMemberDecl(d)) here.members.push({ to: d, settled: inner })
-          else here.refs.push({ to: d, settled: inner })
+          if (isMemberDecl(d))
+            here.members.push({ to: d, settled: inner, ...at(n) })
+          else here.refs.push({ to: d, settled: inner, ...at(n) })
         }
       }
       if (ts.isBindingElement(n)) {
         const kind = bindingKind(n)
         if (kind !== undefined)
-          here.reads.push({ kind, settled: inner, line: lineOf(n) })
+          here.reads.push({ kind, settled: inner, ...at(n) })
       }
       if (
         (ts.isAsExpression(n) || ts.isTypeAssertionExpression(n)) &&
@@ -544,16 +553,17 @@ function analyze(
             key: unit.key,
             kind: r.kind,
             via: memberLabel(edge.to),
-            line: r.line,
+            line: edge.line,
+            pos: edge.pos,
           }))
     )
   const own = (unit: Unit): Finding[] =>
     unit.reads
       .filter((r) => !r.settled)
-      .map((r) => ({ key: unit.key, kind: r.kind, line: r.line }))
+      .map((r) => ({ key: unit.key, kind: r.kind, line: r.line, pos: r.pos }))
 
   const unique = (findings: readonly Finding[]) => [
-    ...new Map(findings.map((f) => [`${render(f)} @${f.line}`, f])).values(),
+    ...new Map(findings.map((f) => [`${render(f)} @${f.pos}`, f])).values(),
   ]
 
   // Носій — місце, де читання лежить лексично (його власні читання); що він
@@ -787,7 +797,7 @@ const PLACES: readonly Group[] = [
     sites: [
       "core.ts::createCore.syncState gate.tabHidden",
       "core.ts::createCore.syncState token",
-      "core.ts::createCore.syncState.conditionOf gate.tabHidden",
+      "core.ts::createCore.syncState.conditionOf gate.tabHidden ×2",
       "core.ts::createCore.syncState.refusalOf staleObjects",
       "core.ts::createCore.syncState.refusalOf unavailable",
       "core.ts::createCore.timersRead gate.tabHidden",
@@ -807,7 +817,7 @@ const PLACES: readonly Group[] = [
       "overlay.ts::createOverlay.retry token",
       "overlay.ts::createOverlay.update token",
       "subsets.ts::createRegistry.view isClosed",
-      "subsets.ts::createRegistry.makeHandle.subscribe isClosed",
+      "subsets.ts::createRegistry.makeHandle.subscribe isClosed ×2",
       "core.ts::createCore.core.hydrate token",
       "core.ts::createCore.core.dehydrate token",
     ],
@@ -873,8 +883,8 @@ const PLACES: readonly Group[] = [
     reason:
       "Дочірній токен цілі (`session.childToken`, M7, M8, P2, P3) — токен витіснення цілі §5.4, який SK-2 переносить у політ; `closed` у цих шляхах судить `admit` (Р-SK1-10)",
     sites: [
-      "subsets.ts::createRegistry.load.attempt child-token",
-      "subsets.ts::createRegistry.loadMore.attempt child-token",
+      "subsets.ts::createRegistry.load.attempt child-token ×3",
+      "subsets.ts::createRegistry.loadMore.attempt child-token ×3",
     ],
   },
   {
@@ -958,52 +968,85 @@ function realProgram() {
   return analyze(program, files, REAL, (f) => relative(STORE, f))
 }
 
+/**
+ * Місце переліку: `<ключ> <вид>[ via <член>]`, з ` ×N`, коли в функції N
+ * входжень. Кожне входження — окрема знахідка: друге читання того ж виду в
+ * тій самій функції не ховається за першим, дозволеним.
+ */
+const parsePlace = (place: string): readonly [string, number] => {
+  const m = / ×(\d+)$/.exec(place)
+  return m === null ? [place, 1] : [place.slice(0, m.index), Number(m[1])]
+}
+
+const countOf = (findings: readonly Finding[]) => {
+  const out = new Map<string, Finding[]>()
+  for (const f of findings)
+    out.set(render(f), [...(out.get(render(f)) ?? []), f])
+  return out
+}
+
+/** Розбіжності «знайдено ≠ дозволено»: `<місце>: N≠M @рядки`. */
+function mismatches(
+  found: ReadonlyMap<string, readonly Finding[]>,
+  allowed: ReadonlyMap<string, number>,
+  trace = false
+): string[] {
+  const out: string[] = []
+  for (const site of new Set([...found.keys(), ...allowed.keys()])) {
+    const hits = found.get(site) ?? []
+    const want = allowed.get(site) ?? 0
+    if (hits.length === want) continue
+    const where = hits
+      .map(
+        (f) => `@${f.line}` + (trace ? ` <= ${(f.path ?? []).join(" > ")}` : "")
+      )
+      .join(", ")
+    out.push(`${site}: found ${hits.length}, listed ${want} ${where}`.trim())
+  }
+  return out.sort()
+}
+
 describe("read gate guard on the store", () => {
   const analysis = realProgram()
-  const sites = new Set(analysis.sites.map(render))
   const inventory = analysis.closure(INVENTORY)
-  const closure = new Set(inventory.findings.map(render))
-  const listed = PLACES.flatMap((g) => g.sites)
-  const inGroups = (inv: boolean) =>
-    new Set(PLACES.filter((g) => g.inventory === inv).flatMap((g) => g.sites))
+  const places = (inv?: boolean) =>
+    new Map(
+      PLACES.filter((g) => inv === undefined || g.inventory === inv)
+        .flatMap((g) => g.sites)
+        .map(parsePlace)
+    )
+  const sites = countOf(analysis.sites)
+  const closure = countOf(inventory.findings)
 
   it("(1) the flight brand is not mentioned outside sync/", () => {
     expect(analysis.brand).toEqual([])
   })
 
-  it("(2), (3) raw condition state and gate queries are read only at listed places", () => {
-    // Повідомлення несе рядок файлу: перелік його не тримає.
-    const unlisted = analysis.sites
-      .filter((f) => !listed.includes(render(f)))
-      .map((f) => `${render(f)} @${f.line}`)
-    expect(unlisted).toEqual([])
+  it("(2), (3) raw condition state and gate queries are read only at listed places, as many times as listed", () => {
+    expect(mismatches(sites, places())).toEqual([])
   })
 
-  it("(4) the inventory functions and their helpers read only through listed exceptions", () => {
-    const allowed = inGroups(true)
-    const unlisted = inventory.findings
-      .filter((f) => !allowed.has(render(f)))
-      .map((f) => `${render(f)} @${f.line} <= ${(f.path ?? []).join(" > ")}`)
-    expect(unlisted).toEqual([])
+  it("(4) the inventory functions and their helpers read only through listed exceptions, as many times as listed", () => {
+    expect(mismatches(closure, places(true), true)).toEqual([])
   })
 
-  it("places outside the inventory are not reached from it; exceptions of rule (4) are", () => {
-    expect([...inGroups(false)].filter((s) => closure.has(s))).toEqual([])
-    expect([...inGroups(true)].filter((s) => !closure.has(s))).toEqual([])
+  it("places outside the inventory are not reached from it", () => {
+    expect([...places(false).keys()].filter((s) => closure.has(s))).toEqual([])
   })
 
   it("gate queries of the Р-SK1-9 list are not at an inventory function itself", () => {
     const atRoot = PLACES.filter((g) => g.atInventory !== true)
       .flatMap((g) => g.sites)
+      .map((site) => parsePlace(site)[0])
       .filter(
         (site) => isQuery(site) && inventory.roots.includes(site.split(" ")[0]!)
       )
     expect(atRoot).toEqual([])
   })
 
-  it("every listed place exists, once, with a reason", () => {
-    expect(listed.filter((s) => !sites.has(s))).toEqual([])
-    expect(new Set(listed).size).toBe(listed.length)
+  it("every listed place is named once, with a reason", () => {
+    const named = PLACES.flatMap((g) => g.sites).map((s) => parsePlace(s)[0])
+    expect(new Set(named).size).toBe(named.length)
     for (const g of PLACES) {
       expect(g.reason.length).toBeGreaterThan(0)
       expect(g.sites.length).toBeGreaterThan(0)
@@ -1183,6 +1226,68 @@ describe("read gate guard self-test: each form", () => {
       "helper.ts::use gate.tabHidden via Ctx.hidden",
       "helper.ts::use staleObjects via Ctx.isStale",
     ])
+  })
+})
+
+describe("read gate guard self-test: each occurrence counts", () => {
+  // Перелік дозволяє одне читання токена в `startVersion` і в `dispatch`
+  // (журнал після закриття); друге того ж виду — нова копія рішення
+  // `closed` у функції інвентаря, і вона червоніє.
+  const listed = new Map(
+    [
+      "core.ts::createCore.startVersion token",
+      "core.ts::createCore.dispatch token",
+    ].map(parsePlace)
+  )
+  const check = (startVersion: string, dispatch: string) =>
+    mismatches(
+      countOf(
+        selfTest(`  function startVersion() {
+${startVersion}
+    return Promise.resolve().then(() => { if (token.valid) quiet() })
+  }
+  function dispatch() {
+${dispatch}
+    return Promise.resolve().catch(() => { if (session.token().valid) quiet() })
+  }
+  const token = session.token()`).analysis.closure([
+          ["/v/core.ts", "startVersion"],
+          ["/v/core.ts", "dispatch"],
+        ]).findings
+      ),
+      listed
+    )
+
+  it("one listed read per function is green", () => {
+    expect(check("", "")).toEqual([])
+  })
+
+  it("a second read of the same kind in startVersion is red", () => {
+    expect(
+      check("    if (!session.token().valid) return undefined", "")
+    ).toEqual([
+      "core.ts::createCore.startVersion token: found 2, listed 1 @15, @16",
+    ])
+  })
+
+  it("a second read of the same kind in dispatch is red", () => {
+    expect(
+      check("", '    if (!session.token().valid) throw new Error("closed")')
+    ).toEqual([
+      "core.ts::createCore.dispatch token: found 2, listed 1 @19, @20",
+    ])
+  })
+
+  it("a listed count above the reads is red too", () => {
+    const t = selfTest(
+      `  function startVersion() { return session.token().valid }`
+    )
+    expect(
+      mismatches(
+        countOf(t.analysis.closure([["/v/core.ts", "startVersion"]]).findings),
+        new Map([parsePlace("core.ts::createCore.startVersion token ×2")])
+      )
+    ).toEqual(["core.ts::createCore.startVersion token: found 1, listed 2 @14"])
   })
 })
 
