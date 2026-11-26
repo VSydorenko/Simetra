@@ -1,4 +1,9 @@
-import { administerRightsAction, readAction, recordActions } from "./actions"
+import {
+  administerRightsAction,
+  noDeleteActions,
+  readAction,
+  recordActions,
+} from "./actions"
 import { catalogSchema, type Catalog } from "../schemas/catalog"
 import {
   authorColumns,
@@ -14,6 +19,11 @@ import {
   type KindDefinition,
   type NumberingSpec,
   type RightsSystemCatalog,
+  type RoleCodeForm,
+  type RoleFixedColumns,
+  type RoleLanguageState,
+  type RolePredefinedSeed,
+  type RolePublishedRead,
   type StandardColumnDef,
   type StandardTabularSectionDef,
   customActionReferences,
@@ -30,11 +40,16 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
   const columns: StandardColumnDef[] = [keyColumn(false)]
 
   if (catalog.codeLength > 0) {
+    const codeCheck =
+      catalog.role === undefined
+        ? undefined
+        : CATALOG_ROLES[catalog.role].codeForm?.check
     columns.push({
       logicalName: "code",
       physicalName: "code",
       type: numberingType(catalog.codeType, catalog.codeLength),
       notNull: false,
+      ...(codeCheck === undefined ? {} : { check: codeCheck }),
       indexed: true,
       // Унікальність коду дає NumberingSpec, тож власного `unique` немає.
       title: { uk: "Код", en: "Code" },
@@ -57,7 +72,13 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
     })
   }
 
-  columns.push(deletionMarkColumn())
+  const roleFacts =
+    catalog.role === undefined ? {} : CATALOG_ROLES[catalog.role]
+  columns.push(
+    roleFacts.notMarked === true
+      ? { ...deletionMarkColumn(), check: "NOT deletion_mark" }
+      : deletionMarkColumn()
+  )
   // Колонки ролі беремо з її опису, а не з перевірки імені ролі: опис ролі —
   // єдине місце фактів ролі (див. CATALOG_ROLES).
   if (catalog.role !== undefined) {
@@ -368,6 +389,37 @@ export const RIGHTS_COLUMNS = Object.fromEntries(
   >
 >
 
+const LANGUAGE_STATES = ["draft", "published", "disabled"] as const
+
+/**
+ * Колонки «Мов» (Р-B2-1): стан мови й ознака основної. CHECK-и тримають те, що
+ * видно без тригера: домен стану й «основна лише `published`»; щонайбільше
+ * одну основну дає `partialUnique`.
+ */
+function languageColumns(): StandardColumnDef[] {
+  return [
+    {
+      logicalName: "state",
+      physicalName: "state",
+      type: { type: "Text" },
+      notNull: true,
+      default: "'draft'",
+      check: `state IN (${LANGUAGE_STATES.map((v) => `'${v}'`).join(", ")})`,
+      title: { uk: "Стан", en: "State" },
+    },
+    {
+      logicalName: "isPrimary",
+      physicalName: "is_primary",
+      type: { type: "Boolean" },
+      notNull: true,
+      default: "false",
+      check: "NOT is_primary OR state = 'published'",
+      partialUnique: "is_primary",
+      title: { uk: "Основна мова", en: "Primary language" },
+    },
+  ]
+}
+
 /** Факти системної ролі довідника: що платформа виводить із ролі. */
 interface CatalogRoleDefinition {
   /**
@@ -388,7 +440,32 @@ interface CatalogRoleDefinition {
    * Системні довідники прав мають лише читання й окрему дію запису
    * (спека прав §4.6): природні дії запису відкрили б родину «решта».
    */
-  actions?: "read" | "rights"
+  actions?: "read" | "rights" | "noDelete"
+  /**
+   * Скоуп, який вимагає роль: інший скоуп довідника — відмова компілятора
+   * (Р-B2-2), а не тихе перевизначення.
+   */
+  requiredScope?: "none"
+  /** Форма коду, яку вимагає роль (Р-B2-1). */
+  codeForm?: RoleCodeForm
+  /**
+   * Колонки поза грантами ролі команд (Р-B2-3): логічні імена, окремо для
+   * INSERT і UPDATE.
+   */
+  fixedColumns?: RoleFixedColumns
+  /** Читання опублікованих рядків гостем, користувачем і ролью команд (Р-B2-5). */
+  publishedRead?: RolePublishedRead
+  /** Передвизначений рядок, який засіває apply з поля проєкту (Р-B2-7). */
+  predefinedSeed?: RolePredefinedSeed
+  /** Стан мови й дозволені переходи для тригера (Р-B2-4). */
+  languageState?: RoleLanguageState
+  /**
+   * Позначки видалення рядки ролі не мають (ADR-0115): CHECK
+   * `NOT deletion_mark` на колонці.
+   */
+  notMarked?: true
+  /** Довідник ролі `languages`: за цим фактом його знаходять споживачі. */
+  languagesCatalog?: true
   /** Роль системного довідника прав. */
   rightsSystem?: RightsSystemCatalog
 }
@@ -409,6 +486,50 @@ const CATALOG_ROLES: Record<
     columns: roleAssignmentsColumns,
     actions: "rights",
     rightsSystem: "roleAssignments",
+  },
+  languages: {
+    languagesCatalog: true,
+    columns: languageColumns,
+    requiredScope: "none",
+    codeForm: {
+      codeType: "String",
+      codeLength: 12,
+      autonumber: false,
+      codeUnique: true,
+      // Підмножина BCP 47 «мова[-Script][-REGION]» (спека багатомовності §5.2).
+      check: `code ~ '^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$'`,
+    },
+    actions: "noDelete",
+    notMarked: true,
+    fixedColumns: {
+      // `state` не в INSERT: його дає DEFAULT, а основну мову засіває apply.
+      insert: ["isPrimary", "state", "deletionMark"],
+      // `code` лише в INSERT: код мови незмінний.
+      update: ["isPrimary", "code", "deletionMark"],
+    },
+    publishedRead: {
+      stateColumn: "state",
+      guestColumns: ["ref", "state", "code", "description"],
+    },
+    predefinedSeed: {
+      predefinedName: "primary_language",
+      projectField: "primaryDataLanguage",
+    },
+    languageState: {
+      stateColumn: "state",
+      primaryColumn: "isPrimary",
+      codeColumn: "code",
+      states: LANGUAGE_STATES,
+      insertState: "draft",
+      // Матриця §5.2: `disabled ↔ draft` в обидва боки, `published → draft` ні.
+      transitions: [
+        { from: "draft", to: "published" },
+        { from: "draft", to: "disabled" },
+        { from: "published", to: "disabled" },
+        { from: "disabled", to: "draft" },
+        { from: "disabled", to: "published" },
+      ],
+    },
   },
 }
 
@@ -454,6 +575,9 @@ export const catalogKind: KindDefinition = {
     const actions = roleOf(obj).actions
     if (actions === "read") return [readAction]
     if (actions === "rights") return [readAction, administerRightsAction]
+    if (actions === "noDelete") {
+      return noDeleteActions(catalogKind.tabularSectionColumns !== undefined)
+    }
     return recordActions(catalogKind.tabularSectionColumns !== undefined)
   },
   rightsExtents: ["any", "own", "dimension"],
@@ -475,6 +599,13 @@ export const catalogKind: KindDefinition = {
   ownerKinds: ["Catalog"],
   standardColumns,
   globalRoot: (obj) => roleOf(obj).globalRoot === true,
+  languagesCatalog: (obj) => roleOf(obj).languagesCatalog === true,
+  requiredScope: (obj) => roleOf(obj).requiredScope,
+  codeForm: (obj) => roleOf(obj).codeForm,
+  fixedColumns: (obj) => roleOf(obj).fixedColumns,
+  publishedRead: (obj) => roleOf(obj).publishedRead,
+  predefinedSeed: (obj) => roleOf(obj).predefinedSeed,
+  languageState: (obj) => roleOf(obj).languageState,
   standardTabularSections(obj) {
     const section = roleOf(obj).tabularSection
     return section === undefined ? [] : [section]

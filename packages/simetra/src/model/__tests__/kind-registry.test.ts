@@ -1100,3 +1100,127 @@ describe("rights declarations", () => {
     }
   })
 })
+
+describe("catalog role languages", () => {
+  const languages = catalogSchema.parse({
+    kind: "Catalog",
+    name: "Languages",
+    role: "languages",
+    codeLength: 12,
+    codeUnique: true,
+    autonumber: false,
+  })
+  const columns = KIND_REGISTRY.Catalog.standardColumns(languages)
+  const plain = catalogSchema.parse({ kind: "Catalog", name: "Plain" })
+  const codeRe = () => {
+    const check = column(columns, "code")!.check!
+    return new RegExp(/'(.+)'$/.exec(check)![1]!)
+  }
+
+  it("places state and isPrimary right after the deletion mark with CHECKs and the partial unique", () => {
+    const names = columns.map((c) => c.logicalName)
+    const mark = names.indexOf("deletionMark")
+    expect(names.slice(mark + 1, mark + 3)).toEqual(["state", "isPrimary"])
+    expect(column(columns, "state")).toMatchObject({
+      physicalName: "state",
+      type: { type: "Text" },
+      notNull: true,
+      default: "'draft'",
+      check: "state IN ('draft', 'published', 'disabled')",
+    })
+    expect(column(columns, "isPrimary")).toMatchObject({
+      physicalName: "is_primary",
+      type: { type: "Boolean" },
+      notNull: true,
+      default: "false",
+      check: "NOT is_primary OR state = 'published'",
+      partialUnique: "is_primary",
+    })
+    expect(column(columns, "deletionMark")!.check).toBe("NOT deletion_mark")
+  })
+
+  it("puts the BCP 47 subset CHECK on the code column", () => {
+    expect(column(columns, "code")!.check).toBe(
+      "code ~ '^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$'"
+    )
+    const re = codeRe()
+    for (const ok of [
+      "uk",
+      "en",
+      "fil",
+      "zh-Hant",
+      "es-419",
+      "pt-BR",
+      "sr-Latn-RS",
+    ]) {
+      expect(re.test(ok), ok).toBe(true)
+    }
+    for (const bad of [
+      "u",
+      "UK",
+      "uk_UA",
+      "uk-ua",
+      "en-",
+      "toolong",
+      "en-US-x",
+    ]) {
+      expect(re.test(bad), bad).toBe(false)
+    }
+  })
+
+  it("gives the role facts through registry fields and a plain catalog none", () => {
+    const def = KIND_REGISTRY.Catalog
+    expect(def.languagesCatalog!(languages)).toBe(true)
+    expect(def.requiredScope!(languages)).toBe("none")
+    expect(def.codeForm!(languages)).toMatchObject({
+      codeType: "String",
+      codeLength: 12,
+      autonumber: false,
+      codeUnique: true,
+    })
+    expect(def.fixedColumns!(languages)).toEqual({
+      insert: ["isPrimary", "state", "deletionMark"],
+      update: ["isPrimary", "code", "deletionMark"],
+    })
+    expect(def.publishedRead!(languages)).toEqual({
+      stateColumn: "state",
+      guestColumns: ["ref", "state", "code", "description"],
+    })
+    expect(def.predefinedSeed!(languages)).toEqual({
+      predefinedName: "primary_language",
+      projectField: "primaryDataLanguage",
+    })
+    expect(def.languageState!(languages)!.transitions).toEqual([
+      { from: "draft", to: "published" },
+      { from: "draft", to: "disabled" },
+      { from: "published", to: "disabled" },
+      { from: "disabled", to: "draft" },
+      { from: "disabled", to: "published" },
+    ])
+    expect(def.languageState!(languages)!.insertState).toBe("draft")
+    for (const fact of [
+      def.languagesCatalog,
+      def.requiredScope,
+      def.codeForm,
+      def.fixedColumns,
+      def.publishedRead,
+      def.predefinedSeed,
+      def.languageState,
+    ]) {
+      expect(fact!(plain) || undefined).toBeUndefined()
+    }
+  })
+
+  it("gives read, create and update without markDeletion and delete", () => {
+    expect(KIND_REGISTRY.Catalog.actions(languages).map((a) => a.name)).toEqual(
+      ["read", "create", "update"]
+    )
+  })
+
+  it("leaves a catalog without the role with the same columns and no role checks", () => {
+    const cols = KIND_REGISTRY.Catalog.standardColumns(plain)
+    expect(cols.map((c) => c.logicalName)).not.toContain("state")
+    expect(column(cols, "deletionMark")!.check).toBeUndefined()
+    expect(column(cols, "code")!.check).toBeUndefined()
+  })
+})

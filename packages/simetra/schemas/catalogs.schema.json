@@ -71,12 +71,13 @@
       "minLength": 1
     },
     "role": {
-      "description": "System role of the catalog: users marks the users catalog that the platform layer provisions and references (at most one per project, unscoped); rightsRoles and roleAssignments mark the custom roles and role assignments catalogs of a rights level, the level being the catalog's own scope (at most one per role and level).",
+      "description": "System role of the catalog: users marks the users catalog that the platform layer provisions and references (at most one per project, unscoped); rightsRoles and roleAssignments mark the custom roles and role assignments catalogs of a rights level, the level being the catalog's own scope (at most one per role and level); languages marks the catalog of data languages (unscoped, at most one per project, a code of the form language[-Script][-REGION]).",
       "type": "string",
       "enum": [
         "users",
         "rightsRoles",
-        "roleAssignments"
+        "roleAssignments",
+        "languages"
       ]
     },
     "codeLength": {
