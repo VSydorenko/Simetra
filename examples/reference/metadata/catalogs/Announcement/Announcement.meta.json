@@ -1,0 +1,50 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/catalogs.schema.json",
+  "id": "7b9e374c-2ba0-48a3-8365-b781728ea37e",
+  "kind": "Catalog",
+  "name": "Announcement",
+  "physicalName": "announcement",
+  "kindLabel": "announcement",
+  "scope": "org",
+  "title": {
+    "uk": "Оголошення"
+  },
+  "publicRead": {
+    "role": "anon",
+    "published": true
+  },
+  "attributes": [
+    {
+      "id": "85bc715e-d50c-4180-9c8a-00c18a743acb",
+      "name": "headline",
+      "physicalName": "headline",
+      "title": {
+        "uk": "Заголовок"
+      },
+      "type": "String",
+      "length": 150
+    }
+  ],
+  "tabularSections": [
+    {
+      "id": "ef7a8e3c-a0ad-4ec7-948e-8cb3049440e4",
+      "name": "items",
+      "physicalName": "announcement_items",
+      "title": {
+        "uk": "Пункти"
+      },
+      "attributes": [
+        {
+          "id": "062f1374-3841-4e48-bbf8-c09c43fee74e",
+          "name": "text",
+          "physicalName": "text",
+          "title": {
+            "uk": "Текст"
+          },
+          "type": "String",
+          "length": 250
+        }
+      ]
+    }
+  ]
+}

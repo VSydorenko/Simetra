@@ -124,7 +124,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
     name: "write",
     title: "Create or update rows",
     description:
-      "Create and update rows of ONE object in one transaction. `operations` is a non-empty list of { action: 'create' | 'update', object, ... }. An update needs `id` and `expectedVersion` (the version you read) and replaces the values and tabular sections it names. If another user changed the row, the call fails with command.conflict: read it again and resend. The result lists the written rows and changes; when it is too large the rows are cut to key and version and `truncated` is true, but the change is done. Do not repeat a write because of `truncated`.",
+      "Create and update rows of ONE object in one transaction. `operations` is a non-empty list of { action: 'create' | 'update' | 'publish' | 'unpublish', object, ... }; publish and unpublish take `id` and `expectedVersion`; a marked row cannot be published. An update needs `id` and `expectedVersion` (the version you read) and replaces the values and tabular sections it names. If another user changed the row, the call fails with command.conflict: read it again and resend. The result lists the written rows and changes; when it is too large the rows are cut to key and version and `truncated` is true, but the change is done. Do not repeat a write because of `truncated`.",
     input: writeInput,
     annotations: WRITES,
   },

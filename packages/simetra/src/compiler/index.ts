@@ -29,6 +29,7 @@ export {
   type CompiledScopeKind,
   type SourceObject,
 } from "./compile"
+export { accessPolicyNames } from "./access-units"
 export { readProjectFile } from "./stages/files"
 export { metadataRights } from "./pipeline"
 export type { ResolvedReference } from "./stages/identity"

@@ -7,6 +7,7 @@ import { executeGrants } from "../sql/execute-grants"
 import { hasEmptySearchPath, pinnedSettingProblem } from "../sql/closed-forms"
 import {
   ORG_KIND_ID,
+  REGION_FILE,
   adminRoles,
   commandCoreLayer,
   compileRights,
@@ -484,5 +485,121 @@ describe("обидва стилі: колонка позначки за origin",
           same(s.expressions[0]?.tree, tree("SELECT p_mark"))
       )
     ).toBeDefined()
+  })
+})
+
+// Позначка умовного об'єкта знімає публікацію (Р-D1-10): той самий факт
+// контракту, що й у тригера ефектів, тож стан «після» для права й рядок
+// `UPDATE` однакові.
+describe("умовний publicRead: позначка знімає публікацію в обидва боки", () => {
+  const conditionalRegion = {
+    [REGION_FILE]: { publicRead: { role: "anon", published: true } },
+  }
+  let conditional: CompiledModel
+  beforeAll(async () => {
+    conditional = await compiled(
+      compileRights(
+        policyDomain(writeRoles(), commandCoreLayer(), conditionalRegion)
+      )
+    )
+  })
+  const assignOf = (shape: Shape, column: string, value: string) =>
+    shape.findIndex(
+      (s) =>
+        s.type === "assign" &&
+        same(s.target, { variable: `v_new.${column}` }) &&
+        same(s.expressions[0]?.tree, tree(`SELECT ${value}`))
+    )
+
+  it("v_new і UPDATE ставлять published = false незалежно від p_mark", () => {
+    const shape = bodyShape(markSql(conditional, "region"))
+    const mark = assignOf(shape, "deletion_mark", "p_mark")
+    const published = assignOf(shape, "published", "false")
+    const after = ifAt(
+      shape,
+      rightsIf(conditional, "region", "markDeletion", "v_new", "update")
+    )
+    const update = at(
+      shape,
+      "execsql",
+      "UPDATE public.region SET deletion_mark = p_mark, published = false WHERE id = p_id RETURNING *"
+    )
+    // Право «після» судить стан без публікації — той, що запише `UPDATE`.
+    expectOrder([mark, published, after, update])
+  })
+
+  it("без умови тіло позначки не торкається published", () => {
+    for (const table of ["ticket", "region"]) {
+      const sql = markSql(domain, table)
+      expect(sql, table).not.toContain("published")
+    }
+  })
+  // Р-D1-11: `<t>_publish`/`<t>_unpublish` — перехід `published` на скелеті
+  // позначки; `publish` позначеного рядка — `marked` до запису.
+  describe("<t>_publish і <t>_unpublish", () => {
+    const sql = (fn: string) => sqlOf(conditional, `region_${fn}${DELETE}`)
+
+    it("є лише в умовного об'єкта", () => {
+      for (const fn of ["publish", "unpublish"]) {
+        expect(unitOf(conditional, `region_${fn}${DELETE}`)).toBeDefined()
+        for (const table of ["ticket", "region"]) {
+          expect(
+            unitOf(domain, `${table}_${fn}${DELETE}`),
+            table
+          ).toBeUndefined()
+        }
+      }
+    })
+
+    it("publish: контекст → замок → версія → право «до» → marked → published = true → право «після» → UPDATE", () => {
+      const shape = bodyShape(sql("publish"))
+      const update = at(
+        shape,
+        "execsql",
+        "UPDATE public.region SET published = true WHERE id = p_id RETURNING *"
+      )
+      const marked = ifAt(shape, "v_old.deletion_mark IS DISTINCT FROM false")
+      const order = [
+        ifAt(shape, "p_expected_version IS NULL"),
+        ifAt(shape, context("publish", "region")),
+        at(shape, "execsql", lockedRow("region", "NO KEY UPDATE")),
+        ifAt(shape, "v_old.version IS DISTINCT FROM p_expected_version"),
+        ifAt(
+          shape,
+          rightsIf(conditional, "region", "publish", "v_old", "update")
+        ),
+        marked,
+        shape.findIndex(
+          (s) =>
+            s.type === "assign" &&
+            same(s.target, { variable: "v_new.published" }) &&
+            same(s.expressions[0]?.tree, tree("SELECT true"))
+        ),
+        ifAt(
+          shape,
+          rightsIf(conditional, "region", "publish", "v_new", "update")
+        ),
+        update,
+      ]
+      expectOrder(order)
+      // Відмова — `command.invalid` з причиною `marked`, до будь-якого запису.
+      expect(raiseDetail(shape[marked + 1]!)).toEqual(
+        expect.arrayContaining(["command.invalid", "marked"])
+      )
+      expect(marked).toBeLessThan(update)
+    })
+
+    it("unpublish: published = false, без перевірки позначки", () => {
+      const shape = bodyShape(sql("unpublish"))
+      expect(
+        at(
+          shape,
+          "execsql",
+          "UPDATE public.region SET published = false WHERE id = p_id RETURNING *"
+        )
+      ).toBeGreaterThan(0)
+      expect(ifAt(shape, "v_old.deletion_mark IS DISTINCT FROM false")).toBe(-1)
+      expect(ifAt(shape, context("unpublish", "region"))).toBeGreaterThan(-1)
+    })
   })
 })

@@ -306,6 +306,13 @@ export const catalogEntrySchema = z.strictObject({
    */
   publicRead: z.enum(["anon", "authenticated"]).optional(),
   /**
+   * Роль умовного `publicRead`: відкрито лише рядки з `published = true`
+   * (Р-D1-12). Поле поруч із `publicRead`, а не замість: клієнт, що читає
+   * `publicRead`, не бачить умовного об'єкта відкритим; поле лише для
+   * сервера, у клієнтський каталог воно не потрапляє.
+   */
+  publicReadPublished: z.enum(["anon", "authenticated"]).optional(),
+  /**
    * Сховище файлів довідника (`Catalog.storage`): клієнт і маршрут бачать
    * межу розміру й дозволені типи без звернення до метаданих.
    */
@@ -348,6 +355,9 @@ export const runtimeObjectSchema = catalogEntrySchema
         update: runtimeOperationTargetSchema.optional(),
         markDeletion: runtimeOperationTargetSchema.optional(),
         delete: runtimeOperationTargetSchema.optional(),
+        // Лише в об'єкта з умовним `publicRead` (Р-D1-11).
+        publish: runtimeOperationTargetSchema.optional(),
+        unpublish: runtimeOperationTargetSchema.optional(),
       })
       .optional(),
     constraints: z.array(runtimeConstraintSchema),

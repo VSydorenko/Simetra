@@ -9,6 +9,7 @@ import { toSnakeCase, type AttributeCase } from "../schemas/identity"
 import type { LocalizedString } from "../schemas/localized-string"
 import type { MetadataKind } from "../schemas/metadata-kind"
 import type { MetadataRef } from "../schemas/metadata-ref"
+import { parsePublicRead, type PublicRead } from "../schemas/public-read"
 import type {
   AccessMapping,
   CustomAction,
@@ -661,6 +662,22 @@ export function deletionMarkColumn(): StandardColumnDef {
 }
 
 /**
+ * Ознака публікації умовного `publicRead` (спека публічної частини §5.1):
+ * стандартна колонка лише об'єкта з умовною формою. Значення за замовчуванням
+ * `false` — новий рядок закритий, доки його не опублікує дія `publish`.
+ */
+export function publishedColumn(): StandardColumnDef {
+  return {
+    logicalName: "published",
+    physicalName: "published",
+    type: { type: "Boolean" },
+    notNull: true,
+    default: "false",
+    title: { uk: "Опубліковано", en: "Published" },
+  }
+}
+
+/**
  * Версія рядка для оптимістичної конкурентності. Збільшує її разом зі
  * службовою датою оновлення тригер механіки (`compiler/mechanics-units.ts`).
  * Іде одразу перед службовими датами.
@@ -938,6 +955,40 @@ export function ownershipReferences(
 ): FoundElementReference[] {
   return (obj.ownership ?? []).flatMap((carrier, index) =>
     carrierReferences(carrier, `/ownership/${index}`, obj, standard)
+  )
+}
+
+/**
+ * Носії умови публікації (Р-D1-9): колонки V шапки, яких рядок ТЧ умовного
+ * об'єкта несе копії, бо політика ТЧ читає лише власний рядок. Вказівник —
+ * місце носія під `publicRead`: файл називає умову, а не колонки, тож стадії
+ * беруть пару «вказівник — колонка» звідси, а не вигадують її кожна.
+ */
+export function publicationCarriers(): readonly {
+  pointer: string
+  column: StandardColumnDef
+}[] {
+  return [
+    { pointer: "/publicRead/published", column: publishedColumn() },
+    { pointer: "/publicRead/deletionMark", column: deletionMarkColumn() },
+  ]
+}
+
+/**
+ * Посилання носіїв умови публікації умовного об'єкта. Ім'я пише платформа, а
+ * стиль імен проєкту T0 не знає, тож посилання йде в обох стилях на тому
+ * самому вказівнику: стадія 2 резолвить лише ім'я стилю проєкту, а реквізит з
+ * іменем іншого стилю неможливий (`identity.name-case`), тож друге лишається
+ * нерезолвленим без діагностики.
+ */
+export function publicationReferences(obj: {
+  publicRead?: PublicRead
+}): FoundElementReference[] {
+  if (parsePublicRead(obj.publicRead)?.conditional !== true) return []
+  return publicationCarriers().flatMap(({ pointer, column }) =>
+    [...new Set([column.logicalName, toSnakeCase(column.logicalName)])].map(
+      (name) => ({ pointer, name, role: "rights.carrier" as const })
+    )
   )
 }
 

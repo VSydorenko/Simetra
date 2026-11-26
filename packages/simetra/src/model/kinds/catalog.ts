@@ -1,14 +1,20 @@
 import {
   administerRightsAction,
+  markDeletionAction,
   noDeleteActions,
+  publishAction,
   readAction,
   recordActions,
+  unpublishAction,
+  unpublishingMarkDeletionAction,
 } from "./actions"
 import { catalogSchema, type Catalog } from "../schemas/catalog"
 import { LANGUAGE_CODE_PATTERN } from "../schemas/language-code"
+import { parsePublicRead } from "../schemas/public-read"
 import {
   authorColumns,
   deletionMarkColumn,
+  publishedColumn,
   keyColumn,
   keyOrderOf,
   numberingType,
@@ -32,6 +38,7 @@ import {
   accessReferences,
   bindingReferences,
   ownershipReferences,
+  publicationReferences,
 } from "./standard"
 
 function standardColumns(obj: unknown): StandardColumnDef[] {
@@ -80,6 +87,10 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
       ? { ...deletionMarkColumn(), check: "NOT deletion_mark" }
       : deletionMarkColumn()
   )
+  // Умовний `publicRead` додає ознаку публікації (спека публічної частини §5.1).
+  if (parsePublicRead(catalog.publicRead)?.conditional === true) {
+    columns.push(publishedColumn())
+  }
   // Колонки ролі беремо з її опису, а не з перевірки імені ролі: опис ролі —
   // єдине місце фактів ролі (див. CATALOG_ROLES).
   if (catalog.role !== undefined) {
@@ -585,10 +596,19 @@ export const catalogKind: KindDefinition = {
     const actions = roleOf(obj).actions
     if (actions === "read") return [readAction]
     if (actions === "rights") return [readAction, administerRightsAction]
-    if (actions === "noDelete") {
-      return noDeleteActions(catalogKind.tabularSectionColumns !== undefined)
-    }
-    return recordActions(catalogKind.tabularSectionColumns !== undefined)
+    const record =
+      actions === "noDelete"
+        ? noDeleteActions(catalogKind.tabularSectionColumns !== undefined)
+        : recordActions(catalogKind.tabularSectionColumns !== undefined)
+    return parsePublicRead((obj as Catalog).publicRead)?.conditional === true
+      ? [
+          ...record.map((a) =>
+            a === markDeletionAction ? unpublishingMarkDeletionAction : a
+          ),
+          publishAction,
+          unpublishAction,
+        ]
+      : record
   },
   rightsExtents: ["any", "own", "dimension"],
   rightsContainer: true,
@@ -628,6 +648,7 @@ export const catalogKind: KindDefinition = {
     ...ownershipReferences(obj as Catalog, standardColumns(obj)),
     ...bindingReferences(obj as Catalog, standardColumns(obj)),
     ...accessReferences(obj as Catalog, standardColumns(obj)),
+    ...publicationReferences(obj as Catalog),
   ],
   projectReferences: (obj) => accessDimensionReferences(obj as Catalog),
   references(obj) {

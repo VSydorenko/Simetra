@@ -6,12 +6,7 @@ import {
   type ObjectTable,
   type PhysicalSnapshot,
 } from "simetra/model"
-import {
-  publicReadUsing,
-  readBoundaries,
-  tenantBoundary,
-  usersBoundary,
-} from "../access-units"
+import { readBoundaries, tenantBoundary, usersBoundary } from "../access-units"
 import { rightsCheck } from "../catalog-command/rights-check"
 import { bodyRequires } from "../catalog-command/units"
 import {
@@ -37,6 +32,12 @@ import {
   hasVisibleUsers,
 } from "./functions"
 import { anyScopeSet, renderCondition, type PredicateDml } from "./predicates"
+import {
+  opensEveryRow,
+  opensPublishedRows,
+  publicReadConditions,
+  renderConditions,
+} from "./public-read"
 import { must } from "./references"
 
 export interface RequireInput {
@@ -111,7 +112,9 @@ function boundaries(
  * користувача й роль команд), для об'єкта з `publicRead`: обидві ролі входять
  * до ролей `PERMISSIVE`-політики `publicRead` (вона завжди містить роль
  * користувача й роль команд), тож умова — RLS: умова політики плюс решта меж
- * читання, без предикатів. Інший викликач (`service`, `anonymous`) може
+ * читання, без предикатів; умовного `publicRead` — умова політики OR межа
+ * тенанта з предикатами (`<t>_scope_read` пропускає опублікований рядок, а
+ * чернетку — лише за межею). Інший викликач (`service`, `anonymous`) може
  * опинитися поза цими ролями — тоді вся пара судиться предикатами (Р7).
  */
 const READ_CALLERS: ReadonlySet<string> = new Set(["user", "command"])
@@ -133,24 +136,42 @@ function rowBranch(
       `internal: the row target of ${contract.kindLabel} needs a single-column key`
     )
   }
-  const publicRead =
-    action === "read" &&
-    publicReadCallers &&
-    access !== undefined &&
-    access.publicRead.length > 0
-  const where = [
-    `${ROW}.${quoteIdent(key[0]!)} = p_row`,
-    ...boundaries(
-      action,
-      access,
-      visibleUsers,
-      main,
-      input.contracts.users?.keyColumn
-    ),
-    publicRead
-      ? `(${publicReadUsing(must(access), hasSessionUser(input.contracts, input.provider))})`
-      : `(${rightsCheck(contract, action, main, ROW, dmlOf(action))})`,
-  ]
+  const read = action === "read" && publicReadCallers && access !== undefined
+  const row = `${ROW}.${quoteIdent(key[0]!)} = p_row`
+  const rights = () =>
+    `(${rightsCheck(contract, action, main, ROW, dmlOf(action))})`
+  const usersKey = input.contracts.users?.keyColumn
+  const publicRead = () =>
+    renderConditions(
+      publicReadConditions(
+        must(access),
+        hasSessionUser(input.contracts, input.provider)
+      ),
+      must(access).published,
+      ROW
+    )
+  const where =
+    read && opensPublishedRows(access)
+      ? // Умовний `publicRead` (спека прав §5.4): RLS — `<t>_public_read` OR
+        // (межа тенанта AND право `read`), бо межа пропускає опублікований
+        // рядок. Межа «Користувачів» діє, як і для будь-якого читання.
+        [
+          row,
+          ...(readBoundaries(access, visibleUsers).includes("users")
+            ? [usersBoundary(main, must(usersKey), ROW)]
+            : []),
+          `((${publicRead()}) OR (${[
+            ...(access.scope === undefined
+              ? []
+              : [tenantBoundary(access.scope, ROW)]),
+            rights(),
+          ].join(" AND ")}))`,
+        ]
+      : [
+          row,
+          ...boundaries(action, access, visibleUsers, main, usersKey),
+          read && opensEveryRow(access) ? `(${publicRead()})` : rights(),
+        ]
   return `EXISTS (SELECT 1 FROM ${qualified(contract.table)} ${ROW} WHERE ${where.join(" AND ")})`
 }
 

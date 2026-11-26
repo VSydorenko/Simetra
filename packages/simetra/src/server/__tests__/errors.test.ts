@@ -317,6 +317,7 @@ describe("mapDatabaseError", () => {
       COMMAND_CORE_ERRORS.invalid.expectedValues,
       COMMAND_CORE_ERRORS.invalid.mark,
       COMMAND_CORE_ERRORS.invalid.predefined,
+      COMMAND_CORE_ERRORS.invalid.marked,
     ].map((reason): [string, { reason: string }] => [reason, { reason }]),
     ["missing_col", { reason: "unknown" }],
     ["tabular.sample_lines.missing_col", { reason: "unknown" }],

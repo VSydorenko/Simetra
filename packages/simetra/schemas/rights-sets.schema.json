@@ -170,7 +170,9 @@
                               "delete",
                               "post",
                               "unpost",
-                              "write"
+                              "write",
+                              "publish",
+                              "unpublish"
                             ],
                             "description": "Standard action word; selects every object of the role level that has it."
                           }

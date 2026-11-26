@@ -18,6 +18,7 @@ import {
   HOURS_TABLES,
   RATE_TABLE,
   REASSIGN_ACTION_ID,
+  REGION_FILE,
   REGION_NOTES_TABLE,
   TASK_FILE,
   authorCarrier,
@@ -650,5 +651,129 @@ describe("buildEffectsUnits", () => {
       .filter((unit) => unit.class === "function")
       .map((unit) => unit.identity)
     expect(new Set(identities).size).toBe(identities.length)
+  })
+})
+
+describe("conditional publicRead: the mark unpublishes, a marked row is not published (Р-D1-10)", () => {
+  const conditionalRegion = {
+    [REGION_FILE]: { publicRead: { role: "anon", published: true } },
+  }
+  let conditional: CompiledModel
+  beforeAll(async () => {
+    const result = await compileRights(
+      policyDomain(writeRoles(), writableRegister(), conditionalRegion)
+    )
+    expectClean(result)
+    conditional = result.model!
+  })
+
+  it("markDeletion requires published = false both ways, publish refuses a marked row", () => {
+    const t = "region"
+    const content = contentColumns(tableOf(conditional, t), "camelCase")
+      .map((c) => c.name)
+      .filter((c) => c !== "id" && c !== "org_id")
+    expect(content).toEqual([
+      "code",
+      "description",
+      "deletion_mark",
+      "published",
+      "predefined_name",
+      "created_at",
+    ])
+    const except = (...columns: string[]) =>
+      content.filter((c) => !columns.includes(c))
+    // Обидві колонки — переходи: `update` їх лише порівнює.
+    const transitions = ["deletion_mark", "published"]
+    const direction = (from: boolean, to: boolean) =>
+      raiseIf(
+        `OLD.published IS DISTINCT FROM NEW.published AND (OLD.published IS DISTINCT FROM ${from} OR NEW.published IS DISTINCT FROM ${to})`,
+        t,
+        "published"
+      )
+    const onlyOp = (op: string) => raiseIf(`TG_OP NOT IN ('${op}')`, t)
+    const body = [
+      ...PREAMBLE,
+      ...raiseIf(
+        "TG_OP = 'UPDATE' AND OLD.org_id IS DISTINCT FROM NEW.org_id",
+        t,
+        "org_id"
+      ),
+      ...raiseIf(
+        "TG_OP = 'INSERT' AND NEW.deletion_mark IS DISTINCT FROM false",
+        t,
+        "deletion_mark"
+      ),
+      ...raiseIf(
+        "TG_OP = 'INSERT' AND NEW.published IS DISTINCT FROM false",
+        t,
+        "published"
+      ),
+      "IF v_object <> 'region' OR NOT coalesce(OLD.id = v_root OR NEW.id = v_root, false) THEN",
+      ...onUpdate(unchanged(t, transitions)),
+      "RETURN NULL;",
+      "END IF;",
+      "IF v_action = 'create' THEN",
+      ...onlyOp("INSERT"),
+      "ELSIF v_action = 'update' THEN",
+      ...onlyOp("UPDATE"),
+      ...onUpdate(unchanged(t, transitions)),
+      "ELSIF v_action = 'markDeletion' THEN",
+      ...onlyOp("UPDATE"),
+      // Шапка позначки несе й `published`; зняття позначки теж не лишає
+      // публікації — умова без напрямку позначки.
+      ...onUpdate([
+        ...unchanged(t, except(...transitions)),
+        ...raiseIf("NEW.published IS DISTINCT FROM false", t, "published"),
+      ]),
+      "ELSIF v_action = 'delete' THEN",
+      ...onlyOp("DELETE"),
+      "ELSIF v_action = 'publish' THEN",
+      ...onlyOp("UPDATE"),
+      // Позначку `publish` не змінює, тож позначений рядок — відмова.
+      ...onUpdate([
+        ...unchanged(t, except("published")),
+        ...direction(false, true),
+        ...raiseIf(
+          "NEW.deletion_mark IS DISTINCT FROM false",
+          t,
+          "deletion_mark"
+        ),
+      ]),
+      "ELSIF v_action = 'unpublish' THEN",
+      ...onlyOp("UPDATE"),
+      ...onUpdate([
+        ...unchanged(t, except("published")),
+        ...direction(true, false),
+      ]),
+      "ELSE",
+      refuse(t),
+      "END IF;",
+      "RETURN NULL;",
+      "END",
+    ].join("\n")
+    expect(bodyShape(fnOf(conditional, t).sql)).toEqual(
+      bodyShape(expectedFunction("public.region_simetra_effects", body))
+    )
+  })
+
+  it("an object without the condition keeps its body", async () => {
+    // Той самий домен без умови: тіла ефектів інших таблиць не залежать від
+    // умови `Region`, а тіло `region` не має жодної перевірки пов'язаної колонки.
+    const sqlOf = (model: CompiledModel) =>
+      new Map(effects(model).map((u) => [u.identity, u.sql]))
+    const plain = sqlOf(domain)
+    const withCondition = sqlOf(conditional)
+    for (const [identity, sql] of plain) {
+      if (identity.includes("region_simetra_effects")) continue
+      expect(withCondition.get(identity), identity).toBe(sql)
+    }
+    const region = plain.get("function:public.region_simetra_effects()")!
+    expect(region).toBeDefined()
+    // Позитивний контроль: той самий вираз знаходить перевірку в умовного.
+    const coupledCheck = /IF NEW\.\w+ IS DISTINCT FROM/
+    expect(
+      withCondition.get("function:public.region_simetra_effects()")
+    ).toMatch(coupledCheck)
+    expect(region).not.toMatch(coupledCheck)
   })
 })

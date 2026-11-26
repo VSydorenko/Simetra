@@ -18,6 +18,8 @@ export const COMMAND_CORE_ERRORS = {
     expectedValues: "p_expected_values",
     mark: "p_mark",
     predefined: "predefined",
+    // `publish` позначеного рядка (Р-D1-10): позначений не публікується.
+    marked: "marked",
     // Рядок членства творця кореня (спека П4 §6.13): сам аргумент і префікс
     // протоколу `creatorMember.<колонка>`.
     creatorMember: "creatorMember",

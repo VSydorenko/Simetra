@@ -8,10 +8,13 @@ import {
 } from "simetra/model"
 import { isSignalObject } from "../access-units"
 import { SIGNAL_FUNCTIONS } from "../signal/names"
-import { SIGNAL_INSERT_POLICY } from "../signal/units"
+import { loadSqlParser } from "../sql/parse"
+import { loadPlpgsqlParser } from "../sql/plpgsql"
+import { SIGNAL_INSERT_POLICY, buildSignalUnits } from "../signal/units"
 import {
   ANNOUNCEMENT_ID,
   ORG_KIND_ID,
+  TASK_FILE,
   TASK_ID,
   compileRights,
   policyDomain,
@@ -41,12 +44,12 @@ const functionSql = (name: string) =>
   )!.sql
 /** Гілки оракула: UUID об'єкта → умова гілки. */
 const branches = () =>
+  branchesIn(functionSql(SIGNAL_FUNCTIONS.topicAllowed.name))
+const branchesIn = (sql: string) =>
   new Map(
-    [
-      ...functionSql(SIGNAL_FUNCTIONS.topicAllowed.name).matchAll(
-        /^ {4}WHEN '([0-9a-f-]+)'::uuid THEN (.*)$/gm
-      ),
-    ].map(([, id, condition]) => [id!, condition!])
+    [...sql.matchAll(/^ {4}WHEN '([0-9a-f-]+)'::uuid THEN (.*)$/gm)].map(
+      ([, id, condition]) => [id!, condition!]
+    )
   )
 
 beforeAll(async () => {
@@ -161,6 +164,53 @@ describe("signal authorization units", () => {
     expect(branches().get(ANNOUNCEMENT_ID)).toBe(
       `v_kind = ${zero} AND CASE WHEN p_send THEN v_scope = ${zero} ELSE v_scope = ${zero} AND ((SELECT simetra.has_right('read', 'announcement', 'any', NULL))) END`
     )
+  })
+
+  // Р-D1-2: факт `publicRead` — `opensEveryRow`. Умовний `publicRead` канал
+  // не відкриває: id і версії чернеток бачив би кожен — підписку судить право
+  // `read`, як без `publicRead` (інваріант 11).
+  it("a conditional publicRead object subscribes by the read right, as without publicRead", async () => {
+    const open = (
+      await compileRights(
+        policyDomain(writeRoles(), {
+          [TASK_FILE]: { publicRead: "authenticated" },
+        })
+      )
+    ).model!
+    const topicOf = (
+      units: readonly { class: string; identity: string; sql: string }[]
+    ) =>
+      branchesIn(
+        units.find(
+          (u) =>
+            u.class === "function" &&
+            u.identity.startsWith(
+              `function:simetra.${SIGNAL_FUNCTIONS.topicAllowed.name}(`
+            )
+        )!.sql
+      ).get(TASK_ID)
+    // Рядкова форма відкриває канал без права — свідок, що факт щось змінює.
+    expect(topicOf(open.sqlUnits)).not.toBe(branches().get(TASK_ID))
+    const rebuilt = buildSignalUnits({
+      contracts: {
+        ...open.contracts,
+        access: open.contracts.access.map((a) =>
+          a.table.name === "task"
+            ? {
+                ...a,
+                published: { column: "published", mark: "deletion_mark" },
+              }
+            : a
+        ),
+      },
+      physical: open.physical,
+      provider: open.project.database.provider,
+      module: open.project.name,
+      units: open.sqlUnits.filter((u) => u.generator !== "signal"),
+      parse: await loadSqlParser(),
+      plpgsql: await loadPlpgsqlParser(),
+    })
+    expect(topicOf(rebuilt)).toBe(branches().get(TASK_ID))
   })
 
   it("the senders are VOLATILE SECURITY INVOKER with an empty search_path and return nothing", () => {

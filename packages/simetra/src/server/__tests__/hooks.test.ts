@@ -12,11 +12,13 @@ import {
   COMPANY,
   ID,
   LINK,
+  PAGE,
   OTHER,
   TASK,
   catalog,
   commandObject,
   linkCatalog,
+  pageCatalog,
   rootCatalog,
   sample,
   taskCatalog,
@@ -561,6 +563,32 @@ describe("draft of beforeWrite", () => {
         object: CLIENT,
       })
       expect(seen).toEqual([{}])
+      expect(db.calls).toEqual(CLOSED)
+    }
+  )
+
+  // Чернетка переходу публікації порожня, як у позначки (Р-D1-11).
+  it.each(["publish", "unpublish"] as const)(
+    "rejects a %s draft with values",
+    async (action) => {
+      const { db, runtime } = await setup(() => undefined, {
+        catalog: pageCatalog,
+        objectModules: {
+          "Catalog.Page": {
+            beforeWrite: () => ({ values: {} }),
+          },
+        },
+      })
+      expect(
+        await failureOf(
+          runtime.run(session, {
+            action,
+            object: PAGE,
+            id: ID,
+            expectedVersion: 1,
+          })
+        )
+      ).toEqual({ code: "command.invalid", path: "values", object: PAGE })
       expect(db.calls).toEqual(CLOSED)
     }
   )

@@ -12,7 +12,7 @@ import {
 
 // Announcement — `authenticated`, Region — `anon`: гість бачить `anon` і без
 // самореєстрації, тож у переліку лише перший. Роль Everyone — рівня everyUser.
-function layers(selfSignUp: boolean) {
+function layers(selfSignUp: boolean, regionPublicRead: unknown = "anon") {
   return withRoles(
     {
       [PROJECT_FILE]: selfSignUp ? { selfSignUp: true } : {},
@@ -21,7 +21,7 @@ function layers(selfSignUp: boolean) {
         ownership: ["createdBy"],
         publicRead: "authenticated",
       },
-      [REGION_FILE]: { scope: "none", publicRead: "anon" },
+      [REGION_FILE]: { scope: "none", publicRead: regionPublicRead },
     },
     {
       [ROLE_FILE("Everyone")]: {
@@ -31,8 +31,11 @@ function layers(selfSignUp: boolean) {
   )
 }
 
-async function selfSignUpDiagnostics(selfSignUp: boolean) {
-  const result = await compileRights(layers(selfSignUp))
+async function selfSignUpDiagnostics(
+  selfSignUp: boolean,
+  regionPublicRead?: unknown
+) {
+  const result = await compileRights(layers(selfSignUp, regionPublicRead))
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   return result.diagnostics
     .filter((d) => d.code === "project.self-sign-up")
@@ -55,6 +58,29 @@ describe("self sign-up warning", () => {
         pointer: "/selfSignUp",
         params: {
           objects: "Announcement",
+          roles: "Everyone: Announcement.read",
+        },
+      },
+    ])
+  })
+
+  // Р-D1-13, стик D5: опубліковані рядки умовного `authenticated` відкриті
+  // кожному дійсному користувачу, тож самореєстрація відкриває їх будь-кому —
+  // роль із контракту дає `publicReadRoleOf` для обох форм.
+  it("lists an object with the conditional authenticated publicRead", async () => {
+    expect(
+      await selfSignUpDiagnostics(true, {
+        role: "authenticated",
+        published: true,
+      })
+    ).toEqual([
+      {
+        code: "project.self-sign-up",
+        severity: "warning",
+        file: PROJECT_FILE,
+        pointer: "/selfSignUp",
+        params: {
+          objects: "Announcement, Region",
           roles: "Everyone: Announcement.read",
         },
       },

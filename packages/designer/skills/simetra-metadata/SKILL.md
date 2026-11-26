@@ -255,7 +255,7 @@ Object properties:
 - `indexes` on a Catalog, a Document and their tabular sections: a list of
   composite indexes, each `{ "attributes": [name | { "name": …, "order": "desc" }] }`; like `indexed`, a list-order index: `references/list-order-indexes.md`.
 - `search`: fields and mode of the object's search: `references/search-fields.md`.
-- `publicRead`: `"authenticated"` or `"anon"` on kinds with row-level security.
+- `publicRead`: `"authenticated"` or `"anon"` on kinds with row-level security, or the conditional form `{ "role": …, "published": true }` that opens only published rows: `references/people-and-rights.md` § "Who reads what".
 - Project file: `storageBuckets`, a list of `{ "bucket": …, "scopeKind": … }`.
 
 An attribute with properties, added through the tool:

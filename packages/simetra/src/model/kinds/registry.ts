@@ -49,6 +49,8 @@ export {
   keyColumn,
   lineNumberColumn,
   monthColumn,
+  publicationCarriers,
+  publishedColumn,
   serviceDateColumns,
   singletonColumn,
   standardLogicalName,

@@ -13,6 +13,7 @@ import { commandContractOf } from "./fixtures/catalog-command"
 import { readReferenceDomain } from "./fixtures/reference-domain"
 import {
   ORG_KIND_ID,
+  TICKET_FILE,
   adminRoles,
   commandCoreLayer,
   compileRights,
@@ -111,6 +112,29 @@ describe("command core: the signal call", () => {
       )
     )
   })
+
+  // Р-D1-11: перехід публікації — `update`, перелік `op` приймача T4 не росте.
+  it.each(["publish", "unpublish"])(
+    "%s signals `update` after the UPDATE and its row count check",
+    async (fn) => {
+      const conditional = await compiled(
+        compileRights(
+          policyDomain(writeRoles(), adminRoles(), commandCoreLayer(), {
+            [TICKET_FILE]: { publicRead: { role: "anon", published: true } },
+          })
+        )
+      )
+      const shape = bodyShape(sqlOf(conditional, `ticket_${fn}(uuid,int8)`))
+      const [at] = signalCalls(shape) as [number]
+      const update = Math.max(...dmlAt(shape))
+      expect(at).toBe(update + 4)
+      expect(shape[at]!.expressions[0]!.tree).toEqual(
+        call(
+          `'${objectIdOf(conditional, "ticket")}'::uuid, '${ORG_KIND_ID}'::uuid, v_row.org_id, jsonb_build_object('id', v_row.id), v_row.version, 'update'`
+        )
+      )
+    }
+  )
 
   it("an unscoped object signals into the zero scope", () => {
     const shape = bodyShape(sqlOf(core, "global_roles_save(jsonb,int8,jsonb)"))

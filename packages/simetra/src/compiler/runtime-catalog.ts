@@ -42,6 +42,7 @@ import {
 import type { PresentationBlock } from "./presentation"
 import { hasRightsFunctions, hasVisibleUsers } from "./rights/functions"
 import { carrierColumn } from "./rights/predicates"
+import { opensEveryRow, opensPublishedRows } from "./rights/public-read"
 import { triggeredRelationTable } from "./rights/relation-table"
 import { sha256HexSync } from "./sha256"
 
@@ -141,23 +142,28 @@ export function kernelHashOf(operations: RuntimeObject["operations"]): string {
   return sha256HexSync(canonicalize(operations ?? {}))
 }
 
-// Роль — з `access.publicRead` (призначення ролей запиту): `anonymous` є лише
-// в `anon`, який відкриває обидві ролі; решта — `authenticated`.
+// Роль — `publicReadRoleOf` над призначеннями контракту, єдиним місцем
+// розбору ролі. `publicRead` — лише для форми, що відкриває всі рядки: умовний
+// клієнт вважав би відкритими й чернетки; умовна форма йде окремим полем
+// `publicReadPublished`.
 function publicReadOf(
   model: CompiledModel,
   objectId: string,
   table: QualifiedName
-): Pick<RuntimeObject, "publicRead"> {
+): Pick<RuntimeObject, "publicRead" | "publicReadPublished"> {
   // Основна таблиця: ТЧ того ж об'єкта мають власні записи доступу.
-  const purposes =
-    model.contracts.access.find(
-      (a) =>
-        a.objectId === objectId &&
-        a.table.schema === table.schema &&
-        a.table.name === table.name
-    )?.publicRead ?? []
-  const publicRead = publicReadRoleOf(purposes)
-  return publicRead === undefined ? {} : { publicRead }
+  const access = model.contracts.access.find(
+    (a) =>
+      a.objectId === objectId &&
+      a.table.schema === table.schema &&
+      a.table.name === table.name
+  )
+  if (access === undefined) return {}
+  const role = publicReadRoleOf(access.publicRead)
+  if (role === undefined) return {}
+  if (opensEveryRow(access)) return { publicRead: role }
+  if (opensPublishedRows(access)) return { publicReadPublished: role }
+  return {}
 }
 
 // Межа файлу — з метаданих об'єкта як є: окремого виводу немає.
@@ -469,6 +475,12 @@ function operationsOf(
     ...(functions.delete === undefined || actions.delete === undefined
       ? {}
       : { delete: target(functions.delete, actions.delete) }),
+    ...(functions.publish === undefined || actions.publish === undefined
+      ? {}
+      : { publish: target(functions.publish, actions.publish) }),
+    ...(functions.unpublish === undefined || actions.unpublish === undefined
+      ? {}
+      : { unpublish: target(functions.unpublish, actions.unpublish) }),
   }
 }
 

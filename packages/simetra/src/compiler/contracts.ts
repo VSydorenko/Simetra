@@ -328,6 +328,12 @@ export interface AccessContract {
   }
   /** Ролі запиту, яким відкрито всі рядки: `anon` → обидві, `authenticated` → `user`. */
   publicRead: RequestRolePurpose[]
+  /**
+   * Умовна форма `publicRead` (спека публічної частини §5.1): фізичні колонки
+   * умови публікації цієї таблиці — на шапці її `published` і `deletion_mark`,
+   * на ТЧ — їхні копії. Немає — `publicRead` відкриває всі рядки.
+   */
+  published?: { column: string; mark: string }
   /** Основна таблиця кореня виду скоупу: без межі тенанта на `INSERT` (спека прав §5.2). */
   root: boolean
   /**
@@ -379,6 +385,8 @@ export interface RightsAction {
   natural: Dml[]
   /** Дія-перехід: фізична колонка й напрям (факт реєстру). */
   transition?: { column: string; from?: boolean; to?: boolean }
+  /** Пов'язана колонка: фізична колонка й її значення після дії (факт реєстру). */
+  coupled?: { column: string; value: boolean }
   extents: RightsExtent[]
 }
 

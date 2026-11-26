@@ -4,6 +4,7 @@ import {
   buildClientCatalog,
   buildRuntimeCatalog,
   canonicalSnapshot,
+  compile,
   kernelHashOf,
   renameElement,
   type CompileResult,
@@ -59,6 +60,8 @@ import {
   writeRoles,
   type Layer,
 } from "./fixtures/rights"
+import { kitchenSink } from "./fixtures/kitchen-sink"
+import { loadShapeParsers } from "./fixtures/sql-shape"
 import { uuid } from "./helpers"
 
 /**
@@ -1257,6 +1260,29 @@ describe("buildRuntimeCatalog: rights snapshot fields", () => {
     expect(objectOf("Project")).not.toHaveProperty("publicRead")
   })
 
+  // Р-D1-12: `publicRead` каталогу — лише за `opensEveryRow`; умовний клієнт
+  // вважав би відкритими й чернетки. `published` будівник контрактів ще не
+  // заповнює (Р-D1-2), тож контракт — вручну.
+  it("a conditional publicRead is not the publicRead of the catalog", () => {
+    const bulletin = model.objects.find((o) => o.name === "Bulletin")!
+    const conditional = buildRuntimeCatalog({
+      ...model,
+      contracts: {
+        ...model.contracts,
+        access: model.contracts.access.map((a) =>
+          a.objectId === bulletin.id
+            ? {
+                ...a,
+                published: { column: "published", mark: "deletion_mark" },
+              }
+            : a
+        ),
+      },
+    }).objects.find((o) => o.name === "Bulletin")
+    expect(conditional).toBeDefined()
+    expect(conditional).not.toHaveProperty("publicRead")
+  })
+
   it("anon public read, which opens both request roles, is `anon`", async () => {
     const { model: anon, diagnostics } = await compileRights(
       policyDomain(writeRoles(), adminRoles(), commandCoreLayer(), {
@@ -1551,5 +1577,106 @@ describe("buildRuntimeCatalog: storage", () => {
     expect(
       new Set([stored, bigger, plain].map((c) => c.snapshotHash)).size
     ).toBe(3)
+  })
+})
+
+// Р-D1-12, інваріант 14: умовний `publicRead` не відкриває об'єкта жодному
+// каталогу; роль умови — лише в `publicReadPublished` каталогу рантайму.
+const OLD_OPERATIONS = new Set(["create", "update", "markDeletion", "delete"])
+describe("buildRuntimeCatalog: conditional publicRead", () => {
+  let sinkModel: CompiledModel
+  let sink: RuntimeCatalog
+  beforeAll(async () => {
+    await loadShapeParsers()
+    const result = await compile(kitchenSink())
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    sinkModel = result.model!
+    sink = buildRuntimeCatalog(sinkModel)
+  })
+
+  const entry = (name: string): RuntimeObject => {
+    const found = sink.objects.find((o) => o.name === name)
+    expect(found, name).toBeDefined()
+    return found!
+  }
+
+  it.each(["Partner", "Item"])(
+    "%s: the role is publicReadPublished, there is no publicRead",
+    (name) => {
+      expect(entry(name).publicReadPublished).toBe("anon")
+      expect(entry(name)).not.toHaveProperty("publicRead")
+    }
+  )
+
+  // Р-D1-11: цілі публікації — лише в умовного об'єкта, з дією-іменем операції.
+  it("publish and unpublish targets exist on conditional objects only", () => {
+    for (const name of ["Partner", "Item"]) {
+      const ops = entry(name).operations
+      expect(ops?.publish?.context, name).toBe("publish")
+      expect(ops?.unpublish?.context, name).toBe("unpublish")
+      expect(ops?.publish?.function.name, name).toMatch(/_publish$/)
+      expect(ops?.unpublish?.function.name, name).toMatch(/_unpublish$/)
+    }
+    for (const o of sink.objects.filter(
+      (o) => o.publicReadPublished === undefined
+    )) {
+      expect(o.operations ?? {}, o.name).not.toHaveProperty("publish")
+      expect(o.operations ?? {}, o.name).not.toHaveProperty("unpublish")
+    }
+  })
+
+  // Інваріант §2 плану: об'єкт без умови не змінює ядра — хеш рахується з тих
+  // самих чотирьох операцій, нових ключів у нього немає.
+  it("keeps the kernel of an unconditional object: no new keys in its hash input", () => {
+    for (const o of sink.objects.filter(
+      (o) => o.publicReadPublished === undefined
+    )) {
+      expect(
+        Object.keys(o.operations ?? {}).filter((k) => !OLD_OPERATIONS.has(k)),
+        o.name
+      ).toEqual([])
+      expect(o.kernelHash, o.name).toBe(kernelHashOf(o.operations))
+    }
+    // Умовний хешує й операції публікації: ядро справді інше.
+    const { publish, unpublish, ...rest } = entry("Item").operations!
+    expect(publish).toBeDefined()
+    expect(unpublish).toBeDefined()
+    expect(entry("Item").kernelHash).not.toBe(kernelHashOf(rest))
+  })
+
+  it("an unconditional publicRead has no publicReadPublished", () => {
+    for (const o of sink.objects.filter((o) => o.publicRead !== undefined))
+      expect(o, o.name).not.toHaveProperty("publicReadPublished")
+    expect(objectOf("Bulletin")).not.toHaveProperty("publicReadPublished")
+  })
+
+  it("the client catalog opens no conditional object", () => {
+    const client = buildClientCatalog(sink)
+    for (const name of ["Partner", "Item"]) {
+      const o = client.objects.find((c) => c.name === name)
+      expect(o, name).toBeDefined()
+      expect(o).not.toHaveProperty("publicRead")
+      expect(o).not.toHaveProperty("publicReadPublished")
+    }
+  })
+
+  it("the condition leaves the kernelHash as it was", () => {
+    for (const name of ["Partner", "Item"]) {
+      const o = entry(name)
+      expect(o.kernelHash).toBe(kernelHashOf(o.operations))
+    }
+    const bare = buildRuntimeCatalog({
+      ...sinkModel,
+      contracts: {
+        ...sinkModel.contracts,
+        access: sinkModel.contracts.access.map((a) => ({
+          ...a,
+          published: undefined,
+        })),
+      },
+    })
+    expect(bare.objects.map((o) => [o.name, o.kernelHash])).toEqual(
+      sink.objects.map((o) => [o.name, o.kernelHash])
+    )
   })
 })

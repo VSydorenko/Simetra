@@ -1,6 +1,8 @@
 import {
   KIND_REGISTRY,
   isObjectTable,
+  publicationCarriers,
+  standardElementId,
   type PhysicalSnapshot,
   type PhysicalTable,
   type Project,
@@ -197,7 +199,13 @@ function resolveStep(
       ),
     }
   }
-  const field = elementField(object, reference.to.id, name, ctx)
+  // Носій публікації (Р-D1-9) — не посилання, а булева колонка V шапки:
+  // приймається лише для поля `publication` і лише як саме ця стандартна
+  // колонка, тож власність чи вимір на `published` лишаються `carrier-not-ref`.
+  const field =
+    at.field === "publication"
+      ? publicationField(object, reference.to.id, name, ctx)
+      : elementField(object, reference.to.id, name, ctx)
   return field === undefined
     ? fail("rights.carrier-not-ref", owner, at.pointer, name)
     : { ok: true, field }
@@ -245,6 +253,31 @@ export function elementField(
     target,
     inScope: inScopeTarget(foreignKey, ctx.project),
   }
+}
+
+/**
+ * Колонка V шапки як носій публікації: елемент мусить бути стандартною
+ * колонкою умови публікації самого об'єкта. Ні ключем, ні `Ref` вона не є, а
+ * межа скоупу її не стосується: значення — ознака рядка, не посилання.
+ */
+function publicationField(
+  object: ParsedObject,
+  elementId: string,
+  name: string,
+  ctx: CarrierContext
+): CarrierField | undefined {
+  const objectId = must(object.id)
+  const known = publicationCarriers().some(
+    ({ column }) => standardElementId(objectId, column) === elementId
+  )
+  if (!known) return undefined
+  const table = must(mainTableOf(ctx.physical, objectId))
+  const columns =
+    elementColumns(object, table, ctx.project.naming.attributeCase).get(
+      elementId
+    ) ?? []
+  if (columns.length !== 1) return undefined
+  return { name, column: columns[0]!, key: false, inScope: true }
 }
 
 /** Об'єкт, чия основна таблиця — ціль FK. */

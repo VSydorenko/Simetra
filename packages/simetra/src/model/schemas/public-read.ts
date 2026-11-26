@@ -24,7 +24,35 @@ export const PUBLIC_READ_PURPOSES: Readonly<
   anon: "anonymous",
 }
 
-export const publicReadSchema = z.enum(PUBLIC_READ_ROLES).optional().meta({
-  description:
-    "API role that may read every row of the object: authenticated users or anonymous visitors. Absent means no public read.",
+/**
+ * Умовна форма `publicRead` (спека публічної частини §5.1): роль читає лише
+ * опубліковані рядки. `published` — лише `true`: рядкова форма вже означає
+ * «усі рядки», а `false` не мав би зрозумілого значення.
+ */
+export const publicReadConditionalSchema = z.strictObject({
+  role: z.enum(PUBLIC_READ_ROLES),
+  published: z.literal(true),
 })
+
+export type PublicRead =
+  PublicReadRole | z.infer<typeof publicReadConditionalSchema>
+
+export const publicReadSchema = z
+  .union([z.enum(PUBLIC_READ_ROLES), publicReadConditionalSchema])
+  .optional()
+  .meta({
+    description:
+      "API role that may read the object: authenticated users or anonymous visitors. A string opens every row; an object { role, published: true } opens only rows marked published. Absent means no public read.",
+  })
+
+/**
+ * Роль і ознака умови з обох форм — єдине місце розбору значення поля.
+ */
+export function parsePublicRead(
+  value: PublicRead | undefined
+): { role: PublicReadRole; conditional: boolean } | undefined {
+  if (value === undefined) return undefined
+  return typeof value === "string"
+    ? { role: value, conditional: false }
+    : { role: value.role, conditional: value.published }
+}

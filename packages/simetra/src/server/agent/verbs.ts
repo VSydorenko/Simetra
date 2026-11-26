@@ -11,6 +11,9 @@ export const OPERATION_VERBS: Readonly<Record<ObjectOperation, AgentVerb>> = {
   update: "write",
   markDeletion: "remove",
   delete: "remove",
+  // Перехід публікації не видаляє нічого й зворотний: дієслово запису.
+  publish: "write",
+  unpublish: "write",
 }
 
 /** Операції рантайму, які об'єкт каталогу має, у порядку `OBJECT_OPERATIONS`. */

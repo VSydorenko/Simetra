@@ -186,6 +186,7 @@ import {
 } from "./state"
 import {
   classifySteps,
+  conditionalToPlain,
   foreignChanges,
   lintSteps,
   redefined,
@@ -1279,7 +1280,10 @@ export async function buildPlan(
     live.extracted.model,
     parse,
     0,
-    { foreign }
+    {
+      foreign,
+      conditionalToPlain: conditionalToPlain(engineActions, applied, 0),
+    }
   )
   const undeclared = undeclaredProviderTriggers(
     engineActions,
@@ -2346,6 +2350,12 @@ async function analyseOnClone(p: {
         actions,
         p.applied,
         extracted.model,
+        offset,
+        (ref) => beforeIntent(p.intent, ref)
+      ),
+      conditionalToPlain: conditionalToPlain(
+        actions,
+        p.applied,
         offset,
         (ref) => beforeIntent(p.intent, ref)
       ),

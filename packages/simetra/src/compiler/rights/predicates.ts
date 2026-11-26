@@ -5,6 +5,7 @@ import {
   type ObjectTable,
 } from "simetra/model"
 import type {
+  AccessContract,
   CarrierContract,
   OwnershipContract,
   ProjectionExtent,
@@ -34,6 +35,11 @@ export const COMMAND_ACTION: unique symbol = Symbol("command action")
  * Множина — виклик функції, а не готовий текст: пояснення прав
  * бере ту саму умову й підставляє варіант функції для іншого користувача
  * без текстової заміни в SQL.
+ *
+ * Умови публічного читання (`publicReadConditions`): `rowLiteral` — логічне поле
+ * умови публікації рядка дорівнює сталій, `validUser` — `current_user_id()` не
+ * NULL. Поле, а не колонка: вузол той самий для шапки й ТЧ, а колонку своєї
+ * таблиці бере рендер.
  */
 export type RightsCondition =
   | {
@@ -44,6 +50,18 @@ export type RightsCondition =
     }
   | { kind: "currentUser"; column: string }
   | { kind: "boolean"; expression: string }
+  | { kind: "rowLiteral"; field: "published" | "deletionMark"; value: boolean }
+  | { kind: "validUser" }
+
+/**
+ * Умова предиката прав: без умов публічного читання — їх дає лише
+ * `publicReadConditions`, тож функції над предикатами (пояснення, сигнал) їх
+ * не судять.
+ */
+export type PredicateCondition = Exclude<
+  RightsCondition,
+  { kind: "rowLiteral" } | { kind: "validUser" }
+>
 
 /** Виклик функції множини з аргументами-сталими. */
 export interface SetCall {
@@ -59,7 +77,7 @@ export interface RightsPredicate {
   extent: ProjectionExtent | { container: string; inner: ProjectionExtent }
   /** Колонка носія власності, виміру чи (для `any` у контейнері) прив'язки. */
   carrier?: string
-  conditions: RightsCondition[]
+  conditions: PredicateCondition[]
 }
 
 /**
@@ -72,7 +90,7 @@ export type PredicateDml = "select" | Dml
 interface Inner {
   extent: ProjectionExtent
   carrier?: string
-  mine: RightsCondition[]
+  mine: PredicateCondition[]
 }
 
 /**
@@ -157,7 +175,7 @@ export function rightsPredicates(
           )
         ).name
   const atScope = inners.map(({ extent, carrier, mine }): RightsPredicate => {
-    const grant: RightsCondition =
+    const grant: PredicateCondition =
       scope === undefined
         ? {
             kind: "boolean",
@@ -208,10 +226,10 @@ export function rowFreeGrants(
   contract: RightsContract,
   action: string,
   main: ObjectTable
-): RightsCondition[] {
+): PredicateCondition[] {
   // Той самий будівник, що й політика читання: умова з гранту — остання в
   // предикаті, а умова «мій» і носій рядка — без рядка не мають сенсу.
-  const grants = new Map<string, RightsCondition>()
+  const grants = new Map<string, PredicateCondition>()
   for (const predicate of rightsPredicates(
     contract,
     action,
@@ -240,7 +258,7 @@ export function rowFreeGrants(
  */
 function rootCreatePredicates(contract: RightsContract): RightsPredicate[] {
   const create = must(contract.actions.find((a) => a.action === "create"))
-  const grant = (extent: ProjectionExtent): RightsCondition => ({
+  const grant = (extent: ProjectionExtent): PredicateCondition => ({
     kind: "boolean",
     expression: call(RIGHTS_FUNCTIONS.hasRight, [
       sqlLiteral("create"),
@@ -311,10 +329,13 @@ export function carrierColumn(
  * Текст умови для `USING`/`WITH CHECK` політики. `row` — змінна рядка
  * plpgsql (`v_old`, `v_new`): ядро команди перевіряє право тим самим текстом
  * над станом «до» чи «після», а не другою реалізацією формули (спека П4 §6.7).
+ * `published` — колонки умови публікації таблиці (`AccessContract.published`),
+ * на які `rowLiteral` відображає своє логічне поле.
  */
 export function renderCondition(
   condition: RightsCondition,
-  row?: string
+  row?: string,
+  published?: AccessContract["published"]
 ): string {
   const at = (column: string) =>
     row === undefined ? quoteIdent(column) : `${row}.${quoteIdent(column)}`
@@ -325,6 +346,20 @@ export function renderCondition(
       return `${at(condition.column)} = ${CURRENT_USER}`
     case "boolean":
       return `(SELECT ${condition.expression})`
+    case "rowLiteral": {
+      // Без колонок таблиці умову не відрендерити — ніколи не `true`.
+      if (published === undefined) {
+        throw new Error(
+          `internal: no publication column for ${condition.field}`
+        )
+      }
+      const column = at(
+        condition.field === "published" ? published.column : published.mark
+      )
+      return condition.value ? column : `NOT ${column}`
+    }
+    case "validUser":
+      return `${CURRENT_USER} IS NOT NULL`
   }
 }
 
@@ -336,7 +371,7 @@ export function renderCondition(
 function ownerCondition(
   carrier: OwnershipContract,
   column: string
-): RightsCondition {
+): PredicateCondition {
   return "users" in carrier.owner
     ? { kind: "currentUser", column }
     : {

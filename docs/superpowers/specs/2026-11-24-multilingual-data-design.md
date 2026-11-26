@@ -235,8 +235,8 @@ ADR-0112 (індекси без провідного `language_id`, мова —
   фільтра мови — читач об'єкта бачить рядки всіх мов (§6).
 - Читання об'єкта з `publicRead` без умови (генератор не дає таким об'єктам
   політик читання за правами) — дві PERMISSIVE-політики частини:
-  - `<t>_public_read` — ті самі ролі й та сама умова `publicReadUsing`, що в
-    `<t>_public_read` власника, `AND language_id = ANY (ARRAY(SELECT id FROM
+  - `<t>_public_read` — ті самі ролі й та сама умова будівника `publicReadConditions`
+    (`compiler/rights/public-read.ts`), що в `<t>_public_read` власника, `AND language_id = ANY (ARRAY(SELECT id FROM
     <мови> WHERE state = 'published'))`; гранти читання частини — з контракту
     власника;
   - `<t>_edit_read` для ролі користувача й ролі команд — усі мови; предикат — форма
@@ -247,8 +247,8 @@ ADR-0112 (індекси без провідного `language_id`, мова —
   частини](2026-11-25-public-app-part-design.md) §5.1) — рядок перекладу несе
   копії `published` і `deletion_mark` власника (джерело носія умови публікації
   блоку D1 публічної частини), а політики частини:
-  - `<t>_public_read` — ті самі ролі й `publicReadUsing`, що в `<t>_public_read`
-    власника, `AND` умова публікації над копіями `AND language_id = ANY
+  - `<t>_public_read` — ті самі ролі й умови будівника `publicReadConditions` (V над копіями і
+    `validUser`), що в `<t>_public_read` власника, `AND` умова публікації над копіями `AND language_id = ANY
     (ARRAY(SELECT id FROM <мови> WHERE state = 'published'))`;
   - політики читання за правами власника `<t>_read_*` з межею тенанта
     `RESTRICTIVE (<умова публікації> OR <межа>)`, як у власника, — усі мови, без
