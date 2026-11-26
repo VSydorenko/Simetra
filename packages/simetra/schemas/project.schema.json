@@ -82,6 +82,11 @@
       "type": "string",
       "minLength": 1
     },
+    "selfSignUp": {
+      "default": false,
+      "description": "Whether users may register themselves; enables the self sign-up warning and host start check.",
+      "type": "boolean"
+    },
     "scopeKinds": {
       "default": [],
       "description": "Scope kinds of the application; leave empty for a single-tenant application.",

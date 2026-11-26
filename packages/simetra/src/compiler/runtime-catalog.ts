@@ -96,6 +96,7 @@ export function buildRuntimeCatalog(model: CompiledModel): RuntimeCatalog {
     ...(hasRightsFunctions(model.contracts, model.project.database.provider)
       ? { rightsSnapshot: true as const, ...adoptedFactsOf(model) }
       : {}),
+    ...(model.project.selfSignUp ? { selfSignUp: true as const } : {}),
     objects: model.objects.flatMap((object): RuntimeObject[] => {
       const contract = contracts.get(object.id)
       if (contract === undefined) return []

@@ -171,3 +171,22 @@ describe("projectSchema database.provider", () => {
     ).toThrow()
   })
 })
+
+describe("projectSchema selfSignUp", () => {
+  it.each([
+    ["absent", undefined, true, false],
+    ["true", true, true, true],
+    ["false", false, true, false],
+    ["a string", "true", false, undefined],
+    ["a number", 1, false, undefined],
+    ["null", null, false, undefined],
+  ])("%s", (_name, value, ok, expected) => {
+    const result = projectSchema.safeParse({
+      name: "App",
+      database: { provider: "postgres" },
+      ...(value === undefined ? {} : { selfSignUp: value }),
+    })
+    expect(result.success).toBe(ok)
+    if (result.success) expect(result.data.selfSignUp).toBe(expected)
+  })
+})

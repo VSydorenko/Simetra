@@ -602,6 +602,7 @@ describe("scope kinds in the snapshot", () => {
       "defaultSchema",
       "name",
       "naming",
+      "selfSignUp",
       "timezone",
     ])
     const organizationId = model.objects.find(

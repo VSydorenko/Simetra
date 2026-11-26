@@ -645,6 +645,12 @@ export const projectSchema = z
       description:
         "IANA time zone in which the platform determines day, month, quarter and year.",
     }),
+    // Самореєстрація — рішення застосунку (D5, Р-D5-8): host при відкритій
+    // реєстрації перевіряє цей прапорець у каталозі рантайму.
+    selfSignUp: z.boolean().default(false).meta({
+      description:
+        "Whether users may register themselves; enables the self sign-up warning and host start check.",
+    }),
     scopeKinds: z.array(scopeKindSchema).default([]).meta({
       description:
         "Scope kinds of the application; leave empty for a single-tenant application.",

@@ -914,7 +914,7 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "562797eca2a462be51ccfd951b1383a0e19832f050ede6b49b2d877e2de5b885"
+      "886f47b3b2dffcce26b79c0a2a064caf61b816cc0efa6a4cc8a9babff4a814fb"
     )
   })
 })
@@ -1266,6 +1266,16 @@ describe("buildRuntimeCatalog: rights snapshot fields", () => {
     })
     const entry = stripped.objects.find((o) => o.id === first.id)!
     expect(entry).not.toHaveProperty("rights")
+  })
+
+  it("selfSignUp is carried only when the project sets it", () => {
+    const withFlag = (selfSignUp: boolean) =>
+      buildRuntimeCatalog({
+        ...model,
+        project: { ...model.project, selfSignUp },
+      })
+    expect(withFlag(true).selfSignUp).toBe(true)
+    expect(withFlag(false)).not.toHaveProperty("selfSignUp")
   })
 
   it("rightsSnapshot is set when the project has rights functions", () => {
