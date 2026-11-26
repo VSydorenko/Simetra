@@ -156,7 +156,7 @@ describe("seed verdict (Р-B2-8)", () => {
       [row({ primary: true, code: "en", state: "published" })],
     ],
     [
-      "an unlabelled row holds the primary code",
+      "an unlabelled row holds the primary code — refuses",
       [row({ code: "uk", state: "draft" })],
     ],
     [
@@ -233,9 +233,9 @@ describe("reading the target for the seed (Р-B2-8)", () => {
   })
 
   it.each<[string, Record<string, string | null>[], string]>([
-    ["no row matches", [], "seed"],
+    ["no row matches — seeds", [], "seed"],
     [
-      "a row already holds the label",
+      "a row already holds the label — refuses",
       [
         {
           predefined_name: "primary_language",
@@ -247,7 +247,7 @@ describe("reading the target for the seed (Р-B2-8)", () => {
       "refused",
     ],
     [
-      "a row already holds the label and the primary code",
+      "a row already holds the label and the primary code — refuses",
       [
         {
           predefined_name: "primary_language",
@@ -259,11 +259,11 @@ describe("reading the target for the seed (Р-B2-8)", () => {
       "refused",
     ],
     [
-      "an unlabelled row holds the primary code",
+      "an unlabelled row holds the primary code — refuses",
       [{ predefined_name: null, is_primary: null, code: "uk", state: null }],
       "refused",
     ],
-  ])("without the role columns: %s → %s", async (_, rows, status) => {
+  ])("without the role columns: %s", async (_, rows, status) => {
     const seed = await seedOf()
     const [read] = await readSeedTargetRows(
       tx(rows).fake,
