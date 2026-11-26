@@ -8,7 +8,10 @@ export {
 } from "../src/compiler/__tests__/fixtures/reference-domain"
 export * from "../src/compiler/__tests__/helpers"
 export * from "../src/model/runtime/__tests__/rich-text-cases"
-export { STARTER_KIT_SAMPLE } from "../src/model/runtime/__tests__/rich-text-sample"
+export {
+  STARTER_KIT_SAMPLE,
+  UNKNOWN_NODE_SAMPLE,
+} from "../src/model/runtime/__tests__/rich-text-sample"
 export * from "../src/compiler/__tests__/fixtures/promotion"
 export {
   ATTACHMENTS_TABLE,
@@ -24,6 +27,7 @@ export {
   commandCoreLayer,
   GAUGE_FILE,
   gaugeCasLayer,
+  gaugeRichTextLayer,
   gaugeLineCheckLayer,
   GAUGE_LOG_FILE,
   GAUGE_LOG_TABLE,
