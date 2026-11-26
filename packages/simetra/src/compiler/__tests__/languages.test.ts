@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
   catalog,
+  languagesCatalog,
   metaFiles,
   organization,
   project,
@@ -15,13 +16,7 @@ const SUBSCRIPTION = "event-subscriptions/Guard/Guard.meta.json"
 const HANDLER_FILE = "sql/app/guard.sql"
 
 const languages = (overrides: Record<string, unknown> = {}) =>
-  catalog("Languages", {
-    id: uuid(80),
-    role: "languages",
-    codeLength: 12,
-    autonumber: false,
-    ...overrides,
-  })
+  languagesCatalog({ id: uuid(80), ...overrides })
 
 const base = (overrides: Record<string, unknown> = {}) => ({
   [PROJECT]: project({ primaryDataLanguage: "uk" }),
