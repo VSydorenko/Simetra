@@ -207,6 +207,20 @@ export function recordActions(tabularSections: boolean): readonly KindAction[] {
 }
 
 /**
+ * The vocabulary of a record kind whose rows are never deleted or marked for
+ * deletion (the languages catalog role): read, create, update.
+ */
+export function noDeleteActions(
+  tabularSections: boolean
+): readonly KindAction[] {
+  return [
+    readAction,
+    createAction(tabularSections),
+    updateAction(tabularSections),
+  ]
+}
+
+/**
  * Direct requirements of an action plus the general edge: every action that
  * writes something requires `read`.
  */

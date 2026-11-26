@@ -973,6 +973,27 @@ describe("core: the epoch switch", () => {
     expect(states()[0]!.dueCause).toBeUndefined()
   })
 
+  // Пауза повтору — ще той самий політ (#465): `purge` у ній перезапускає
+  // завантаження як `mount`, а не дає повтору M8 принести прибраний рядок.
+  it("a purge in the pause of a discarded load re-runs it as mount, not as the retry", async () => {
+    const h = await proven()
+    h.fake.epoch = EA
+    seed(h.fake, 3, 3)
+    watch(h.core.view(keysView(3)))
+    await drain(h)
+    expect(h.inspect.versionEpochs().discards).toBe(1)
+    const started: unknown[] = []
+    h.inspect.watchAttempts((event) => {
+      if (event.phase === "started") started.push(event)
+    })
+    h.core.commit((w) => w.purge(TASK, { keys: [key(3)] }), h.core.token())
+    vi.advanceTimersByTime(DISCARD_PAUSE_MS)
+    await settle()
+    expect(started).toMatchObject([
+      { kind: "load", reason: "mount", site: "M6" },
+    ])
+  })
+
   it("a core close in the pause of a discarded load leaves no timer and sends nothing", async () => {
     const h = await proven()
     h.fake.epoch = EA

@@ -73,6 +73,7 @@ import { buildRightsGuardUnits } from "./rights/guard-units"
 import { snapshotExemptWriters } from "./rights/snapshot-exempt-writers"
 import { snapshotSources } from "./rights/snapshot-sources"
 import { scopeKindUnreadWarnings } from "./rights/scope-kind-warnings"
+import { selfSignUpWarnings } from "./rights/self-sign-up-warning"
 import {
   rootCreatedByCommand,
   rootCreatorAdminWarnings,
@@ -95,6 +96,7 @@ import { buildSignalUnits } from "./signal/units"
 import { buildStorageUnits } from "./platform/storage"
 import { buildRightsSignalUnits } from "./rights/signal-triggers"
 import { buildHierarchyUnits } from "./hierarchy-units"
+import { buildLanguageStateUnits } from "./language-state-units"
 import { buildMechanicsUnits } from "./mechanics-units"
 import { buildKeyUnits } from "./key-units"
 import { buildCarrierUnits } from "./rights/carrier-units"
@@ -801,6 +803,14 @@ export async function runStages(
       module,
       parse
     ),
+    ...buildLanguageStateUnits(
+      physical,
+      stage1.objects,
+      stage1.project.naming.attributeCase,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
     ...buildSubscriptionUnits(
       eventSubscriptions,
       physical,
@@ -1255,7 +1265,18 @@ export async function runStages(
   }
   // `ok` рахується над усіма діагностиками: помилки класу ремонту, що пізніші
   // за гейт стадій (`checkDeclaredGuards`), не закривали його в `repair`.
-  const final = sortDiagnostics([...diagnostics, ...budget])
+  // Самореєстрація відкриває межу «дійсного користувача» Інтернету (Р-D5-9):
+  // потрібен контракт доступу, тож попередження — після його побудови, на шляху
+  // до результату без раннього `return`.
+  const final = sortDiagnostics([
+    ...diagnostics,
+    ...budget,
+    ...selfSignUpWarnings(
+      { access, rights, roles, rightsProjection: projection.rows },
+      stage1.objects,
+      stage1.project
+    ),
+  ])
   return {
     ok: !hasErrors(final),
     diagnostics: final,

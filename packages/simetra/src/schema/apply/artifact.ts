@@ -48,13 +48,14 @@ import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
  * факти сервера й голову ledger цілі (спека промоції §8), сигнатури функцій
  * платформи (`platformFunctions`) — раннер виключає їх з `plpgsql_check` і
  * переліку сліпих — кроки копій носіїв (`origin: "carriers"`) та блок `versions`
- * (засів послідовності версій і епоха), кроки заповнення перед `NOT NULL`
+ * (засів послідовності версій і епоха), кроки засіву передвизначених рядків
+ * (`origin: "seeds"`), кроки заповнення перед `NOT NULL`
  * (`origin: "backfill"`) з кількістю `NULL` на плані й показаними тригерами
  * та колонки `notNull` кроків, що роблять колонку `NOT NULL` без заповнення,
  * з тим, що рахує сторож (`count`): раннер старішого формату не знав би
  * їхніх блоків.
  */
-export const PLAN_FORMAT = 9
+export const PLAN_FORMAT = 10
 
 /**
  * Таблиця одиниці, чиї дані план зберігає (спека промоції §7.2): імена до й
@@ -360,6 +361,7 @@ const stepSchema = z.strictObject({
     "backfill",
     "carriers",
     "versions",
+    "seeds",
     "environment",
   ]),
   sql: z.string(),

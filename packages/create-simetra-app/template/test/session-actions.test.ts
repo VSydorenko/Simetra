@@ -4,7 +4,13 @@ vi.mock("../src/server/data-fn", () => ({ dataFn: vi.fn() }))
 
 import { app } from "../src/app"
 import { createHostScope } from "../src/host-scope"
-import { signIn, signOut } from "../src/session-actions"
+import {
+  requestEmailCode,
+  signIn,
+  signInWithEmailCode,
+  signInWithProvider,
+  signOut,
+} from "../src/session-actions"
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -153,5 +159,74 @@ describe("signOut", () => {
     })
     expect(scope.holder.current()).toBe(runtime)
     runtime.dispose()
+  })
+})
+
+describe("requestEmailCode", () => {
+  it("posts the address with type sign-in", async () => {
+    const fetchMock = stubFetch(Response.json({ success: true }))
+    expect(await requestEmailCode("a@e2e.test")).toEqual({ ok: true })
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/email-otp/send-verification-otp",
+      expect.objectContaining({
+        body: JSON.stringify({ email: "a@e2e.test", type: "sign-in" }),
+      })
+    )
+  })
+
+  it.each([
+    [429, "command.rate-limited"],
+    [400, "command.forbidden"],
+    [500, "command.internal"],
+  ])("status %i gives %s", async (status, code) => {
+    stubFetch(new Response("x", { status }))
+    expect(await requestEmailCode("a@e2e.test")).toEqual({ ok: false, code })
+  })
+})
+
+describe("signInWithEmailCode", () => {
+  it("replaces the runtime like the password sign-in", async () => {
+    const scope = newScope()
+    const fetchMock = stubFetch(Response.json({ user: { id: "USER-C" } }))
+    expect(await signInWithEmailCode(scope, "c@e2e.test", "123456")).toEqual({
+      ok: true,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/sign-in/email-otp",
+      expect.objectContaining({
+        body: JSON.stringify({ email: "c@e2e.test", otp: "123456" }),
+      })
+    )
+    expect(scope.holder.current()?.subject).toBe("user-c")
+    scope.holder.current()?.dispose()
+  })
+
+  it("429 gives command.rate-limited and leaves the holder alone", async () => {
+    const scope = newScope()
+    stubFetch(new Response("x", { status: 429 }))
+    expect(await signInWithEmailCode(scope, "c@e2e.test", "1")).toEqual({
+      ok: false,
+      code: "command.rate-limited",
+    })
+    expect(scope.holder.current()).toBeUndefined()
+  })
+})
+
+describe("signInWithProvider", () => {
+  it("navigates to the url the server returned", async () => {
+    const navigate = vi.fn()
+    stubFetch(Response.json({ url: "https://idp.test/auth", redirect: true }))
+    expect(await signInWithProvider("google", navigate)).toEqual({ ok: true })
+    expect(navigate).toHaveBeenCalledWith("https://idp.test/auth")
+  })
+
+  it("a refusal does not navigate", async () => {
+    const navigate = vi.fn()
+    stubFetch(new Response("x", { status: 429 }))
+    expect(await signInWithProvider("google", navigate)).toEqual({
+      ok: false,
+      code: "command.rate-limited",
+    })
+    expect(navigate).not.toHaveBeenCalled()
   })
 })

@@ -400,7 +400,7 @@ describe("plan artifact", () => {
     expect(parsed.diagnostic.message).toMatch(
       /plan format 1 is not supported.*rebuild the plan/i
     )
-    expect(PLAN_FORMAT).toBe(9)
+    expect(PLAN_FORMAT).toBe(10)
   })
 
   it("asks to rebuild a plan of the second format", async () => {
@@ -510,6 +510,21 @@ describe("plan artifact", () => {
       diagnostic: {
         code: "apply.plan-format",
         params: { found: 8, supported: PLAN_FORMAT },
+      },
+    })
+  })
+
+  it("asks to rebuild a plan of the ninth format", async () => {
+    // Дев'ятий формат не знав кроків засіву (`origin: "seeds"`, Р-B2-7): його
+    // раннер не виконав би їхнього блоку
+    const artifact = await stampPlan(draft())
+    const old: Record<string, unknown> = { ...artifact, format: 9 }
+    expect(parsePlan(JSON.stringify(old))).toMatchObject({
+      ok: false,
+      reason: "format",
+      diagnostic: {
+        code: "apply.plan-format",
+        params: { found: 9, supported: PLAN_FORMAT },
       },
     })
   })

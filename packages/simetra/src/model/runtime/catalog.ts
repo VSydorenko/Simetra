@@ -399,6 +399,8 @@ export const runtimeCatalogSchema = z
     provider: z.enum(DATABASE_PROVIDERS),
     /** Проєкт має функції прав: клієнт шле `rights` і підписується на сигнали. */
     rightsSnapshot: z.literal(true).optional(),
+    /** Проєкт дозволяє самореєстрацію: host відмовляє старту `open` без нього. */
+    selfSignUp: z.literal(true).optional(),
     adoptedFacts: catalogAdoptedFactsSchema.optional(),
     objects: z.array(runtimeObjectSchema),
   })

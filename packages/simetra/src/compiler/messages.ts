@@ -312,23 +312,26 @@ const REHEARSAL_STALE: Readonly<Record<string, { en: string; uk: string }>> = {
   },
 }
 
-/** Причини `users.provision-unsafe`: що саме порушила б вставка провізії. */
+/**
+ * Причини `users.provision-unsafe` і `languages.seed-unsafe`: що саме порушила
+ * б платформна вставка рядка.
+ */
 const PROVISION_HAZARD: Readonly<Record<string, { en: string; uk: string }>> = {
   requiredWithoutDefault: {
     en: "it is required and has no defaultValue",
     uk: "він обов'язковий і не має defaultValue",
   },
   uniqueWithDefault: {
-    en: "it is unique and its defaultValue can be the same for different rows, so the second sign-up would duplicate it",
-    uk: "він унікальний, а його defaultValue може бути однаковим для різних рядків, тож друга реєстрація дала б дубль",
+    en: "it is unique and its defaultValue can be the same for different rows, so the second row would duplicate it",
+    uk: "він унікальний, а його defaultValue може бути однаковим для різних рядків, тож другий рядок дав би дубль",
   },
   defaultViolatesCheck: {
     en: "its defaultValue fails the attribute's own check",
     uk: "його defaultValue не проходить власну перевірку реквізиту",
   },
   rowRule: {
-    en: "a row rule cannot be proven statically to accept the provisioned row",
-    uk: "правило рядка статично не доводить, що прийме рядок провізії",
+    en: "a row rule cannot be proven statically to accept the row the platform inserts",
+    uk: "правило рядка статично не доводить, що прийме рядок, який вставляє платформа",
   },
 }
 
@@ -2591,6 +2594,92 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     },
   },
 
+  "languages.catalog-duplicate": {
+    en: (p) =>
+      `Catalog "${p.name}" is a second languages catalog: "${p.firstFile}" already has role languages`,
+    uk: (p) =>
+      `Довідник "${p.name}" — другий довідник мов: "${p.firstFile}" уже має роль languages`,
+    hint: {
+      en: "A project has one languages catalog: remove role from the other one.",
+      uk: "У проєкті один довідник мов: приберіть role з іншого.",
+    },
+  },
+  "languages.scope-not-none": {
+    en: (p) => `Languages catalog "${p.name}" must have scope "none"`,
+    uk: (p) => `Довідник мов "${p.name}" мусить мати scope "none"`,
+    hint: {
+      en: "Data languages are a property of the project, not of a tenant.",
+      uk: "Мови даних — властивість проєкту, а не тенанта.",
+    },
+  },
+  "languages.code-form": {
+    en: (p) =>
+      `Languages catalog "${p.name}" must have ${p.field} ${p.expected}`,
+    uk: (p) => `Довідник мов "${p.name}" мусить мати ${p.field} ${p.expected}`,
+    hint: {
+      en: "The role fixes the form of the code (a BCP 47 language tag): the platform does not override it silently.",
+      uk: "Роль задає форму коду (мовний тег BCP 47): платформа не перевизначає її мовчки.",
+    },
+  },
+  "languages.description-required": {
+    en: (p) => `Languages catalog "${p.name}" must have a description`,
+    uk: (p) => `Довідник мов "${p.name}" мусить мати найменування`,
+    hint: {
+      en: "The description is part of the guest grant on published languages: set descriptionLength above 0.",
+      uk: "Найменування входить у грант гостя на опубліковані мови: задайте descriptionLength більше 0.",
+    },
+  },
+  "languages.public-read": {
+    en: (p) =>
+      `Languages catalog "${p.name}" must not have publicRead: the role already lets a guest read published rows`,
+    uk: (p) =>
+      `Довідник мов "${p.name}" не може мати publicRead: роль уже дає гостю читання опублікованих рядків`,
+    hint: {
+      en: "publicRead would open rows in the draft state to a guest: remove it.",
+      uk: "publicRead відкрив би гостю рядки в стані draft: приберіть його.",
+    },
+  },
+  "languages.predefined-items": {
+    en: (p) =>
+      `Languages catalog "${p.name}" must not declare predefinedItems: the role derives the primary language row`,
+    uk: (p) =>
+      `Довідник мов "${p.name}" не може оголошувати predefinedItems: рядок основної мови виводить роль`,
+    hint: {
+      en: "Add other languages as data, not as predefined items.",
+      uk: "Додавайте інші мови даними, а не передвизначеними елементами.",
+    },
+  },
+  "languages.seed-unsafe": {
+    en: (p) =>
+      `${p.reason === "rowRule" ? `Row rule "${p.element}"` : `Attribute "${p.element}"`} of languages catalog "${p.name}" would break the seed of the primary language: ${(PROVISION_HAZARD[String(p.reason)] ?? { en: p.reason }).en}`,
+    uk: (p) =>
+      `${p.reason === "rowRule" ? `Правило рядка "${p.element}"` : `Реквізит "${p.element}"`} довідника мов "${p.name}" зірвав би засів основної мови: ${(PROVISION_HAZARD[String(p.reason)] ?? { uk: p.reason }).uk}`,
+    hint: {
+      en: "Apply seeds the primary language row with only the role columns, the code and the description: every other column must accept that row.",
+      uk: "Apply засіває рядок основної мови лише з колонками ролі, кодом і найменуванням: кожна інша колонка мусить прийняти такий рядок.",
+    },
+  },
+  "languages.primary-missing": {
+    en: (p) =>
+      `Languages catalog "${p.name}" has no primary language: the project declares no primaryDataLanguage`,
+    uk: (p) =>
+      `Довідник мов "${p.name}" не має основної мови: у проєкті немає primaryDataLanguage`,
+    hint: {
+      en: "Set primaryDataLanguage in project.meta.json to a language code.",
+      uk: "Задайте primaryDataLanguage у project.meta.json кодом мови.",
+    },
+  },
+  "languages.primary-without-catalog": {
+    en: (p) =>
+      `The project declares primaryDataLanguage "${p.language}", but no catalog has role languages`,
+    uk: (p) =>
+      `Проєкт оголошує primaryDataLanguage "${p.language}", але жоден довідник не має ролі languages`,
+    hint: {
+      en: "Add a catalog with role languages, or remove primaryDataLanguage.",
+      uk: "Додайте довідник із роллю languages або приберіть primaryDataLanguage.",
+    },
+  },
+
   "membership.not-scoped": {
     en: (p) =>
       `Catalog "${p.name}" has membership but no scope column of its own: it is unscoped or the root of its scope kind`,
@@ -3438,6 +3527,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Grant read on these objects to a role, or declare a role with fullAccess.",
       uk: "Надайте ролі читання цих об'єктів або оголосіть роль із fullAccess.",
+    },
+  },
+  "project.self-sign-up": {
+    en: (p) =>
+      `Open self sign-up lets anyone from the Internet become a signed-in user: objects open to every signed-in user (${p.objects || "none"}) and the grants of everyUser roles (${p.roles || "none"}) are exposed to them`,
+    uk: (p) =>
+      `Відкрита самореєстрація дає змогу будь-кому з Інтернету стати дійсним користувачем: йому відкрито об'єкти для кожного користувача (${p.objects || "немає"}) і гранти ролей everyUser (${p.roles || "немає"})`,
+    hint: {
+      en: "Check that these objects and grants are meant for anyone, or set selfSignUp to false.",
+      uk: "Переконайтеся, що ці об'єкти й гранти призначено для будь-кого, або вимкніть selfSignUp.",
     },
   },
   "rights.ownership-target": {
@@ -4497,6 +4596,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Make sure nobody changed the database outside the platform since the last apply, review the plan steps, and allow drift to apply.",
       uk: "Переконайтеся, що від останнього застосування базу ніхто не змінював повз платформу, перегляньте кроки плану й дозвольте drift, щоб застосувати.",
+    },
+  },
+  "apply.primary-language-changed": {
+    en: (p) =>
+      `The languages table ${p.table} on the target does not match the primary language "${p.language}" of the configuration: the primary language is assigned once, and the seed would not change it`,
+    uk: (p) =>
+      `Таблиця мов ${p.table} на цілі не відповідає основній мові "${p.language}" конфігурації: основну мову призначають один раз, і засів її не змінить`,
+    hint: {
+      en: "Restore primaryDataLanguage in project.meta.json to the code of the primary language in the database; a row with the primary code or the primary flag must be the seeded primary row.",
+      uk: "Поверніть primaryDataLanguage у project.meta.json до коду основної мови в базі; рядок з кодом основної чи ознакою основної має бути засіяним рядком основної мови.",
     },
   },
   "apply.plan-versions": {

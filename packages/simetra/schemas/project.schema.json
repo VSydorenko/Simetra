@@ -34,6 +34,11 @@
         "en"
       ]
     },
+    "primaryDataLanguage": {
+      "description": "Primary data language: code of the primary row of the languages catalog. Assigned once.",
+      "type": "string",
+      "pattern": "^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$"
+    },
     "defaultSchema": {
       "default": "public",
       "description": "PostgreSQL schema for objects that declare none.",
@@ -81,6 +86,10 @@
       "description": "IANA time zone in which the platform determines day, month, quarter and year.",
       "type": "string",
       "minLength": 1
+    },
+    "selfSignUp": {
+      "description": "Whether users may register themselves; enables the self sign-up warning and host start check.",
+      "type": "boolean"
     },
     "scopeKinds": {
       "default": [],

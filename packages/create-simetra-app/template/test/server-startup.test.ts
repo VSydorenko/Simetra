@@ -36,6 +36,41 @@ describe("server entry startup (spec 4.1)", () => {
     await expect(import("../src/server")).rejects.toThrow(/BETTER_AUTH_SECRET/)
   })
 
+  describe("sign-in refusals (Р-D5-2)", () => {
+    function catalog(extra: { selfSignUp?: true }) {
+      vi.doMock("../generated/runtime-catalog.json", () => ({
+        default: { snapshotHash: "h", ...extra },
+      }))
+    }
+    afterEach(() => vi.doUnmock("../generated/runtime-catalog.json"))
+
+    it("refuses open sign-up when the project does not allow it", async () => {
+      catalog({})
+      vi.stubEnv("SIMETRA_SIGN_UP", "open")
+      await expect(import("../src/server")).rejects.toThrow(/SIMETRA_SIGN_UP/)
+    })
+
+    it("imports with open sign-up the project allows", async () => {
+      catalog({ selfSignUp: true })
+      vi.stubEnv("SIMETRA_SIGN_UP", "open")
+      await expect(import("../src/server")).resolves.toBeDefined()
+    })
+
+    it("refuses email-code in production without a mail transport", async () => {
+      catalog({})
+      vi.stubEnv("SIMETRA_SIGN_IN_METHODS", "email-code")
+      await expect(import("../src/server")).rejects.toThrow(/appMailTransport/)
+    })
+
+    it("refuses a wrong sign-in setting", async () => {
+      catalog({})
+      vi.stubEnv("SIMETRA_SIGN_IN_METHODS", "telepathy")
+      await expect(import("../src/server")).rejects.toThrow(
+        /SIMETRA_SIGN_IN_METHODS/
+      )
+    })
+  })
+
   it("refuses to start with the signals url but without the keys", async () => {
     vi.stubEnv("SIMETRA_SIGNALS_URL", "wss://signals.test/connection/websocket")
     await expect(import("../src/server")).rejects.toThrow(/SIMETRA_SIGNALS/)

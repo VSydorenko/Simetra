@@ -1,7 +1,15 @@
 // Копії шаблону для гейтів складу збірки: збірка йде в окремій теці, тож гейти
 // не топчуть `template/.output` і не псують дерево контрольними витоками.
 import { execFile } from "node:child_process"
-import { cp, mkdir, readdir, readFile, rm, stat } from "node:fs/promises"
+import {
+  cp,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { promisify } from "node:util"
@@ -34,6 +42,41 @@ export async function copyTemplate(label: string): Promise<string> {
     verbatimSymlinks: true,
     filter: (source) => !/\/(\.output|\.nitro|\.tanstack)$/.test(source),
   })
+  return dir
+}
+
+/**
+ * Копія шаблону з підміненим `src/server/mail.ts` (Р-D5-5): модуль повертає
+ * захоплювач пошти e2e, файл якого лежить у копії поруч. Збірка D7 вмикає
+ * захоплювач лише так — у `src/**` шаблону гілки на це немає.
+ */
+export async function copyTemplateWithMailCapture(
+  label: string
+): Promise<string> {
+  const dir = await copyTemplate(label)
+  await cp(
+    join(PACKAGE, "e2e/mail-capture.ts"),
+    join(dir, "src/server/mail-capture.ts")
+  )
+  await writeFile(
+    join(dir, "src/server/mail.ts"),
+    `import { mailCapture } from "./mail-capture"
+
+export interface MailMessage {
+  to: string
+  subject: string
+  text: string
+}
+
+export interface MailTransport {
+  send(message: MailMessage): Promise<void>
+}
+
+export function appMailTransport(): MailTransport | undefined {
+  return mailCapture()
+}
+`
+  )
   return dir
 }
 

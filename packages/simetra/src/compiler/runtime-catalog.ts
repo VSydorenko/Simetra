@@ -19,7 +19,11 @@ import {
   type RuntimeSection,
   type ObjectTable,
 } from "simetra/model"
-import { isSignalObject, readBoundaries } from "./access-units"
+import {
+  isSignalObject,
+  publicReadRoleOf,
+  readBoundaries,
+} from "./access-units"
 import { canonicalize } from "./canonical"
 import { compareStrings } from "./diagnostics"
 import type {
@@ -97,6 +101,7 @@ export function buildRuntimeCatalog(model: CompiledModel): RuntimeCatalog {
     ...(hasRightsFunctions(model.contracts, model.project.database.provider)
       ? { rightsSnapshot: true as const, ...adoptedFactsOf(model) }
       : {}),
+    ...(model.project.selfSignUp ? { selfSignUp: true as const } : {}),
     objects: model.objects.flatMap((object): RuntimeObject[] => {
       const contract = contracts.get(object.id)
       if (contract === undefined) return []
@@ -137,10 +142,10 @@ export function kernelHashOf(operations: RuntimeObject["operations"]): string {
   return sha256HexSync(canonicalize(operations ?? {}))
 }
 
-// Роль — з `access.publicRead` (призначення ролей запиту): `anonymous` є лише
-// в `anon`, який відкриває обидві ролі; решта — `authenticated`. `publicRead`
-// — лише для форми, що відкриває всі рядки: умовний клієнт вважав би
-// відкритими й чернетки; умовна форма йде окремим полем `publicReadPublished`.
+// Роль — `publicReadRoleOf` над призначеннями контракту, єдиним місцем
+// розбору ролі. `publicRead` — лише для форми, що відкриває всі рядки: умовний
+// клієнт вважав би відкритими й чернетки; умовна форма йде окремим полем
+// `publicReadPublished`.
 function publicReadOf(
   model: CompiledModel,
   objectId: string,
@@ -154,9 +159,8 @@ function publicReadOf(
       a.table.name === table.name
   )
   if (access === undefined) return {}
-  const role = access.publicRead.includes("anonymous")
-    ? "anon"
-    : "authenticated"
+  const role = publicReadRoleOf(access.publicRead)
+  if (role === undefined) return {}
   if (opensEveryRow(access)) return { publicRead: role }
   if (opensPublishedRows(access)) return { publicReadPublished: role }
   return {}

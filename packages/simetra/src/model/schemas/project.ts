@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { appSchemaNameSchema } from "./pg-schema"
 import { localizedStringSchema } from "./localized-string"
+import { LANGUAGE_CODE_PATTERN } from "./language-code"
 import type { SchemaRule } from "./rules"
 import { ATTRIBUTE_CASES, elementNameSchema } from "./identity"
 import { NO_SCOPE, scopeKindSchema } from "./scope"
@@ -615,6 +616,19 @@ export const projectSchema = z
       .enum(["uk", "en"])
       .default("uk")
       .meta({ description: "Locale used when none is requested." }),
+    /**
+     * Основна мова даних (Р-B2-6): код довідника «Мови» з основним рядком.
+     * Окрема від `defaultLocale` (мова інтерфейсу, ADR-0113); призначається
+     * раз (`ASSIGNED_ONCE`).
+     */
+    primaryDataLanguage: z
+      .string()
+      .regex(new RegExp(LANGUAGE_CODE_PATTERN))
+      .optional()
+      .meta({
+        description:
+          "Primary data language: code of the primary row of the languages catalog. Assigned once.",
+      }),
     defaultSchema: appSchemaNameSchema.default("public").meta({
       description: "PostgreSQL schema for objects that declare none.",
     }),
@@ -644,6 +658,14 @@ export const projectSchema = z
     timezone: z.string().min(1).default("UTC").meta({
       description:
         "IANA time zone in which the platform determines day, month, quarter and year.",
+    }),
+    // Самореєстрація — рішення застосунку (D5, Р-D5-8): host при відкритій
+    // реєстрації перевіряє цей прапорець у каталозі рантайму. Без дефолту:
+    // дефолт потрапив би в канонічний знімок і змінив хеш кожного проєкту;
+    // відсутнє значення означає false.
+    selfSignUp: z.boolean().optional().meta({
+      description:
+        "Whether users may register themselves; enables the self sign-up warning and host start check.",
     }),
     scopeKinds: z.array(scopeKindSchema).default([]).meta({
       description:

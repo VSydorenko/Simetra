@@ -32,7 +32,12 @@ interface Holder {
 }
 
 interface State {
-  holders: Record<AssignedOnceField["on"], Map<string, Holder>>
+  holders: Record<
+    Exclude<AssignedOnceField["on"], "project">,
+    Map<string, Holder>
+  >
+  /** Корінь проєкту — тримач без `id`, ключ — `PROJECT_FILE`. */
+  projectHolders: Map<string, Holder>
   project?: Json
 }
 
@@ -85,7 +90,7 @@ function stateOf(files: ReadonlyMap<string, string>): State {
           resolveObject: (ref) => objectIds.get(`${ref.kind}:${ref.name}`),
         }
   const holders: State["holders"] = { object: new Map(), element: new Map() }
-  const add = (on: AssignedOnceField["on"], holder: Holder) => {
+  const add = (on: keyof State["holders"], holder: Holder) => {
     const id = holder.element.id
     if (typeof id === "string" && !holders[on].has(id)) {
       holders[on].set(id, holder)
@@ -105,14 +110,24 @@ function stateOf(files: ReadonlyMap<string, string>): State {
       add("element", { file: file.path, ...at, def: file.def, ctx })
     }
   }
+  const projectHolders = new Map<string, Holder>()
   if (project !== undefined) {
+    projectHolders.set(PROJECT_FILE, {
+      file: PROJECT_FILE,
+      pointer: "",
+      element: project,
+    })
     // Вид скоупу матеріалізується колонкою в таблицях, що його несуть.
     const ctx = contextOf(true)
     for (const at of elementsAt(project, "scopeKinds")) {
       add("element", { file: PROJECT_FILE, ...at, ctx })
     }
   }
-  return { holders, ...(project === undefined ? {} : { project }) }
+  return {
+    holders,
+    projectHolders,
+    ...(project === undefined ? {} : { project }),
+  }
 }
 
 /**
@@ -266,8 +281,12 @@ export function assignedOnceDiagnostics(
   const promotion = promotionOf(before, after)
   const result: Diagnostic[] = []
   for (const record of ASSIGNED_ONCE) {
-    for (const [id, now] of after.holders[record.on]) {
-      const was = before.holders[record.on].get(id)
+    const [nowHolders, wasHolders] =
+      record.on === "project"
+        ? [after.projectHolders, before.projectHolders]
+        : [after.holders[record.on], before.holders[record.on]]
+    for (const [id, now] of nowHolders) {
+      const was = wasHolders.get(id)
       if (was === undefined) continue
       const old = valueOf(record, was)
       const value = valueOf(record, now)

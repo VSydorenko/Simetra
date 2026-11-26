@@ -18,7 +18,6 @@ import { seed } from "../../template/scripts/seed.mjs"
 import {
   appDsns,
   appServerEnv,
-  assignClientOwner,
   buildTemplate,
   insertOwnClients,
   prepareDatabase,
@@ -181,7 +180,6 @@ async function createDemo(
       )
   )
   const [alice, bob] = DEMO_USERS.map((u) => ids.get(u.email)!)
-  await assignClientOwner(dsns.SIMETRA_OWNER_DATABASE_URL, [alice!, bob!])
   // `seed` дає спільний довідник `Country` і рядки Alice; рядки Bob — окремо,
   // з іншим префіксом коду
   await withClient(dsns.SIMETRA_OWNER_DATABASE_URL, (client) =>

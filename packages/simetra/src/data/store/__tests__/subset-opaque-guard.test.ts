@@ -67,6 +67,7 @@ const FIELDS = {
       "failures",
       "failedAt",
       "retryAt",
+      "answerPending",
       "rereadTail",
       "rereadWaiters",
       "needsRefresh",

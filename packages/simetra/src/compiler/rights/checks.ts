@@ -58,7 +58,7 @@ import {
   sourceLiteralFits,
   sourceLiteralType,
 } from "./facts"
-import { commandWriteColumns } from "./command-columns"
+import { commandWriteColumns, roleFixedColumns } from "./command-columns"
 import { hasRightsFunctions } from "./functions"
 import { must, projectTarget } from "./references"
 
@@ -243,7 +243,9 @@ function checkPublicRead(ctx: RightsCheckContext): Diagnostic[] {
  * чи не мала б хто її публікує. Кожна відмова судить сама, бо причини різні
  * й їх виправляють по-різному.
  */
-export function checkPublishedPublicRead(ctx: RightsCheckContext): Diagnostic[] {
+export function checkPublishedPublicRead(
+  ctx: RightsCheckContext
+): Diagnostic[] {
   const rightsFunctions = hasRightsFunctions(
     {
       roles: declarationsOf(ctx.objects, "role"),
@@ -1372,6 +1374,7 @@ function outsideCommandUpdate(
     attributeCase,
     main: true,
     users: usersCatalogOf(ctx.objects)?.id === objectId,
+    fixed: roleFixedColumns(object),
   })
   const updatable = new Set(update.map(idOf))
   return new Set(

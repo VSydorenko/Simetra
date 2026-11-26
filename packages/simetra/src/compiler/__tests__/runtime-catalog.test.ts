@@ -934,14 +934,14 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
   // (обчислений на коміті до неї). Зміна фікстури чи платформних таблиць
   // знімка (outbox сигналів) чи нові згенеровані одиниці (знімок прав клієнта, оракул сигналу,
   // функції відправки, виклик сигналу в ядрі, тригери сигналу прав, гілки каналів прав
-  // в оракулі, опції оболонки ядра, функція порожності `RichText`), нормалізовані колонки полів пошуку (і межа їхнього префікса) чи правило ідентичності одиниць (`sql/identity.ts`) змінюють і цей літерал.
+  // в оракулі, опції оболонки ядра, функція порожності `RichText`), нові контракти (передвизначені рядки до засіву), нормалізовані колонки полів пошуку (і межа їхнього префікса) чи правило ідентичності одиниць (`sql/identity.ts`) змінюють і цей літерал.
   it("stays outside the canonical snapshot and the hash", async () => {
     const { model: m } = await checksOf(policyDomain(runtimeValuesLayer()))
     expect(m.checkColumns.length).toBeGreaterThan(0)
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "bdae54116247adcad7c7d5bbb1a41be8f876e7fc577ce0ce9947168e169d276e"
+      "1397d17565c1b55e87e4d2d585086673f60b25785aa35b7089ad3f05651cc21b"
     )
   })
 })
@@ -1316,6 +1316,16 @@ describe("buildRuntimeCatalog: rights snapshot fields", () => {
     })
     const entry = stripped.objects.find((o) => o.id === first.id)!
     expect(entry).not.toHaveProperty("rights")
+  })
+
+  it("selfSignUp is carried only when the project sets it", () => {
+    const withFlag = (selfSignUp: boolean) =>
+      buildRuntimeCatalog({
+        ...model,
+        project: { ...model.project, selfSignUp },
+      })
+    expect(withFlag(true).selfSignUp).toBe(true)
+    expect(withFlag(false)).not.toHaveProperty("selfSignUp")
   })
 
   it("rightsSnapshot is set when the project has rights functions", () => {

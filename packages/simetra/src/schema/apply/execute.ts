@@ -288,6 +288,7 @@ const ORIGIN_ORDER = [
   "engine",
   "carriers",
   "versions",
+  "seeds",
   "environment",
 ] as const
 
@@ -1047,6 +1048,15 @@ async function runAttempt(
     phase("versions")
     await tx.query(RAISE_SYNCHRONOUS_COMMIT_SQL)
     await runVersionSteps(tx, versions, parse, (id) => phase("versions", id))
+  }
+  // 11в. Кроки засіву (Р-B2-7) — після DDL і блоку `versions`, тим самим
+  // раннером, що й копії: вставка мусить пройти тригери рядка (`origin`), а
+  // `row_security = off` під `FORCE ROW LEVEL SECURITY` не пропустить рядок
+  // мовчки. Фаза — лише для непорожнього блоку
+  const seeds = block("seeds")
+  if (seeds.length > 0) {
+    phase("seeds")
+    await runCarrierSteps(tx, seeds, parse, (id) => phase("seeds", id))
   }
   // 12. Кроки середовища (спека промоції §7.2) — під налаштуваннями
   // транзакції

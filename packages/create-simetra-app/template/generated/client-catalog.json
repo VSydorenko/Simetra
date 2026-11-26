@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "snapshotHash": "90b99f3a46917e4935dd0b8ecf7a4acc069909d1e7449ecf865204c4bdf4b5de",
+  "snapshotHash": "6c10b774b78f8fa683baf9a1e2b14aba8c3af13678ca7f6cf46d0a4a7637d651",
   "provider": "postgres",
   "rightsSnapshot": true,
   "objects": [
@@ -236,6 +236,7 @@
       "versionName": "version",
       "kernelHash": "ebc8521f858b032322f9308d7d4fea6e20bcc5121fd781a33a41992857e79a7a",
       "signal": true,
+      "publicRead": "authenticated",
       "rights": {
         "actions": [
           {

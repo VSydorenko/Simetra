@@ -10,6 +10,7 @@ import { withoutLocations, type SqlUnit } from "../sql/units"
 import {
   BULLETIN_TABLE,
   HOURS_TABLES,
+  LANGUAGES_TABLE,
   ORG_KIND_ID,
   PROJECT_FILE,
   REGION_DIMENSION_ID,
@@ -17,6 +18,7 @@ import {
   adoptedSourcesDomain,
   compiledPolicyDomain,
   globalConstant,
+  languagesLayer,
   policyDomain,
   regionDimension,
   snapshotSourcesDomain,
@@ -764,6 +766,48 @@ describe("rights_explain", () => {
       expect(rows.slice(2)).toEqual(readRows())
       expect(conjuncts(branch.whereClause)[3]).toEqual(exprTree(TASK_MEMBER))
     })
+  })
+
+  it("a languages catalog explains its published read next to the rights rows (Р-B2-5)", async () => {
+    // Пояснення ≡ RLS викликача (спека прав §5.1): політика
+    // `<t>_published_read` діє на роль запиту користувача, тож і її рядок є.
+    const languages = compiled(await compile(policyDomain(languagesLayer())))
+    const branch = branchOf(languages, LANGUAGES_TABLE)!
+    const rows = rowsOf(branch)
+    expect(rowNamed(rows, `${LANGUAGES_TABLE}_published_read`)).toEqual({
+      policy: `${LANGUAGES_TABLE}_published_read`,
+      kind: "permissive",
+      extent: null,
+      hasRight: TRUE,
+      carrierMatch: exprTree("r.state = 'published'"),
+      roles: NO_ROLES,
+    })
+    expect(explained(rows)).toEqual(selectPolicies(languages, LANGUAGES_TABLE))
+    // Без контракту прав рядки «Мов» відкриває лише ця політика — гілка
+    // лишається з одним її рядком, як у `publicRead`.
+    const own = languages.contracts.rights.find(
+      (c) => c.kindLabel === LANGUAGES_TABLE
+    )!
+    const units = buildExplainUnits(
+      {
+        ...languages.contracts,
+        scopeSetFunctions: [],
+        rights: languages.contracts.rights.filter((c) => c !== own),
+        access: languages.contracts.access.map((a) =>
+          a.objectId === own.objectId ? { ...a, rights: undefined } : a
+        ),
+        kindLabels: new Map(
+          languages.contracts.rights.map((c) => [c.objectId, c.kindLabel])
+        ),
+      },
+      languages.physical,
+      "supabase",
+      languages.project.name,
+      parse
+    )
+    expect(
+      rowsOf(branchOf({ ...languages, sqlUnits: units }, LANGUAGES_TABLE)!)
+    ).toEqual([rowNamed(rows, `${LANGUAGES_TABLE}_published_read`)])
   })
 
   it("registers and constants have no branch", async () => {

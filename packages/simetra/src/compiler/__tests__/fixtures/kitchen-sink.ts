@@ -202,10 +202,13 @@ export function kitchenSink(): Map<string, string> {
     name: "KitchenSink",
     title: text("KitchenSink"),
     defaultLocale: "en",
+    // Основна мова даних (Р-B2-6) — не мова інтерфейсу `defaultLocale`.
+    primaryDataLanguage: "uk",
     defaultSchema: "public",
     database: { provider: "supabase" },
     naming: { attributeCase: "camelCase" },
     timezone: "Europe/Kyiv",
+    selfSignUp: true,
     scopeKinds: [
       {
         id: id(),
@@ -1084,6 +1087,16 @@ export function kitchenSink(): Map<string, string> {
     },
   }
 
+  // Довідник даних-мов (Р-B2-1): форма коду й скоуп задані роллю. Оголошено
+  // останнім, щоб лічильник id не зсунув id решти фікстури.
+  const languages = {
+    ...header("Catalog", "Languages", "languages"),
+    scope: "none",
+    role: "languages",
+    codeLength: 12,
+    autonumber: false,
+  }
+
   const entries: Record<string, unknown> = {
     "project.meta.json": project,
     "catalogs/Organization/Organization.meta.json": organization,
@@ -1092,6 +1105,7 @@ export function kitchenSink(): Map<string, string> {
     "catalogs/Attachment/Attachment.meta.json": attachment,
     "catalogs/Users/Users.meta.json": users,
     "catalogs/Member/Member.meta.json": member,
+    "catalogs/Languages/Languages.meta.json": languages,
     "documents/Sale/Sale.meta.json": sale,
     "enumerations/Color/Color.meta.json": color,
     "information-registers/Prices/Prices.meta.json": prices,

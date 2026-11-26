@@ -170,3 +170,66 @@ export function signalsConfig(): SignalsConfig | undefined {
   }
   return { url, keys: parseKeys(keys) }
 }
+
+/** Провайдери OAuth шаблону (Р-D5-1); застосунок розширює перелік. */
+export const OAUTH_PROVIDERS: readonly string[] = ["google", "github"]
+
+const SIGN_UP_VARIABLE = "SIMETRA_SIGN_UP"
+const METHODS_VARIABLE = "SIMETRA_SIGN_IN_METHODS"
+
+export interface OAuthProviderSettings {
+  id: string
+  clientId: string
+  clientSecret: string
+}
+
+/** Способи входу й режим самореєстрації host-а (Р-D5-1). */
+export interface AuthSettings {
+  signUp: "closed" | "open"
+  password: boolean
+  emailCode: boolean
+  providers: OAuthProviderSettings[]
+}
+
+/**
+ * Читається під час виклику, як `signalsConfig`. Повідомлення називають змінну,
+ * але не її значення: поруч у оточенні лежать секрети провайдерів.
+ */
+export function authSettings(): AuthSettings {
+  const rawSignUp = process.env[SIGN_UP_VARIABLE]
+  const signUp =
+    rawSignUp === undefined || rawSignUp === "" ? "closed" : rawSignUp
+  if (signUp !== "closed" && signUp !== "open") {
+    throw new Error(`${SIGN_UP_VARIABLE} must be "closed" or "open"`)
+  }
+  const rawMethods = process.env[METHODS_VARIABLE]
+  // Типовий пароль — лише без змінної: порожній перелік дає пункт "" і
+  // відмову нижче (П4-D §4.1), а не мовчки ввімкнений пароль
+  const methods = new Set(
+    (rawMethods ?? "password").split(",").map((item) => item.trim())
+  )
+  const known = new Set(["password", "email-code", ...OAUTH_PROVIDERS])
+  for (const method of methods) {
+    if (!known.has(method)) {
+      throw new Error(
+        `${METHODS_VARIABLE} lists an unknown method; allowed: ${[...known].join(", ")}`
+      )
+    }
+  }
+  const providers = OAUTH_PROVIDERS.filter((id) => methods.has(id)).map(
+    (id): OAuthProviderSettings => {
+      const name = id.toUpperCase()
+      return {
+        id,
+        clientId: requiredEnv(`SIMETRA_OAUTH_${name}_CLIENT_ID`),
+        clientSecret: requiredEnv(`SIMETRA_OAUTH_${name}_CLIENT_SECRET`),
+      }
+    }
+  )
+  return {
+    signUp,
+    password: methods.has("password"),
+    emailCode: methods.has("email-code"),
+    providers,
+  }
+}

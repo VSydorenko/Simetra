@@ -33,8 +33,14 @@ export function namedCollections(
  * `effective` береться значення поля як є.
  */
 export interface AssignedOnceField {
-  on: "object" | "element"
-  field: "physicalName" | "kindLabel" | "schema" | "assignedOn"
+  /** `project` — корінь `project.meta.json`, тримач без `id`. */
+  on: "object" | "element" | "project"
+  field:
+    | "physicalName"
+    | "kindLabel"
+    | "schema"
+    | "assignedOn"
+    | "primaryDataLanguage"
   effective?: (
     raw: Readonly<Record<string, unknown>>,
     ctx: AssignedOnceContext
@@ -104,4 +110,6 @@ export const ASSIGNED_ONCE: readonly AssignedOnceField[] = [
   { on: "element", field: "physicalName" },
   // Рівень ролі (Рх20): запис діє для кожного об'єкта, що має поле.
   { on: "object", field: "assignedOn", effective: effectiveAssignedOn },
+  // Основна мова даних (Р-B2-6): зміна й видалення — відмова, поява — ні.
+  { on: "project", field: "primaryDataLanguage" },
 ]

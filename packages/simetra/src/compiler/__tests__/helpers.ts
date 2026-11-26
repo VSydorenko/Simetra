@@ -199,6 +199,16 @@ export function catalog(name: string, overrides: Record<string, unknown> = {}) {
   return object("Catalog", name, overrides)
 }
 
+/** Довідник ролі `languages` у формі, яку вимагає роль (Р-B2-1). */
+export function languagesCatalog(overrides: Record<string, unknown> = {}) {
+  return catalog("Languages", {
+    role: "languages",
+    codeLength: 12,
+    autonumber: false,
+    ...overrides,
+  })
+}
+
 export function document(
   name: string,
   overrides: Record<string, unknown> = {}

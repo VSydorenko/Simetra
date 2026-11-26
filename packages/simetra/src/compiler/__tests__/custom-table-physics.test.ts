@@ -359,6 +359,8 @@ describe("CustomTable physics round-trip", () => {
             "storage_quota",
             "storage_pending",
             "attachment",
+            // Довідник ролі «мови» фікстури: поза предметом цього дайджесту.
+            "languages",
           ].includes(t.name)
       ),
       enumTypes: physical.enumTypes,
