@@ -372,6 +372,14 @@ describe("closed: the session token is invalid (Р-SK1-5)", () => {
     expect(gate.admit(cause, target, "M1")).toEqual({ refused: "closed" })
   })
 
+  it("the timer query asks the same predicate, at the moment of the question", () => {
+    let valid = true
+    const gate = createGate({ token: () => ({ valid }) })
+    expect(gate.closed()).toBe(false)
+    valid = false
+    expect(gate.closed()).toBe(true)
+  })
+
   it("a condition without a state function never holds", () => {
     const gate = createGate({ token: () => OPEN })
     for (const code of SITE_CODES) {

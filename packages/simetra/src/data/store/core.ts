@@ -1612,9 +1612,9 @@ export function createCore(options: {
   let wave: { at: number; readonly objects: Set<ObjectName> } | undefined
   let lastWaveAt: number | undefined
   function joinWave(object: ObjectName) {
-    // Хвиля — строк планувальника: несумісний об'єкт у неї не йде (запит
-    // умови шлюзу для таймера, Р-SK1-9).
-    if (!session.token().valid || gate.staleObject(object)) return
+    // Хвиля — строк планувальника: закрита сесія й несумісний об'єкт у неї не
+    // йдуть (запити умов шлюзу для таймера, Р-SK1-9).
+    if (gate.closed() || gate.staleObject(object)) return
     // Мутація самотесту: хвилі немає — ні читання, ні вимоги, ні строку.
     if (defects.has("rejoin-wave-no-read")) return
     if (wave === undefined) {
@@ -1756,8 +1756,9 @@ export function createCore(options: {
     for (const o of objects.values()) {
       for (const key of o.rows.keys()) rowViews.touch(o.name, key)
       // Несумісний об'єкт не перечитується (§10): його вигляди лишаються в
-      // стані `isStale`, а не переходять в `error`.
-      if (staleObjects.has(o.name)) continue
+      // стані `isStale`, а не переходять в `error`. Строк R1 — запит умови
+      // шлюзу для таймера (Р-SK1-9).
+      if (gate.staleObject(o.name)) continue
       if (scheduled.get(o.name)?.whole !== undefined) continue
       if (!activeViews(writerContext, o.name).some((v) => v.visible)) continue
       schedule(
@@ -1887,7 +1888,8 @@ export function createCore(options: {
         if (at !== undefined && (due === undefined || at < due)) due = at
     }
     for (const o of objects.values()) {
-      if (staleObjects.has(o.name)) continue
+      // Строк виглядів несумісного об'єкта — запит шлюзу для таймера (Р-SK1-9).
+      if (gate.staleObject(o.name)) continue
       const at = nextViewDue(writerContext, o.name)
       if (at !== undefined && (due === undefined || at < due)) due = at
     }
@@ -1933,7 +1935,7 @@ export function createCore(options: {
       let read = false
       for (const o of objects.values())
         if (
-          !staleObjects.has(o.name) &&
+          !gate.staleObject(o.name) &&
           hasDueViews(writerContext, o.name, minAgeMs)
         )
           read = true
@@ -2154,7 +2156,8 @@ export function createCore(options: {
     freshness: {
       lastTickAt: () => lastTickAt,
       requestReread(names, { jitterMs }) {
-        if (!session.token().valid) return
+        // Строк R1 — запит умови шлюзу для таймера (Р-SK1-9).
+        if (gate.closed()) return
         for (const name of names)
           schedule(name, Math.floor(Math.random() * jitterMs), {
             reason: "requirement",

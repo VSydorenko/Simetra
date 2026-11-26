@@ -135,6 +135,12 @@ export interface Gate {
   admit(cause: ReadCause, target: ReadTarget, site: SiteCode): Admission
   issued(flight: Flight): boolean
   /**
+   * Запит умови `closed` поза `admit` (Р-SK1-9): таймери, що не ставлять
+   * строку закритій сесії (хвиля приєднання, `freshness.requestReread`).
+   * Той самий предикат, що судить `admit`: токен сесії недійсний (Р-SK1-5).
+   */
+  closed(): boolean
+  /**
    * Запит умови `stale-object` поза `admit` (Р-SK1-9): пізня відмова частин
    * уже допущеного польоту (`dispatch`, збирач, джерело, Р-SK1-6) і таймери,
    * що не ставлять строку несумісному об'єкту. Той самий предикат, що судить
@@ -236,6 +242,7 @@ export function createGate(state: GateState): Gate {
       } as Permit
     },
     issued: (flight) => registry.get(flight)?.gate === gate,
+    closed: () => !state.token().valid,
     staleObject: (object) => state.staleObject?.(object) === true,
     discardBound: () => state.discardBound?.() === true,
     settledPastBound: () => state.discardBound?.() === true,
