@@ -439,6 +439,61 @@ describe("the rejoin wave", () => {
     expect(requestsSince(h)).toHaveLength(1)
   })
 
+  // Об'єкт, що став несумісним, поки хвиля чекала, пропускає іменована
+  // перевірка `fireWave`, а несумісного до приєднання `joinWave` не бере
+  // (запит умови шлюзу): ні `commit` позначок, ні слухача, ні сплеску, а
+  // `sync()` до спрацювання — як у `main`. Контроль — та сама хвиля без
+  // позначки.
+  it.each([
+    ["live", "live"],
+    ["marked stale-client after the join", "after"],
+    ["marked stale-client before the join", "before"],
+  ] as const)(
+    "a wave over an object %s: marks, the signal read and the burst follow the object",
+    async (_, mark) => {
+      const stale = mark !== "live"
+      const h = await open(full)
+      const seen: string[] = []
+      h.inspect.watchSignalReads((object, signal) => {
+        if (signal.by === "wave") seen.push(object)
+      })
+      const requirementsOf = () =>
+        h.inspect
+          .sync()
+          .filter((t) => t.target.kind === "view")
+          .map((t) => t.requirements.map((r) => r.kind))
+      if (mark === "before") h.core.staleClient(TASK)
+      h.transport.join(channel, false)
+      if (mark === "after") h.core.staleClient(TASK)
+      await settle()
+      // До спрацювання хвиля чекає й над несумісним об'єктом, приєднаним
+      // раніше за позначку.
+      expect(requirementsOf()).toEqual([
+        mark === "before" ? [] : ["channel-rejoin"],
+      ])
+      const logged = h.log.length
+      const from = h.fake.log.length
+      await advance(REJOIN_JITTER_MS)
+      const bursts = h.log
+        .slice(logged)
+        .filter((e) => e.kind === "revalidate-burst")
+      const taskReads = h.fake.log
+        .slice(from)
+        .filter((r) => r.query?.object.name === "Task")
+      if (stale) {
+        expect(seen).toEqual([])
+        expect(bursts).toEqual([])
+        expect(taskReads).toEqual([])
+        // Позначки «склад не підтверджено» хвиля не ставить.
+        expect(requirementsOf()).toEqual([[]])
+      } else {
+        expect(seen).toEqual([TASK])
+        expect(bursts).toHaveLength(1)
+        expect(taskReads).toHaveLength(1)
+      }
+    }
+  )
+
   it("sends nothing and leaves no timer when the core closes during the jitter", async () => {
     const h = await open(keysView(key(1)))
     h.transport.join(channel, false)

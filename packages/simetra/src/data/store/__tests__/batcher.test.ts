@@ -11,7 +11,9 @@ import {
   type CorePart,
   type CoreReadItem,
   type CoreSource,
+  type ReadOptions,
 } from "../source"
+import type { ReadEvent } from "../source"
 import type { ViewSpec } from "../types"
 import {
   ORG,
@@ -28,8 +30,8 @@ import { task } from "./core-support"
 
 /*
  * Збирач читань (спека П4-B §6.7): вікно — одна мікрозадача, таймера немає;
- * `close()` синхронний (І7); частина об'єкта, закритого `refuse`, на сервер
- * не йде (І8); значення `version` застосовується до видачі частин даних (Р3).
+ * `close()` синхронний (І7); частина об'єкта, який пізня відмова шлюзу
+ * (`staleObject`) називає на скиданні, на сервер не йде (І8); значення `version` застосовується до видачі частин даних (Р3).
  */
 
 beforeEach(() => {
@@ -60,11 +62,12 @@ function recording(
   answer?: (parts: readonly CorePart[]) => Promise<{ items: CoreReadItem[] }>
 ) {
   const calls: (readonly CorePart[])[] = []
-  const refused: string[] = []
+  const options: ReadOptions[] = []
   let closed = 0
   const source: CoreSource = {
-    read: (parts) => {
+    read: (parts, readOptions) => {
       calls.push(parts)
+      options.push(readOptions)
       return (
         answer?.(parts) ??
         Promise.resolve({
@@ -77,14 +80,25 @@ function recording(
       )
     },
     run: () => Promise.reject(new Error("unexpected run")),
-    refuse: (object) => {
-      refused.push(object)
-    },
     close: () => {
       closed++
     },
   }
-  return { source, calls, refused, closed: () => closed }
+  return { source, calls, options, closed: () => closed }
+}
+
+/** Пізня відмова шлюзу, якою тест позначає об'єкти несумісними. */
+function staleGate() {
+  const stale = new Set<string>()
+  const asked: string[] = []
+  return {
+    stale,
+    asked,
+    staleObject: (object: string) => {
+      asked.push(object)
+      return stale.has(object)
+    },
+  }
 }
 
 const SLEEP = () => Promise.resolve()
@@ -134,13 +148,23 @@ describe("createBatcher: the window", () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it("passes run and refuse past the queue, without a delay", () => {
+  it("asks the late refusal of the gate synchronously at the flush, not at queueing, and passes it to the source", async () => {
     const r = recording()
-    const batcher = createBatcher(r.source, { sleep: SLEEP })
-    void batcher.read([query(TASK_REF, 1)])
-    batcher.refuse?.("Catalog.Task")
-    expect(r.refused).toEqual(["Catalog.Task"])
+    const g = staleGate()
+    const batcher = createBatcher(r.source, {
+      sleep: SLEEP,
+      staleObject: g.staleObject,
+    })
+    const read = batcher.read([query(TASK_REF, 1), VERSION])
+    expect(g.asked).toEqual([])
     expect(r.calls).toHaveLength(0)
+    await Promise.resolve()
+    // Скидання — мікрозадача: предикат питано до відправки, один раз на
+    // частину з об'єктом.
+    expect(g.asked).toEqual(["Catalog.Task"])
+    await read
+    expect(r.calls).toHaveLength(1)
+    expect(r.options[0]!.staleObject).toBe(g.staleObject)
   })
 
   it("tells whether a version part waits in the queue", async () => {
@@ -182,9 +206,13 @@ describe("createBatcher: close() with parts queued (I7)", () => {
 describe("createBatcher: an object refused while its part queued (I8)", () => {
   it("does not send the part, answers it stale-client, and sends the others", async () => {
     const r = recording()
-    const batcher = createBatcher(r.source, { sleep: SLEEP })
+    const g = staleGate()
+    const batcher = createBatcher(r.source, {
+      sleep: SLEEP,
+      staleObject: g.staleObject,
+    })
     const read = batcher.read([query(TASK_REF, 1), query(ORG_REF, 2)])
-    batcher.refuse?.("Catalog.Task")
+    g.stale.add("Catalog.Task")
     const { items } = await read
     expect(r.calls).toEqual([[query(ORG_REF, 2)]])
     expect(items[0]).toEqual({
@@ -196,9 +224,13 @@ describe("createBatcher: an object refused while its part queued (I8)", () => {
 
   it("sends nothing at all when every queued part is refused", async () => {
     const r = recording()
-    const batcher = createBatcher(r.source, { sleep: SLEEP })
+    const g = staleGate()
+    const batcher = createBatcher(r.source, {
+      sleep: SLEEP,
+      staleObject: g.staleObject,
+    })
     const read = batcher.read([query(TASK_REF, 1)])
-    batcher.refuse?.("Catalog.Task")
+    g.stale.add("Catalog.Task")
     const { items } = await read
     expect(r.calls).toHaveLength(0)
     expect(items).toHaveLength(1)
@@ -381,6 +413,69 @@ describe("the core over the batcher", () => {
     await settle()
     expect(readsOf(fake, TASK)).toHaveLength(0)
     expect(handle.getSnapshot()).toMatchObject({ isStale: true })
+  })
+
+  // Пізня відмова (Р-SK1-6): шлюз дав дозвіл, частина пішла з `dispatch`, а
+  // об'єкт став несумісним до відправки — той самий предикат шлюзу на
+  // скиданні збирача відмовляє їй без запиту.
+  it("a part admitted before its object turns stale-client, still in the batcher: refused at the flush without a request", async () => {
+    const { core, fake, inspect } = setup()
+    seed(fake, 1, 1)
+    const attempts: unknown[] = []
+    inspect.watchAttempts((event) => attempts.push(event))
+    const handle = core.view(list)
+    watch(handle)
+    expect(attempts).toMatchObject([{ phase: "started", site: "M1" }])
+    core.staleClient(TASK)
+    await settle()
+    expect(readsOf(fake, TASK)).toHaveLength(0)
+    expect(attempts).toMatchObject([
+      { phase: "started", site: "M1" },
+      { phase: "settled", error: "command.stale-client" },
+    ])
+    expect(handle.getSnapshot()).toMatchObject({ isStale: true })
+  })
+
+  // Липкість відмови — лише позначка ядра: частину, що стоїть у черзі
+  // збирача, відмовляє скидання, а частину в черзі обмежувача — старт її
+  // задачі; задача без живих частин бере номер запиту без відправки.
+  it("parts queued in the batcher and in the limiter before markStale: both refused, the limiter task takes a request number", async () => {
+    const { core, fake, inspect } = setup({ limits: { readParallel: 1 } })
+    seed(fake, 1, 2)
+    fake.insert(ORG, { ref: S })
+    const events: ReadEvent[] = []
+    inspect.watchReads((event) => events.push(event))
+    fake.hold = () => true
+    // Перший запит займає єдиний слот обмежувача, доки не відповімо.
+    watch(core.view({ kind: "keys", object: ORG, keys: [S] }))
+    await settle()
+    // Частина задач минула скидання й чекає слота обмежувача.
+    const inLimiter = core.view(list)
+    watch(inLimiter)
+    await settle()
+    // Частина задач у черзі збирача: скидання — наступна мікрозадача.
+    const inBatcher = core.view({ kind: "keys", object: TASK, keys: [key(2)] })
+    watch(inBatcher)
+    core.staleClient(TASK)
+    fake.hold = undefined
+    fake.deliverAll()
+    await settle()
+    fake.deliverAll()
+    await settle()
+    expect(readsOf(fake, TASK)).toHaveLength(0)
+    expect(inLimiter.getSnapshot()).toMatchObject({ isStale: true })
+    expect(inBatcher.getSnapshot()).toMatchObject({ isStale: true })
+    // Подій задач немає; задача обмежувача взяла номер між запитами ORG і
+    // `version`, яку просить позначка.
+    expect(
+      events.map((e) => [
+        "object" in e.target ? e.target.object : e.target.service,
+        e.request,
+      ])
+    ).toEqual([
+      [ORG, 1],
+      ["version", 3],
+    ])
   })
 
   it("I7: dispose with parts queued sends no request and writes nothing", async () => {

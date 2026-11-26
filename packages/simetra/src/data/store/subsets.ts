@@ -35,9 +35,11 @@ import {
   type RowViews,
 } from "./snapshot"
 import { ReadLimiterClosed, settle, type StoreSource } from "./source"
+import { isPermit, type Permit } from "./sync/flight"
 import type {
   AdmissionCondition,
   ReadCause,
+  ReadTarget,
   ReadWhy,
   SettleOutcome,
 } from "./sync/vocabulary"
@@ -64,8 +66,11 @@ import type {
 
 export interface RegistryContext {
   readonly session: Session
-  /** The tab is visible (`suspend` / `resume`, §8.4). */
-  readonly tabVisible: () => boolean
+  /**
+   * The gate's query of `tab-hidden` (Р-SK1-8): the page settle point and the
+   * public `needsRefresh` ask it, not the tab state.
+   */
+  readonly tabHidden: () => boolean
   readonly source: StoreSource
   readonly index: CatalogIndex
   readonly limits: CoreLimits
@@ -312,51 +317,31 @@ function liftRequirement(s: Subset, readEpoch: number): void {
     s.unconfirmedSince = undefined
 }
 
-/** What the requirement rule reads of the session and the tab. */
-export interface RequirementEnv {
-  readonly versions: Pick<Session["versions"], "unavailable">
-  /** The tab is visible: on a hidden tab nothing is sent (§12, Р8). */
-  readonly tabVisible: () => boolean
-}
-
 /**
  * The view requirement stands and waits for a read nobody else promises
- * (P4-B spec §8.4, item 7): the view is visible on a visible tab, no read of
- * it started at the requirement's epoch or later is in flight or queued after
- * the current one (a `revalidate` tail, a trailing load), it is not in the
- * failure pause and the session is not out of the discard limit.
+ * (P4-B spec §8.4, item 7): the view is visible, no read of it started at the
+ * requirement's epoch or later is in flight or queued after the current one
+ * (a `revalidate` tail, a trailing load), it is not in the failure pause. The
+ * hidden tab and the discard limit of the session are judged by the gate at
+ * the read (§5.3, Р-SK1-7, Р-SK1-8).
  */
-export function requirementPending(s: Subset, env: RequirementEnv): boolean {
-  return requirementHold(s, env) === undefined
+export function requirementPending(s: Subset): boolean {
+  return requirementHold(s) === undefined
 }
 
 /**
  * Why the view requirement «composition not confirmed» is not read now — the
  * one decision of `requirementPending` and of the settle point, named by the
  * condition of the gate (§5.3); `undefined` — it is pending: read it now.
- * `"absent"` — no requirement. Test diagnostics (`sync()`) read the same.
+ * `"absent"` — no requirement. Test diagnostics (`sync()`) combine it with the
+ * gate's `tab-hidden`.
  */
 export function requirementHold(
-  s: Subset,
-  env: RequirementEnv
+  s: Subset
 ):
   | "absent"
-  | Extract<
-      AdmissionCondition,
-      | "tab-hidden"
-      | "target-invisible"
-      | "promised"
-      | "paused"
-      | "discard-bound"
-    >
+  | Extract<AdmissionCondition, "target-invisible" | "promised" | "paused">
   | undefined {
-  if (s.unconfirmedSince === undefined) return "absent"
-  if (!env.tabVisible()) return "tab-hidden"
-  return holdWithoutTab(s, env)
-}
-
-// Те саме без вкладки: вимога чекає читання, яке ніхто інший не обіцяє.
-function holdWithoutTab(s: Subset, env: RequirementEnv) {
   const since = s.unconfirmedSince
   if (since === undefined) return "absent"
   if (!(s.visible ?? s.listeners.size > 0)) return "target-invisible"
@@ -368,29 +353,22 @@ function holdWithoutTab(s: Subset, env: RequirementEnv) {
   // би другим читанням того самого.
   if (s.rereadTail !== undefined || s.trailing !== undefined) return "promised"
   // Збій читання повторює пауза збоїв (планувальник), не негайне коло.
-  if (s.failures > 0) return "paused"
-  // Після межі відкинутих жодне читання не має шансу (§6.2).
-  return env.versions.unavailable() ? "discard-bound" : undefined
+  // Межу відкинутих і вкладку судить шлюз у мить читання (M7, R13, R18;
+  // Р-SK1-7, Р-SK1-8).
+  return s.failures > 0 ? "paused" : undefined
 }
-
-const waitsForRead = (s: Subset, env: RequirementEnv): boolean =>
-  holdWithoutTab(s, env) === undefined
 
 /**
  * The settle point of a read that confirms the whole view (its load or a
  * system re-read; P4-B spec §8.4, item 7): lifts the requirement when the
  * read started at its epoch or later; else, when it is pending, the caller
- * repeats the read (`true`). On a hidden tab the view takes the invisible
- * branch instead: no repeat, the snapshot derives `needsRefresh` from the
- * requirement, and `resume()` reads it.
+ * repeats the read (`true`). On a hidden tab the gate defers the repeat:
+ * the snapshot derives `needsRefresh` from the requirement, and `resume()`
+ * reads it.
  */
-export function settleRequirement(
-  s: Subset,
-  readEpoch: number,
-  env: RequirementEnv
-): boolean {
+export function settleRequirement(s: Subset, readEpoch: number): boolean {
   liftRequirement(s, readEpoch)
-  return waitsForRead(s, env) && env.tabVisible()
+  return requirementPending(s)
 }
 
 /**
@@ -410,6 +388,7 @@ const CHECK_AFTER_COMMIT: ReadWhy = {
   site: "M4",
 }
 const USER_LOAD: ReadWhy = { reason: "user", site: "M5" }
+const USER_PAGE: ReadWhy = { reason: "user", site: "P1" }
 
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
 
@@ -442,6 +421,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   // Кеш знімка картки без утримання — на хендл мемо; закриття його чистить.
   const idleCaches = new Map<string, { snapshot?: ViewSnapshot }>()
   const isClosed = () => ctx.closedSnapshot() !== undefined
+  // Рішення читати вигляд чи сторінку — шлюзу (§5.3), не шляху.
+  const admitView = (why: ReadWhy, target: ReadTarget) => {
+    const { site, ...cause } = why
+    return ctx.source.admit(cause, target, site)
+  }
 
   // ------------------------------------------------------------ завантаження
 
@@ -475,10 +459,6 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   // не лічильник: кожна спроба стартує не раніше e, а нову вимогу з
   // відповіді ставить лише надгробок, новіший за її старт, — їх скінченно.
   // Збій читання сюди не доходить: його повторює пауза збоїв.
-  const requirementEnv: RequirementEnv = {
-    versions: session.versions,
-    tabVisible: ctx.tabVisible,
-  }
   function confirm(s: Subset, readEpoch: number, lifts: boolean): boolean {
     if (!lifts) {
       if (
@@ -489,9 +469,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         return false
       // Прихована вкладка й тут — гілка невидимого (§12, Р8): без запиту;
       // `needsRefresh` знімок виводить із вимоги, а `resume()` читає вигляд.
-      return ctx.tabVisible()
+      // Іменована перевірка, наслідок осідання (рішення архітекторки 25.11):
+      // вона судить не читання (P3 відкладає шлюз), а мить зняття позначки
+      // сторінки — у цьому `commit`, до сповіщення.
+      return !ctx.tabHidden()
     }
-    return settleRequirement(s, readEpoch, requirementEnv)
+    return settleRequirement(s, readEpoch)
   }
 
   function resolveWaiters(s: Subset) {
@@ -499,7 +482,16 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   }
 
   function load(s: Subset, why: ReadWhy) {
-    if (!s.alive || isClosed() || s.purged) return
+    if (!s.alive || s.purged) return
+    const target = {
+      kind: "view",
+      object: s.form.object.name,
+      id: s.targetId,
+    } as const
+    // Рішення читати — шлюзу (§5.3): закрита сесія відмовляє тут, до черги
+    // `trailing` і до будь-якого запису стану.
+    const admitted = admitView(why, target)
+    if (!isPermit(admitted)) return
     if (s.flight !== undefined) {
       queueTrailing(s, why)
       return
@@ -525,7 +517,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     )
     // Відкинута відповідь — те саме завантаження з паузою, що зростає:
     // покоління й політ не змінюються, тож це й далі дія, що його почала.
-    const attempt = (why: ReadWhy): Promise<void> => {
+    // Повтор тієї самої дії питає шлюз у мить рішення, після дочірнього токена.
+    const retry = (site: "M7" | "M8") => {
+      const again = admitView({ reason: "retry", site }, target)
+      return isPermit(again) ? attempt(again) : undefined
+    }
+    const attempt = (permit: Permit): Promise<void> => {
+      const { why } = permit
       const readEpoch = session.epochs.now()
       s.flightEpoch = readEpoch
       const startedAt = ctx.now()
@@ -536,28 +534,18 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       let discarded = false
       let again = false
       const lease = ctx.source.lease()
-      const target = {
-        kind: "view",
-        object: s.form.object.name,
-        id: s.targetId,
-      } as const
       const number = ctx.attempts.start("load", target, why)
       // Наслідок осідання (§5.5); `commit` не пройшов — токен недійсний.
       let outcome: SettleOutcome = "applied"
       let detail: SettleDetail | undefined
       const lost = (): SettleOutcome =>
         !session.token().valid ? "closed" : !s.alive ? "evicted" : "after-purge"
-      const { site, ...cause } = why
       return readForm(
         ctx,
         s,
         readEpoch,
         token,
-        ctx.source.admit(cause, target, site, {
-          attempt: number,
-          caller: s,
-          lease,
-        })
+        permit.flight({ attempt: number, caller: s, lease })
       ).then(
         (apply) => {
           settle(lease, () => {
@@ -608,12 +596,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             )
           })
           // Вимога стала, поки летіло читання (M7): повтор тієї самої дії.
-          if (again && token.valid)
-            return attempt({ reason: "retry", site: "M7" })
+          if (again && token.valid) return retry("M7")
           if (!discarded || !token.valid) return
           // Цей прохід вичерпав межу (лічильник рухається після commit):
-          // повтору не буде, вигляд — `command.unavailable`.
-          if (session.versions.unavailable()) {
+          // повтору не буде, вигляд — `command.unavailable`. Наслідок осідання
+          // за межею (Р-SK1-7); повтор M8 після паузи судить шлюз.
+          if (ctx.source.settledPastBound()) {
             session.commit(
               () => {
                 s.status = "error"
@@ -636,9 +624,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             : session.sleep(pause)
           return slept.then(() => {
             s.retryAt = undefined
-            return token.valid
-              ? attempt({ reason: "retry", site: "M8" })
-              : undefined
+            return token.valid ? retry("M8") : undefined
           })
         },
         (error: unknown) =>
@@ -674,7 +660,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
-    void attempt(why).finally(() => {
+    void attempt(admitted).finally(() => {
       if (s.flight !== gen) return
       s.flight = undefined
       s.flightCause = undefined
@@ -685,7 +671,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       s.settled = true
       resolveWaiters(s)
       const queued = s.trailing
-      if (queued !== undefined && s.alive && !isClosed()) {
+      // Закриття гасить `alive` (`close()` реєстру), а `closed` наступного
+      // завантаження судить шлюз у `load`.
+      if (queued !== undefined && s.alive) {
         s.trailing = undefined
         load(s, { ...queued, site: "M6" })
       }
@@ -699,7 +687,6 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         s.recheck = undefined
         if (
           s.alive &&
-          !isClosed() &&
           (s.listeners.size > 0 || !ctx.defects.has("recheck-needs-listeners"))
         )
           queueCheck(s, true, rechecked)
@@ -755,7 +742,14 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
    */
   function loadMore(s: Subset, direction: "after" | "before") {
     const w = s.window
-    if (w === undefined || !s.alive || isClosed() || s.purged) return
+    if (w === undefined || !s.alive || s.purged) return
+    const target = {
+      kind: "page",
+      object: s.form.object.name,
+      id: s.targetId,
+    } as const
+    const admitted = admitView(USER_PAGE, target)
+    if (!isPermit(admitted)) return
     if (direction === "after" ? s.atEnd : w.atStart) return
     if (s.paging.has(direction)) return
     const edge = edgeCursor(s, direction)
@@ -782,32 +776,28 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     // Сторінка, яку записала попередня спроба цього читання: повтор за
     // вимогою «склад не підтверджено» (П15) стає на її місце.
     let written: number | undefined
-    const attempt = (why: ReadWhy): Promise<void> => {
+    // Повтор сторінки питає шлюз у мить рішення, після дочірнього токена.
+    const retry = (site: "P2" | "P3") => {
+      const again = admitView({ reason: "retry", site }, target)
+      return isPermit(again) ? attempt(again) : undefined
+    }
+    const attempt = (permit: Permit): Promise<void> => {
+      const { why } = permit
       const readEpoch = session.epochs.now()
       let discarded = false
       let again = false
       const lease = ctx.source.lease()
-      const target = {
-        kind: "page",
-        object: s.form.object.name,
-        id: s.targetId,
-      } as const
       const number = ctx.attempts.start("page", target, why)
       let outcome: SettleOutcome = "applied"
       let detail: SettleDetail | undefined
       const lost = (): SettleOutcome =>
         !session.token().valid ? "closed" : !s.alive ? "evicted" : "after-purge"
-      const { site, ...cause } = why
       return gated(
         ctx,
         readEpoch,
         (c) =>
           readWindowMore(c, s, readEpoch, token, direction, cursor, written),
-        ctx.source.admit(cause, target, site, {
-          attempt: number,
-          caller: s,
-          lease,
-        })
+        permit.flight({ attempt: number, caller: s, lease })
       ).then(
         (apply) => {
           settle(lease, () => {
@@ -863,7 +853,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           })
           if (again) {
             // Вимогу поставила власна відповідь сторінки (П15): P3.
-            if (token.valid) return attempt({ reason: "retry", site: "P3" })
+            if (token.valid) {
+              const repeated = retry("P3")
+              if (repeated !== undefined) return repeated
+            }
             release()
             return
           }
@@ -882,9 +875,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           return session
             .sleep(pause)
-            .then(() =>
-              token.valid ? attempt({ reason: "retry", site: "P2" }) : undefined
-            )
+            .then(() => (token.valid ? retry("P2") : undefined))
         },
         (error: unknown) =>
           settle(lease, () => {
@@ -913,7 +904,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
-    void attempt({ reason: "user", site: "P1" })
+    void attempt(admitted)
   }
 
   /** Mounted card: lazy fields absent or read with an older row version. */
@@ -1297,7 +1288,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       needsRefresh:
         s.needsRefresh ||
         (s.unconfirmedSince !== undefined &&
-          (!(s.visible ?? s.listeners.size > 0) || !ctx.tabVisible())),
+          (!(s.visible ?? s.listeners.size > 0) || ctx.tabHidden())),
       ...(ctx.isStale(o.name) ? { isStale: true } : {}),
       ...(staleComposition(s) ? { staleComposition: true } : {}),
       ...(section === undefined ? {} : { section }),
@@ -1353,7 +1344,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       try {
         // `why` — виклику, що поставив перевірку в чергу: наступні виклики до
         // мікрозадачі вже вийшли на `checkQueued`.
-        if (!isClosed()) check(s, heldCheck, why)
+        // Закриття гасить `alive` раніше, ніж біжить мікрозадача: `closed`
+        // завантаження судить шлюз у `load`.
+        check(s, heldCheck, why)
       } finally {
         // Хвіст `revalidate` чекав цю перевірку як продовження польоту: без
         // нового читання його будимо тут (#312), зокрема й після винятку.
@@ -1431,14 +1424,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           if (s.alive && idle(s) && !isClosed()) scheduleRelease(s)
         }
       },
+      // Несумісний об'єкт не читається (§10): `load` питає шлюз (M5), і
+      // вигляд лишається `isStale`.
       refresh() {
-        // Несумісний об'єкт не читається (§10): вигляд лишається `isStale`.
-        if (ctx.isStale(form.object.name)) return
         const s = live()
         if (s !== undefined) load(s, USER_LOAD)
       },
       showNew() {
-        if (ctx.isStale(form.object.name)) return
         const s = live()
         if (s !== undefined) load(s, USER_LOAD)
       },
@@ -1570,7 +1562,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         if (s.listeners.size === 0) continue
         const before = s.snapshot
         if (snapshotOf(s) !== before) notify.push(s)
-        if (!closing) queueCheck(s, false, CHECK_AFTER_COMMIT)
+        // Пачка закриття теж ставить перевірку: її мікрозадача біжить уже
+        // після `close()` реєстру й бачить `alive === false`; `closed`
+        // дочитування судить шлюз у `load`.
+        queueCheck(s, false, CHECK_AFTER_COMMIT)
       }
       return notify
     },

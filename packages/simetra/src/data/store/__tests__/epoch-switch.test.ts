@@ -1044,6 +1044,50 @@ describe("core: the epoch switch", () => {
     })
   })
 
+  // Межу відкинутих хвіст R15 судить за позначкою вигляду `EPOCH_UNAVAILABLE`,
+  // а не за межею сесії (рішення архітекторки 25.11, рядок 16 §5.14): вигляд,
+  // чий політ упав збоєм, позначки не має, і хвіст читає його й за межею — як
+  // на `main`. Відповідь цього читання відкидається, і вигляд дістає позначку.
+  it.each(["fail", "answer"] as const)(
+    "the tail of revalidate after the discard limit, the flight ends by %s: the view mark, not the limit, decides",
+    async (how) => {
+      const h = setup({ limits: { revalidateIntervalMs: 10_000_000 } })
+      const pass = (e: string) =>
+        h.core.commit(
+          (w) =>
+            void w.apply(TASK, { rows: [], absent: [] }, h.core.readEpoch(), e),
+          h.core.token()
+        )
+      // Покинута епоха EA: далі кожна її відповідь — відкинута.
+      pass(EA)
+      pass(EB)
+      seed(h.fake, 1, 3)
+      const v = h.core.view({ kind: "full", object: TASK })
+      watch(v)
+      await settle()
+      h.fake.hold = () => true
+      v.refresh()
+      await settle()
+      const flying = h.fake.take()
+      void h.core.revalidate(TASK, { visibleOnly: false })
+      await settle()
+      for (let i = 0; i < DISCARDS_MAX; i++) pass(EA)
+      expect(h.inspect.versionEpochs().unavailable).toBe(true)
+      const sites: string[] = []
+      const stop = inspectCore(h.core).watchReads((e) => sites.push(e.site))
+      h.fake.hold = undefined
+      if (how === "fail") flying.fail("command.internal")
+      else flying.answer()
+      await settle()
+      stop()
+      expect(sites).toEqual(how === "fail" ? ["R15"] : [])
+      expect(v.getSnapshot()).toMatchObject({
+        status: "error",
+        error: { code: "command.unavailable" },
+      })
+    }
+  )
+
   it("a null section answer after a switch marks the lines stale and re-reads them once", async () => {
     const h = await proven()
     h.fake.setLines(TASK, key(1), "lines", [

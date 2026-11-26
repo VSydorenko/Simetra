@@ -6086,7 +6086,11 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
     /inside its failure pause|not re-read within its failure pause/,
   "scheduler-no-reschedule": /scheduler has no timer on a visible tab/,
   "revalidate-no-tail": /left no tail pass/,
-  "scheduler-reads-unavailable": /after the discard limit/,
+  // Своє повідомлення: шлюз під прапорцем відкриває лише коди планувальника
+  // (R1–R3), тож читання приймача за межею тут не червоніє (рішення
+  // архітекторки 25.11).
+  "scheduler-reads-unavailable":
+    /a read started by the scheduler after the discard limit/,
   // `sync()` показує паузу повтору звичайним строком: модель, що бере паузу з
   // `sync()`, бачить вигляд поза польотом і чекає від ядра перечитування.
   "sync-pause-no-cause": /not re-read after hide/,
