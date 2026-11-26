@@ -810,6 +810,9 @@ interface Group {
   readonly sites: readonly string[]
 }
 
+const PUBLIC_CLOSED =
+  "Публічний API закритого ядра (рішення архітекторки 26.11): `preload`, `hydrate`, `dehydrate` відмовляють виклику закритого ядра запитом шлюзу `gate.closed()` до утримання, запису й читання — поведінка як на `main` (Р-SK1-5)"
+
 const PLACES: readonly Group[] = [
   // ---------------------------------------------- поза замиканням (2), (3)
   {
@@ -820,6 +823,7 @@ const PLACES: readonly Group[] = [
       "core.ts::createCore.batcher.staleObject gate.staleObject",
       "core.ts::createCore.registry.isStale staleObjects",
       "core.ts::createCore.registry.closedSnapshot closed",
+      "core.ts::createCore.registry.closed gate.closed",
       "core.ts::createCore.registry.tabHidden gate.tabHidden",
       "core.ts::createCore.writerContext.isStale staleObjects",
       "core.ts::createCore.overlay.isStale staleObjects",
@@ -866,8 +870,8 @@ const PLACES: readonly Group[] = [
       "subsets.ts::createRegistry.view isClosed",
       "subsets.ts::createRegistry.makeHandle.subscribe isClosed ×2",
       "overlay.ts::createOverlay.update closed",
-      "core.ts::createCore.core.hydrate gate.closed",
-      "core.ts::createCore.core.dehydrate gate.closed",
+      // Обгортка публічного знімка закриття для `view` і `subscribe`.
+      "subsets.ts::createRegistry.isClosed closed",
       "subsets.ts::createRegistry.closedHandle.getSnapshot closed",
       "subsets.ts::createRegistry.makeHandle.getSnapshot closed",
     ],
@@ -998,14 +1002,20 @@ const PLACES: readonly Group[] = [
     ],
   },
   {
+    // Корінь M2: запит шлюзу в самій функції Додатка Б — рішення архітекторки.
     inventory: true,
-    reason:
-      "(v) Публічне API входу: `preload` закритого ядра відмовляє виклику до польоту — без утримання й без читання (публічний знімок закриття, Р-SK1-5)",
+    atInventory: true,
+    reason: "(v) " + PUBLIC_CLOSED,
     sites: [
-      "subsets.ts::createRegistry.preload isClosed",
-      // Обгортка публічного знімка закриття: її кличуть `view`, `subscribe`,
-      // `preload`.
-      "subsets.ts::createRegistry.isClosed closed",
+      "subsets.ts::createRegistry.preload gate.closed via RegistryContext.closed",
+    ],
+  },
+  {
+    inventory: false,
+    reason: PUBLIC_CLOSED,
+    sites: [
+      "core.ts::createCore.core.hydrate gate.closed",
+      "core.ts::createCore.core.dehydrate gate.closed",
     ],
   },
   {
@@ -1045,10 +1055,6 @@ const ROOT_READS: readonly (readonly [site: string, reason: string])[] = [
   [
     "receiver.ts::createReceiver.run staleObjects via ReaderContextBase.isStale",
     "Іменована перевірка не-читальних ефектів пачки для несумісного об'єкта (гілки `stale`, Р-SK1-8, рішення 25.11)",
-  ],
-  [
-    "subsets.ts::createRegistry.preload isClosed",
-    "Відмова виклику закритого ядра до утримання (публічний знімок закриття, Р-SK1-5). Не прибрано, бо поведінка інша: без неї `preload` після закриття створює вигляд, ставить таймер TTL, а `load` відмовляє шлюзом без осідання, тож обіцянка не виконується ніколи",
   ],
   [
     "core.ts::createCore.dispatch token",

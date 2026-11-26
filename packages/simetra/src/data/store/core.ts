@@ -1328,6 +1328,7 @@ export function createCore(options: {
   const registry = createRegistry({
     session,
     tabHidden: () => gate.tabHidden(),
+    closed: () => gate.closed(),
     source,
     index,
     limits,
