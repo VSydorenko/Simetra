@@ -14,6 +14,7 @@ import {
 import { defer } from "./defer"
 import type { MailTransport } from "./mail"
 import { mailTransport } from "./mail-dev"
+import { sendCodeSlot } from "./sign-in-code-slot"
 
 // Ключ хешу коду без секрету auth; секрету немає лише поза production
 // (`authSecret`), тож стала не захищає жодного справжнього коду
@@ -170,6 +171,9 @@ export function authOptions(
           ? { error: "email_not_verified" }
           : undefined,
     },
+    // Слот надсилання коду на адресу (Р-D5-6): маршрут без способу `email-code`
+    // не існує, тож хук на ньому просто не спрацьовує
+    hooks: { before: sendCodeSlot(database, now) },
     plugins: [
       anonymous(),
       ...(settings.emailCode ? [emailCodePlugin(settings, secret, mail)] : []),
