@@ -173,8 +173,23 @@ describe("settlement of a key read: step 9 and the single flight", () => {
       owner: key(1),
       section: "lines",
     })
+    const refsOf = () =>
+      section.getSnapshot().section?.lines.map((l) => l.values.ref)
     section.subscribe(() => {})
     await settle()
+    // Порядок записів у сховище, а не сповіщень: підписники кличуться разом.
+    const order: string[] = []
+    const { ops } = coreInternals(h.core)
+    const putSection = ops.putSection.bind(ops)
+    const put = ops.put.bind(ops)
+    vi.spyOn(ops, "putSection").mockImplementation((...args) => {
+      order.push("section")
+      return putSection(...args)
+    })
+    vi.spyOn(ops, "put").mockImplementation((...args) => {
+      if (args[1].name === TASK && args[2].key === key(1)) order.push("header")
+      return put(...args)
+    })
     const topicOf = (object: string) =>
       channelTopic({
         kind: "changes",
@@ -207,9 +222,9 @@ describe("settlement of a key read: step 9 and the single flight", () => {
     await settle()
     // Друга сторінка B ще в польоті, а A уже записано.
     expect(h.fake.pending.some((r) => r.object === B)).toBe(true)
-    expect(JSON.stringify(section.getSnapshot().section?.lines)).toContain(
-      key(901)
-    )
+    expect(refsOf()).toEqual([key(901)])
+    // Шапка осідає після польоту ТЧ власника (`sectionsOf`, Р-SK2-8).
+    expect(order).toEqual(["section", "header"])
     // Друга пачка A закрилась, але перша ще не осіла: читання немає.
     const second = h.fake.edit(TASK, key(1), { title: "second" })
     signalTask(second)
