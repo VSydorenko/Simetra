@@ -25,7 +25,6 @@ import {
   TEMPLATE,
   appDsns,
   appServerEnv,
-  assignClientOwner,
   buildTemplate,
   insertOwnClients,
   prepareDatabase,
@@ -253,11 +252,8 @@ async function bringUp(
     }
   }
 
-  // Права: роль `ClientOwner` обох (носій `owner` звужує читання до власних рядків)
-  await assignClientOwner(dsns.SIMETRA_OWNER_DATABASE_URL, [
-    users.a.id,
-    users.b.id,
-  ])
+  // Права: роль `ClientOwner` рівня `everyUser` діє на обох без призначень
+  // (носій `owner` звужує читання до власних рядків)
   // `CommandRuntime` второго користувача: ті самі пул ролі рантайму, каталог і
   // шлях, що в сервері, з справжніми claims B. Через нього B пише власні
   // рядки й міняє дані «ззовні» (D3); прямий SQL власника лишається лише там,

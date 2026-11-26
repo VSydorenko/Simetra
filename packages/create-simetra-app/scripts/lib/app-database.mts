@@ -3,7 +3,7 @@
 // коду тут немає — демо його не імпортує; адреси й паролі дає той, хто кличе.
 import { spawn, execFile, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { readFileSync, rmSync } from "node:fs"
+import { rmSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { promisify } from "node:util"
@@ -13,7 +13,6 @@ import {
   PROVIDER_IDENTITY_SOURCES,
   PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,
-  RIGHTS_MAINTENANCE_SETTING,
 } from "simetra/model"
 import { PROVIDER_SHADOW_TEMPLATES } from "simetra/schema"
 // Той самий SQL грантів, що робить `simetra roles`: друга копія розійшлася б
@@ -175,46 +174,6 @@ export async function prepareDatabase(o: {
       `ALTER DATABASE "${o.database}" SET simetra.environment = 'development'`
     )
   )
-}
-
-/**
- * Роль `ClientOwner` шаблону кожному з `subjects`: носій `owner` звужує
- * читання `Client` до власних рядків (`own`). Пише власник у режимі
- * обслуговування прав.
- */
-export async function assignClientOwner(
-  ownerUrl: string,
-  subjects: readonly string[]
-): Promise<void> {
-  const roleId = (
-    JSON.parse(
-      readFileSync(
-        join(TEMPLATE, "metadata/roles/ClientOwner/ClientOwner.meta.json"),
-        "utf8"
-      )
-    ) as { id: string }
-  ).id
-  await withClient(ownerUrl, async (client) => {
-    await client.query("BEGIN")
-    try {
-      await client.query(
-        `SELECT set_config('${RIGHTS_MAINTENANCE_SETTING}', 'on', true)`
-      )
-      for (const subject of subjects)
-        await client.query(
-          "INSERT INTO app.global_role_assignments (id, subject, archetype) VALUES ($1, $2, $3)",
-          [randomUUID(), subject, roleId]
-        )
-      await client.query("SET CONSTRAINTS ALL IMMEDIATE")
-      await client.query(
-        `SELECT set_config('${RIGHTS_MAINTENANCE_SETTING}', 'off', true)`
-      )
-      await client.query("COMMIT")
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined)
-      throw error
-    }
-  })
 }
 
 /** Власні рядки `Client` користувача `owner`: коди `<prefix>00000000`… */

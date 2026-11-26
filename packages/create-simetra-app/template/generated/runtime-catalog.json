@@ -1,8 +1,9 @@
 {
   "format": 1,
-  "snapshotHash": "90b99f3a46917e4935dd0b8ecf7a4acc069909d1e7449ecf865204c4bdf4b5de",
+  "snapshotHash": "88b9539dff9bb5d73baecf3b6e31a7c48c760f6266e251197a8bcfcb9373e42e",
   "provider": "postgres",
   "rightsSnapshot": true,
+  "selfSignUp": true,
   "objects": [
     {
       "id": "08f4943e-0296-4fbd-8d89-61b6f11355ee",
@@ -364,6 +365,7 @@
       "title": {
         "en": "Countries"
       },
+      "publicRead": "authenticated",
       "rights": {
         "actions": [
           {
