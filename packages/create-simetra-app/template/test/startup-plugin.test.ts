@@ -35,6 +35,43 @@ describe("nitro startup plugin", () => {
     expect(() => startupPlugin()).toThrow(/BETTER_AUTH_SECRET/)
   })
 
+  describe("sign-in refusals (Р-D5-2)", () => {
+    async function plugin(catalog: { selfSignUp?: true }) {
+      vi.resetModules()
+      vi.doMock("../generated/runtime-catalog.json", () => ({
+        default: { snapshotHash: "h", ...catalog },
+      }))
+      return (await import("../src/server/startup-plugin")).default
+    }
+    afterEach(() => vi.doUnmock("../generated/runtime-catalog.json"))
+
+    it("refuses open sign-up when the project does not allow it", async () => {
+      vi.stubEnv("SIMETRA_SIGN_UP", "open")
+      expect(await plugin({})).toThrow(/SIMETRA_SIGN_UP/)
+    })
+
+    it("accepts open sign-up when the project allows it", async () => {
+      vi.stubEnv("SIMETRA_SIGN_UP", "open")
+      expect((await plugin({ selfSignUp: true }))()).toBeUndefined()
+    })
+
+    it("refuses email-code in production without a mail transport", async () => {
+      vi.stubEnv("SIMETRA_SIGN_IN_METHODS", "email-code")
+      expect(await plugin({})).toThrow(/appMailTransport/)
+    })
+
+    it("accepts email-code outside production", async () => {
+      vi.stubEnv("NODE_ENV", "development")
+      vi.stubEnv("SIMETRA_SIGN_IN_METHODS", "email-code")
+      expect((await plugin({}))()).toBeUndefined()
+    })
+
+    it("refuses a wrong sign-in setting", async () => {
+      vi.stubEnv("SIMETRA_SIGN_IN_METHODS", "telepathy")
+      expect(await plugin({})).toThrow(/SIMETRA_SIGN_IN_METHODS/)
+    })
+  })
+
   describe("signals", () => {
     const url = "wss://signals.test/connection/websocket"
 

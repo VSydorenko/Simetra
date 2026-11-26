@@ -6,8 +6,10 @@ import { join } from "node:path"
 import { randomBytes } from "node:crypto"
 import { appendFile, mkdir, writeFile } from "node:fs/promises"
 import { afterAll, describe, expect, it } from "vitest"
+import { MAIL_CAPTURE_MARKER } from "./mail-capture"
 import {
   copyTemplate,
+  copyTemplateWithMailCapture,
   findNeedles,
   removeCopies,
   viteBuild,
@@ -31,6 +33,8 @@ const MARKERS = [
   "simetra/data/testing",
   "countingTransport",
   "__oracle",
+  // захоплювач пошти e2e (Р-D5-5): лише копія з підміненим `mail.ts`
+  MAIL_CAPTURE_MARKER,
 ]
 
 /**
@@ -167,5 +171,12 @@ console.log(DEV_USER_MARKER)
     expect(Object.values(found.markers).flat()).toContain(
       "simetra-dev-user-script"
     )
+  })
+
+  it("the mail capturer is found in a copy with the replaced mail module (negative control)", async () => {
+    const dir = await copyTemplateWithMailCapture("mail-capture")
+    await viteBuild(dir, SENTINELS)
+    const found = await leaks(dir)
+    expect(Object.values(found.markers).flat()).toContain(MAIL_CAPTURE_MARKER)
   })
 })

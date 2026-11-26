@@ -5,6 +5,7 @@
     "en": "Template application"
   },
   "defaultSchema": "app",
+  "selfSignUp": true,
   "database": {
     "provider": "postgres"
   },

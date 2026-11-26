@@ -1,6 +1,6 @@
 import { betterAuth, type BetterAuthOptions } from "better-auth"
 import { getMigrations } from "better-auth/db/migration"
-import { anonymous } from "better-auth/plugins"
+import { anonymous, emailOTP } from "better-auth/plugins"
 import { PostgresDialect } from "kysely"
 import pg from "pg"
 import { withSessionOptions } from "./connection"
@@ -20,7 +20,7 @@ const TEST_BASE_URL = "http://localhost:3000"
  * до `IF NOT EXISTS`, і роль `auth` його не має. Схему дає `search_path`
  * з'єднання.
  */
-function authOptions(pool: pg.Pool) {
+export function testAuthOptions(pool: pg.Pool) {
   return {
     database: {
       type: "postgres",
@@ -30,7 +30,15 @@ function authOptions(pool: pg.Pool) {
     baseURL: TEST_BASE_URL,
     // UUID-ідентифікатори: колонка `id` — `uuid`, як у контракті джерел подій
     advanced: { database: { generateId: "uuid" } },
-    plugins: [anonymous()],
+    // Набір плагінів host-а шаблону (`authOptions`, Р-D5-11); тести кодів
+    // не надсилають
+    plugins: [
+      anonymous(),
+      emailOTP({
+        sendVerificationOTP: () =>
+          Promise.reject(new Error("tests send no sign-in codes")),
+      }),
+    ],
     emailAndPassword: { enabled: true },
   } satisfies BetterAuthOptions
 }
@@ -39,7 +47,7 @@ function authOptions(pool: pg.Pool) {
 export type TestAuth = ReturnType<typeof createAuth>
 
 function createAuth(pool: pg.Pool) {
-  return betterAuth(authOptions(pool))
+  return betterAuth(testAuthOptions(pool))
 }
 
 /** Пул тестового екземпляра до бази `url` зі схемою Better Auth у `search_path`. */
@@ -75,7 +83,7 @@ export async function migrateBetterAuth(url: string): Promise<void> {
   // лог відсутніми таблицями, які міграція саме створює
   const pool = authPool(url)
   try {
-    const { runMigrations } = await getMigrations(authOptions(pool))
+    const { runMigrations } = await getMigrations(testAuthOptions(pool))
     await runMigrations()
   } finally {
     await pool.end()
