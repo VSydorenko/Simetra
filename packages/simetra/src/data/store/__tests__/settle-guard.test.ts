@@ -162,7 +162,9 @@ function analyze(
     if (symbol === undefined) unresolved.push(what)
     return symbol
   }
-  const named = (...entries: readonly [string, ts.Symbol | undefined][]) =>
+  const named = (
+    ...entries: readonly (readonly [string, ts.Symbol | undefined])[]
+  ) =>
     entries.flatMap(([what, s]) => {
       const found = anchor(what, s)
       return found === undefined ? [] : [found]
