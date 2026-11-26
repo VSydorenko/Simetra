@@ -4,8 +4,8 @@ import { TASK, seed, settle, setup } from "./core-support"
 import type { settlePass as SettlePass } from "../sync/settle-pass"
 
 /*
- * Точки завантаження й сторінки осідають лише через `settlePass` (план SK-2,
- * задача 3): запис ефектів проходу доводить порядок кроків, а підміна гачка
+ * Точки завантаження, сторінки й системного перечитування осідають лише через `settlePass` (план SK-2,
+ * задачі 3 і 4): запис ефектів проходу доводить порядок кроків, а підміна гачка
  * — що запис стану цілі йде лише через `settleTarget` (крок 7), а запис
  * відповіді — лише через `apply` (крок 5). Очікування `main` — у
  * `settle-sites-main.test.ts`; тут лише шов.
@@ -118,6 +118,73 @@ describe("the page point settles through the pass", () => {
     view.loadAfter()
     await settle()
     expect(view.getSnapshot().rows).toHaveLength(first)
+    unsubscribe()
+  })
+})
+
+describe("the system re-read settles through the pass", () => {
+  const reread = (h: Awaited<ReturnType<typeof loaded>>["h"]) =>
+    void h.core.revalidate(TASK, { visibleOnly: false })
+
+  it("runs the gate, the write, the target transition and the sweep, in the order of the steps", async () => {
+    const { h, unsubscribe } = await loaded(FULL, 3)
+    await settle()
+    seen.calls.length = 0
+    reread(h)
+    await settle()
+    expect(seen.calls.filter((c) => c.startsWith("reread "))).toEqual([
+      "reread gate",
+      "reread apply",
+      "reread settleTarget",
+      "reread sweep",
+    ])
+    unsubscribe()
+  })
+
+  it("settles the views of one object as one pass over several flights", async () => {
+    const { h, unsubscribe } = await loaded(FULL, 3)
+    const second = h.core.view(WINDOW)
+    const unsubscribeSecond = second.subscribe(() => {})
+    await settle()
+    seen.calls.length = 0
+    reread(h)
+    await settle()
+    // Одна область запису: кроки 4–7 для кожного польоту, один `sweep` на всіх.
+    expect(seen.calls.filter((c) => c.startsWith("reread "))).toEqual([
+      "reread gate",
+      "reread apply",
+      "reread settleTarget",
+      "reread gate",
+      "reread apply",
+      "reread settleTarget",
+      "reread sweep",
+    ])
+    unsubscribeSecond()
+    unsubscribe()
+  })
+
+  it("writes the answer only in the step-5 hook", async () => {
+    const { h, view, unsubscribe } = await loaded(FULL, 3)
+    await settle()
+    // Нові рядки сервера лягли б банером лише записом відповіді (крок 5).
+    seed(h.fake, 4, 5)
+    seen.skip.add("reread apply")
+    reread(h)
+    await settle()
+    expect(view.getSnapshot().hasNewRows).toBe(false)
+    unsubscribe()
+  })
+
+  it("moves the state of the view only in the step-7 seam", async () => {
+    const { h, view, unsubscribe } = await loaded(FULL, 3)
+    await settle()
+    seen.skip.add("reread settleTarget")
+    h.fake.hold = () => true
+    reread(h)
+    await settle()
+    h.fake.take().fail("command.unavailable")
+    await settle()
+    expect(view.getSnapshot().status).not.toBe("error")
     unsubscribe()
   })
 })

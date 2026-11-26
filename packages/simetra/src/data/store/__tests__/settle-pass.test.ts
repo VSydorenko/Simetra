@@ -89,6 +89,7 @@ describe("flight fields §5.4 filled by admit", () => {
       "kind",
       "token",
       "purgeBarrier",
+      "loadsAtStart",
       "requester",
       "deadlineMs",
     ]) {
@@ -106,16 +107,19 @@ describe("flight fields §5.4 filled by admit", () => {
     const token = { valid: true }
     const barrier = new Map([["task", 1]])
     const requester = () => {}
+    const loadsAtStart = { gen: 2, flight: undefined }
     const flight = permit.flight({
       kind: "keys",
       token,
       purgeBarrier: barrier,
+      loadsAtStart,
       requester,
       deadlineMs: 5000,
     })
     expect(flight.kind).toBe("keys")
     expect(flight.token).toBe(token)
     expect(flight.purgeBarrier).toBe(barrier)
+    expect(flight.loadsAtStart).toBe(loadsAtStart)
     expect(flight.requester).toBe(requester)
     expect(flight.deadlineMs).toBe(5000)
   })

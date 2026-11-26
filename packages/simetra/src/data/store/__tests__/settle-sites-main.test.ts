@@ -1155,13 +1155,12 @@ describe("the kind table against the recorded behaviour of main", () => {
     expect(has("page failed: read refused", /failures=/)).toBe(
       countsFor(R.page.failureCounts, true)
     )
-    expect(R.reread.failureCounts).toBe("always")
     expect(
       has(
         "reread failed: read refused (the pause counts for a loaded view)",
         /failures=1/
       )
-    ).toBe(true)
+    ).toBe(countsFor(R.reread.failureCounts, true))
   })
 
   it("liftsBanners and setsBanners: load lifts, page and reread leave, only reread sets", () => {
@@ -1171,21 +1170,17 @@ describe("the kind table against the recorded behaviour of main", () => {
     expect(has("page applied leaves the banners", /hasNewRows=false/)).toBe(
       R.page.liftsBanners
     )
-    expect(R.reread.liftsBanners).toBe(false)
     expect(has("reread applied leaves the banners", /hasNewRows=false/)).toBe(
-      false
+      R.reread.liftsBanners
     )
-    expect([
-      R.load.setsBanners,
-      R.page.setsBanners,
-      R.reread.setsBanners,
-    ]).toEqual([false, false, true])
+    // Банери ставить лише системне перечитування, і його точка читає клітинку.
+    expect([R.load.setsBanners, R.page.setsBanners]).toEqual([false, false])
     expect(
       has(
         "reread after a purge of the object: barrier, R16 again",
         /hasNewRows=true/
       )
-    ).toBe(true)
+    ).toBe(R.reread.setsBanners)
     for (const name of Object.keys(EXPECTED))
       if (name.startsWith("load ") || name.startsWith("page "))
         expect(has(name, /hasNewRows=true/), name).toBe(false)
@@ -1199,11 +1194,10 @@ describe("the kind table against the recorded behaviour of main", () => {
     expect(has("page applied", /^ops\.own/)).toBe(
       R.page.confirms === "own-page"
     )
-    expect([R.reread.confirms, R.keys.confirms]).toEqual([
-      "view-stable",
-      "rows",
-    ])
-    expect(has("reread applied", /^ops\.own/)).toBe(false)
+    expect(R.keys.confirms).toBe("rows")
+    expect(has("reread applied", /^ops\.own/)).toBe(
+      R.reread.confirms === "view-with-composition"
+    )
     expect(has("tail read", /^ops\.own/)).toBe(false)
     // Завантаження знімає вимогу власним польотом, сторінка — лише читанням,
     // яке вона викликає після себе.
@@ -1222,10 +1216,7 @@ describe("the kind table against the recorded behaviour of main", () => {
   })
 
   it("discarded: load and page pause then retry, reread moves the object deadline, keys do nothing", () => {
-    expect([R.reread.discarded, R.keys.discarded]).toEqual([
-      "pause-then-deadline",
-      "nothing",
-    ])
+    expect(R.keys.discarded).toBe("nothing")
     expect(
       has("load discarded by epoch, pause, then M8", /^attempt\.start load M8/)
     ).toBe(R.load.discarded === "pause-then-retry")
@@ -1235,9 +1226,10 @@ describe("the kind table against the recorded behaviour of main", () => {
     const reread = lines(
       "reread discarded by epoch: pause in the object deadline, then retry"
     )
-    expect(reread).toContain("scheduled Catalog.Task")
+    const deadline = R.reread.discarded === "pause-then-deadline"
+    expect(reread.includes("scheduled Catalog.Task")).toBe(deadline)
     expect(reread.some((l) => l.startsWith("attempt.start reread R3"))).toBe(
-      true
+      deadline
     )
     // Одне читання хвоста й жодного повтору після відкинутої відповіді.
     expect(

@@ -885,14 +885,6 @@ const PLACES: readonly Group[] = [
   {
     inventory: false,
     reason:
-      "Іменована перевірка над `gate.tabHidden()` у `loadMore` → `confirm` (Р-SK1-8): мить зняття позначки сторінки до сповіщення, наслідок осідання; кличе її колбек `commit`",
-    sites: [
-      "subsets.ts::createRegistry.confirm gate.tabHidden via RegistryContext.tabHidden",
-    ],
-  },
-  {
-    inventory: false,
-    reason:
       "Записувач стану: `markStale` ставить позначку лише раз (`has` перед `add`)",
     sites: ["core.ts::createCore.markStale staleObjects"],
   },
@@ -920,6 +912,21 @@ const PLACES: readonly Group[] = [
     ],
   },
   {
+    inventory: false,
+    reason:
+      "Гачок `lost` проходу осідання вигляду (`settleView`): токен сесії судить лише, чому область запису не відбулась (`closed` чи `evicted`) — не-читальний наслідок; читання судить `admit`",
+    sites: ["subsets.ts::createRegistry.settleView.lost token"],
+  },
+  {
+    inventory: true,
+    reason:
+      "Межа відкинутих Р-SK1-7 у гачку `discarded` проходу осідання: `session.versions.unavailable()` у мить запису вирішує «`EPOCH_UNAVAILABLE` чи пауза» — той самий вибір, що на `main` стояв у колбеку `commit`; гачок кличе область запису проходу, а не шлях",
+    sites: [
+      "subsets.ts::createRegistry.settleView.discarded unavailable",
+      "writer.ts::revalidateViews.discarded unavailable",
+    ],
+  },
+  {
     inventory: true,
     atInventory: true,
     reason:
@@ -930,6 +937,7 @@ const PLACES: readonly Group[] = [
       "core.ts::createCore.onFlush staleObjects",
       "receiver.ts::createReceiver.run gate.tabHidden via ReceiverContext.tabHidden",
       "receiver.ts::createReceiver.run staleObjects via ReaderContextBase.isStale",
+      "subsets.ts::createRegistry.confirm gate.tabHidden via RegistryContext.tabHidden",
     ],
   },
   {
@@ -966,8 +974,6 @@ const PLACES: readonly Group[] = [
       "core.ts::createCore.connectionRefused token",
       "core.ts::createCore.startVersion token",
       "writer.ts::rereadKey token ×2",
-      "subsets.ts::createRegistry.load.attempt.lost token",
-      "subsets.ts::createRegistry.loadMore.attempt.lost token",
       "receiver.ts::createReceiver.sync token",
     ],
   },

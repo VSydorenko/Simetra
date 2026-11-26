@@ -23,6 +23,12 @@ import type {
 
 declare const FLIGHT: unique symbol
 
+/** `gen` вигляду й номер його польоту на старті системного перечитування. */
+export interface LoadsAtStart {
+  readonly gen: number
+  readonly flight: number | undefined
+}
+
 /** Причина, ціль і код рядка: усе, що бачить подія `watchReads`. */
 export type ReadRecord = ReadCause & {
   readonly target: ReadTarget
@@ -56,6 +62,12 @@ export type Flight = ReadRecord & {
    * їх бере (системне перечитування); для решти purge діє через токен.
    */
   readonly purgeBarrier?: ReadonlyMap<string, number>
+  /**
+   * Покоління й політ власного завантаження вигляду на старті (лише системне
+   * перечитування): завантаження, що стартувало чи осіло після старту,
+   * свіжіше за це перечитування, і його відповідь пропускають.
+   */
+  readonly loadsAtStart?: LoadsAtStart
   /** Лише `write-confirm`: зворотний виклик запитувача в `commit` осідання. */
   readonly requester?: (outcome: RereadOutcome, scope: Scope) => void
   /** Лише `write-confirm`: межа часу (`REREAD_TIMEOUT_MS`), мс від старту. */
@@ -86,6 +98,7 @@ export interface FlightExtras {
   readonly kind?: FlightKind
   readonly token?: GenerationToken
   readonly purgeBarrier?: ReadonlyMap<string, number>
+  readonly loadsAtStart?: LoadsAtStart
   readonly requester?: (outcome: RereadOutcome, scope: Scope) => void
   readonly deadlineMs?: number
   readonly done?: { fired: boolean }

@@ -19,10 +19,10 @@ import {
   aliveIncluded,
   applyIncluded,
   fetchFullAgain,
-  gated,
   readFormWrite,
+  readGated,
   requireConfirmation,
-  type Apply,
+  type GatedRead,
   type ReaderHost,
   type Write,
   type WithSource,
@@ -48,6 +48,7 @@ import {
   EPOCH_UNAVAILABLE,
   errorOf,
   queueTrailing,
+  required,
   settleRequirement,
   viewDueAt,
   type Subset,
@@ -59,7 +60,8 @@ import {
   type Permit,
   type RereadOutcome,
 } from "./sync/flight"
-import type { ReadCause, ReadWhy, SettleOutcome } from "./sync/vocabulary"
+import { rulesOf, settlePass, type SettleEntry } from "./sync/settle-pass"
+import type { ReadCause, ReadWhy } from "./sync/vocabulary"
 import type {
   ActiveView,
   GenerationToken,
@@ -676,7 +678,8 @@ async function readFullAgain(
   ctx: BoundWriter,
   s: Subset,
   startEpoch: number,
-  token: GenerationToken
+  token: GenerationToken,
+  banners: boolean
 ): Promise<Write> {
   const { form } = s
   const o = form.object
@@ -758,8 +761,12 @@ async function readFullAgain(
       composition.every((key) => s.owned.has(key))
     if (included !== undefined && sameComposition)
       applyIncluded(ctx, scope, s, included, startEpoch)
-    if (fresh) s.hasNewRows = true
-    if (outOfPlace(s) || [...moved].some((key) => s.layoutSet.has(key)))
+    // Банери ставить лише вид польоту, чия клітинка це каже (§5.5).
+    if (banners && fresh) s.hasNewRows = true
+    if (
+      banners &&
+      (outOfPlace(s) || [...moved].some((key) => s.layoutSet.has(key)))
+    )
       s.needsRefresh = true
     rebuildLayout(ctx, s)
   }
@@ -779,7 +786,8 @@ async function readWindowAgain(
   ctx: BoundWriter,
   s: Subset,
   startEpoch: number,
-  token: GenerationToken
+  token: GenerationToken,
+  banners: boolean
 ): Promise<Write> {
   const { form } = s
   const o = form.object
@@ -901,23 +909,28 @@ async function readWindowAgain(
     }
     if (included !== undefined)
       applyIncluded(ctx, scope, s, included, startEpoch, true)
-    if (fresh) s.hasNewRows = true
-    if (needsRefresh) s.needsRefresh = true
+    if (banners && fresh) s.hasNewRows = true
+    if (banners && needsRefresh) s.needsRefresh = true
     rebuildLayout(ctx, s)
   }
 }
 
+/**
+ * Читання одного вигляду системним перечитуванням: відповідь і її епохи, без
+ * брами й запису — їх судить прохід осідання (кроки 4 і 5). Стан читання
+ * (епоха, токен) бере з польоту.
+ */
 function readAgain(
   ctx: WriterContext,
   s: Subset,
-  startEpoch: number,
-  token: GenerationToken,
   flight: Flight
-): Promise<Apply> {
-  return gated(
+): Promise<GatedRead> {
+  const startEpoch = required(flight.epoch, "its start epoch")
+  const token = required(flight.token, "its token")
+  const banners = rulesOf(flight).setsBanners
+  return readGated(
     ctx,
-    startEpoch,
-    (c) => writeAgain(c, s, startEpoch, token),
+    (c) => writeAgain(c, s, startEpoch, token, banners),
     flight
   )
 }
@@ -926,7 +939,8 @@ async function writeAgain(
   ctx: BoundWriter,
   s: Subset,
   startEpoch: number,
-  token: GenerationToken
+  token: GenerationToken,
+  banners: boolean
 ): Promise<Write> {
   const spec = s.form.spec
   const o = s.form.object
@@ -937,7 +951,7 @@ async function writeAgain(
         keysPerRequest,
         known: listKnown(s),
       })
-      return applyKeys(ctx, s, s.form.keys, rows, startEpoch, true)
+      return applyKeys(ctx, s, s.form.keys, rows, startEpoch, banners)
     }
     case "card": {
       // Шапка списочною формою; ліниві поля змонтованої картки дочитує
@@ -982,9 +996,9 @@ async function writeAgain(
     case "section":
       return readFormWrite(ctx, s, startEpoch, token)
     case "full":
-      return readFullAgain(ctx, s, startEpoch, token)
+      return readFullAgain(ctx, s, startEpoch, token, banners)
     case "window":
-      return readWindowAgain(ctx, s, startEpoch, token)
+      return readWindowAgain(ctx, s, startEpoch, token, banners)
   }
 }
 
@@ -1345,6 +1359,27 @@ const viewTarget = (s: Subset) =>
   ({ kind: "view", object: s.form.object.name, id: s.targetId }) as const
 
 /**
+ * Осідання одного вигляду системного перечитування: політ, відповідь і те, що
+ * прохід віддає шляху. `verdict` — результат області запису (повтор і
+ * відкинута відповідь), а не стан читання: його ухвалюють гачки в мить запису.
+ */
+interface RereadEntry extends SettleEntry {
+  readonly s: Subset
+  readonly number: number
+  readonly read?: GatedRead
+  readonly verdict: { again?: ReadWhy; discarded: boolean }
+}
+
+/**
+ * Повтор тим самим системним шляхом: рядок інвентаря — за кодом повтору, а
+ * причина `retry` — з клітинки виду польоту.
+ */
+const repeatOf = (flight: Flight, site: "R16" | "R17" | "R18") =>
+  rulesOf(flight).reasons.includes("retry")
+    ? ({ reason: "retry", site } as const)
+    : undefined
+
+/**
  * One two-phase pass over `reads`; views dropped by a purge get another
  * pass. The views of one pass may come from different rows only in the
  * repeats below.
@@ -1358,157 +1393,173 @@ export async function revalidateViews(
   const { session } = ctx
   // `closed` кожного вигляду вже судив шлюз: прохід бере лише дозволені.
   if (targets.length === 0) return
-  const startEpoch = session.epochs.now()
-  const token = session.token()
-  // Завантаження, що стартувало чи завершилось після старту, свіжіше за це
-  // перечитування: воно вже оновило склад і цілі `include` (так само, як
-  // purge відкидає відповіді).
-  const loadsAtStart = new Map(
-    targets.map((s) => [s, { gen: s.gen, flight: s.flight }] as const)
-  )
-  const startedAt = ctx.now()
-  // Номер спроби кожного вигляду: його читання йдуть під ним (`watchAttempts`).
-  const numbers = new Map<Subset, number>()
+  // Лише лічильник `rereadEpochs` (обіцянка вимозі): його запис мусить
+  // передувати подіям спроби, а політ ще не видано — спроба дає йому номер.
+  const promised = session.epochs.now()
+  // Відмітки purge на старті: один знімок на прохід, кожен політ несе його.
+  const purgeBarrier = new Map(ctx.purges)
   const attemptTarget = (s: Subset) =>
     ({ kind: "view", object: o.name, id: s.targetId }) as const
+  const numbers = new Map<Subset, number>()
   for (const [s, { why }] of reads) {
     s.rereads++
-    s.rereadEpochs.push(startEpoch)
+    s.rereadEpochs.push(promised)
     numbers.set(s, ctx.attempts.start("reread", attemptTarget(s), why))
   }
-  // Наслідок осідання кожного вигляду проходу (§5.5).
-  const outcomes = new Map<Subset, readonly [SettleOutcome, SettleDetail?]>()
-  const purgesAtStart = new Map(ctx.purges)
-  const purgedSince = (name: ObjectName) =>
-    (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)
   // Одна оренда на прохід: усі відповіді пише один `commit` нижче.
   const lease = ctx.source.lease()
-  const results = await Promise.all(
+  const token = session.token()
+  const answers = await Promise.all(
     reads.map(([s, permit]) => {
-      const { why } = permit
-      return readAgain(
-        ctx,
-        s,
-        startEpoch,
+      const number = numbers.get(s)!
+      // Завантаження, що стартувало чи завершилось після старту, свіжіше за це
+      // перечитування: воно вже оновило склад і цілі `include` (так само, як
+      // purge відкидає відповіді).
+      const flight = permit.flight({
+        attempt: number,
+        caller: s,
+        lease,
+        kind: "reread",
         token,
-        permit.flight({ attempt: numbers.get(s), caller: s, lease })
-      ).then(
-        (apply) => ({ s, why, apply }) as const,
-        (error: unknown) => ({ s, why, error }) as const
+        purgeBarrier,
+        loadsAtStart: { gen: s.gen, flight: s.flight },
+      })
+      return readAgain(ctx, s, flight).then(
+        (read): RereadEntry => ({
+          flight,
+          s,
+          number,
+          read,
+          verdict: { discarded: false },
+        }),
+        (error: unknown): RereadEntry => ({
+          flight,
+          s,
+          number,
+          failure: { error },
+          verdict: { discarded: false },
+        })
       )
     })
   )
   for (const s of targets) {
-    const at = s.rereadEpochs.indexOf(startEpoch)
+    const at = s.rereadEpochs.indexOf(promised)
     if (at >= 0) s.rereadEpochs.splice(at, 1)
   }
-  // Повтор тим самим системним шляхом: рядок інвентаря — за причиною повтору.
-  const again = new Map<Subset, ReadWhy>()
-  const discarded: Subset[] = []
   // Вигляди, чию відповідь пропущено, бо їхнє завантаження осіло раніше.
   const skipped: Subset[] = []
-  settle(lease, () => {
-    const ran = session.commit(
-      (scope) => {
-        try {
-          for (const result of results) {
-            const { s } = result
-            if (!s.alive) {
-              outcomes.set(s, ["evicted"])
-              continue
-            }
-            if (s.purged) {
-              outcomes.set(s, ["after-purge"])
-              continue
-            }
-            const atStart = loadsAtStart.get(s)
-            if (atStart?.gen !== s.gen || atStart.flight !== s.flight) {
-              outcomes.set(s, ["evicted"])
-              skipped.push(s)
-              continue
-            }
-            // purge після старту: відповідь могла нести рядки й рядки ТЧ, яких
-            // на мить purge у сховищі не було (рядок у сховищі ще в старому
-            // скоупі). Відкидаємо й перечитуємо тим самим системним шляхом:
-            // склад і порядок змінює лише сам purge (§6.5), а не перечитування.
-            if (
-              purgedSince(o.name) ||
-              s.form.include.some((step) => purgedSince(step.target))
-            ) {
-              outcomes.set(s, ["after-purge"])
-              again.set(s, { reason: "retry", site: "R16" })
-              continue
-            }
-            s.dirty = true
-            if ("error" in result) {
-              // Закритий обмежувач — сесію закрито: писати нікуди.
-              if (result.error instanceof ReadLimiterClosed) {
-                outcomes.set(s, ["closed"])
-                continue
-              }
-              outcomes.set(s, ["failed", failureOf(result.error)])
-              s.failures++
-              s.failedAt = startedAt
-              s.status = "error"
-              s.error = errorOf(result.error)
-              continue
-            }
-            try {
-              if (!result.apply(scope)) {
-                outcomes.set(s, ["discarded-by-epoch"])
-                // Відкинута відповідь: перечитування з паузою, а після
-                // межі відкинутих поспіль — `command.unavailable`.
-                if (session.versions.unavailable()) {
-                  s.status = "error"
-                  s.error = EPOCH_UNAVAILABLE
-                } else discarded.push(s)
-                continue
-              }
-              if (pageDropped.delete(s)) {
-                outcomes.set(s, ["after-purge"])
-                again.set(s, { reason: "retry", site: "R17" })
-                continue
-              }
-              outcomes.set(s, ["applied"])
-              s.refreshedAt = startedAt
-              s.okReadEpoch = startEpoch
-              // Успішне системне читання, що стартувало з епохи вимоги,
-              // підтверджує склад: нового рядка воно не ставить у склад, а дає
-              // банер (§6.5). Правило зняття й повтору — те саме, що в
-              // завантаження (§8.4, п. 7): вимога, що лишилась, бо прохід
-              // стартував раніше за e, і яку ніхто інший не прочитає, — ще
-              // один прохід тим самим системним шляхом, склад не змінюється.
-              s.failures = 0
-              s.failedAt = undefined
-              if (s.status === "error") {
-                s.status = "ready"
-                s.error = undefined
-              }
-              // Повтор на прихованій вкладці відкладає шлюз (R18, Р-SK1-8).
-              if (settleRequirement(s, startEpoch))
-                again.set(s, { reason: "retry", site: "R18" })
-            } catch (error) {
-              outcomes.set(s, ["failed", failureOf(error)])
-              ctx.log({ kind: "listener-failed", error })
-              s.status = "error"
-              s.error = errorOf(error)
-            }
-          }
-        } finally {
-          ctx.ops.sweep(scope)
-        }
-      },
-      token,
-      `revalidate ${o.name}`
-    )
-    // `commit` не пройшов — токен сесії недійсний: усе закрито.
-    for (const s of targets)
-      ctx.attempts.settle(
-        numbers.get(s)!,
-        "reread",
-        attemptTarget(s),
-        ...(ran ? (outcomes.get(s) ?? ["closed"]) : (["closed"] as const))
+  const entryOf = new Map(answers.map((e) => [e.flight, e] as const))
+  const purgedSince = (flight: Flight, name: ObjectName) =>
+    (ctx.purges.get(name) ?? 0) !==
+    (required(flight.purgeBarrier, "its purge barrier").get(name) ?? 0)
+  settlePass<RereadEntry, SettleDetail>(session, answers, {
+    token,
+    what: `revalidate ${o.name}`,
+    // Закритий обмежувач — сесію закрито: писати нікуди.
+    refused: (error) => error instanceof ReadLimiterClosed,
+    failureDetail: failureOf,
+    // Порядок `main`: спершу витіснені власним завантаженням, далі бар'єр
+    // purge, потім збій (Р-SK2-5 (б)).
+    invalid: ({ s, flight }) => {
+      if (!s.alive) return "evicted"
+      if (s.purged) return "after-purge"
+      const atStart = required(flight.loadsAtStart, "its loads at start")
+      if (atStart.gen !== s.gen || atStart.flight !== s.flight) {
+        skipped.push(s)
+        return "evicted"
+      }
+      return undefined
+    },
+    // purge після старту: відповідь могла нести рядки й рядки ТЧ, яких на мить
+    // purge у сховищі не було (рядок у сховищі ще в старому скоупі). Відкидаємо
+    // й перечитуємо тим самим системним шляхом: склад і порядок змінює лише
+    // сам purge (§6.5), а не перечитування.
+    barrier: (entry) => {
+      const { s, flight } = entry
+      if (
+        !purgedSince(flight, o.name) &&
+        !s.form.include.some((step) => purgedSince(flight, step.target))
       )
+        return false
+      entry.verdict.again = repeatOf(flight, "R16")
+      return true
+    },
+    gate: ({ read, flight }) =>
+      session.acceptEpochs(
+        required(read, "its answer").epochs,
+        required(flight.epoch, "its start epoch")
+      ) === "discard"
+        ? "discard"
+        : "apply",
+    // Відкинута відповідь: перечитування з паузою, а після межі відкинутих
+    // поспіль — `command.unavailable`.
+    discarded: ({ s, verdict }) => {
+      if (session.versions.unavailable()) {
+        s.status = "error"
+        s.error = EPOCH_UNAVAILABLE
+      } else verdict.discarded = true
+    },
+    apply: ({ read }, scope) => required(read, "its answer").write(scope),
+    applyFailed: (_e, error) => ctx.log({ kind: "listener-failed", error }),
+    // Сторінку вікна скинув purge: прохід нічого не писав, тож повтор R17;
+    // строк і доказ не рухаються, збої не скидаються, вимога не знімається.
+    dropped: (entry) => {
+      if (!pageDropped.delete(entry.s)) return false
+      entry.verdict.again = repeatOf(entry.flight, "R17")
+      return true
+    },
+    settleTarget: (flight, outcome, _evidence, failure) => {
+      const entry = entryOf.get(flight)!
+      const { s, verdict } = entry
+      const rules = rulesOf(flight)
+      if (outcome === "applied") {
+        if (rules.successMovesDeadline) {
+          s.refreshedAt = required(flight.startedAt, "its start time")
+          s.okReadEpoch = required(flight.epoch, "its start epoch")
+          s.failures = 0
+          s.failedAt = undefined
+        }
+        if (s.status === "error") {
+          s.status = "ready"
+          s.error = undefined
+        }
+        // Успішне системне читання, що стартувало з епохи вимоги, підтверджує
+        // склад: нового рядка воно не ставить у склад, а дає банер (§6.5).
+        // Правило зняття й повтору — те саме, що в завантаження (§8.4, п. 7):
+        // вимога, що лишилась, бо прохід стартував раніше за e, і яку ніхто
+        // інший не прочитає, — ще один прохід тим самим системним шляхом.
+        // Повтор на прихованій вкладці відкладає шлюз (R18, Р-SK1-8).
+        if (settleRequirement(s, required(flight.epoch, "its start epoch")))
+          verdict.again = repeatOf(flight, "R18")
+      } else if (outcome === "failed" && failure !== undefined) {
+        // Паузу збоїв рахує лише збій самого читання: дефект застосування
+        // її не веде (як на `main`).
+        if (
+          entry.failure !== undefined &&
+          (rules.failureCounts === "always" ||
+            (rules.failureCounts === "if-loaded" && s.loaded))
+        ) {
+          s.failures++
+          s.failedAt = required(flight.startedAt, "its start time")
+        }
+        s.status = "error"
+        s.error = errorOf(failure.error)
+      }
+    },
+    sweep: (scope) => ctx.ops.sweep(scope),
+    // Вигляд, що дійшов до відповіді, перемальовується: `dirty` ставить
+    // область запису для кожного, хто пройшов кроки 1–2.
+    finish: ({ s }) => {
+      s.dirty = true
+    },
+    settled: (e, outcome, detail) =>
+      ctx.attempts.settle(
+        e.number,
+        "reread",
+        attemptTarget(e.s),
+        outcome,
+        detail
+      ),
   })
   // Прохід осів: хвіст явного `revalidate` може стартувати.
   for (const s of targets) {
@@ -1520,13 +1571,14 @@ export async function revalidateViews(
   // осіло раніше, не повторилось, бо бачило цей прохід у польоті; вимогу, яку
   // тепер ніхто не прочитає, читає те саме правило, що й після сторінки.
   for (const s of skipped) ctx.readRequirement(s)
+  const discarded = answers.filter((e) => e.verdict.discarded)
   // Цей прохід вичерпав межу (лічильник рухається після commit): повтору
   // не буде, відкинуті вигляди — `command.unavailable`. Наслідок осідання за
   // межею (Р-SK1-7): «помилка чи строк повтору R3», не допуск.
   if (discarded.length > 0 && ctx.source.settledPastBound()) {
     session.commit(
       () => {
-        for (const s of discarded) {
+        for (const { s } of discarded) {
           if (!s.alive || s.purged) continue
           s.status = "error"
           s.error = EPOCH_UNAVAILABLE
@@ -1536,17 +1588,25 @@ export async function revalidateViews(
       token,
       `revalidate ${o.name}`
     )
-  } else if (discarded.length > 0) {
+  } else if (
+    discarded.length > 0 &&
+    rulesOf(discarded[0]!.flight).discardedAnswer === "pause-then-deadline"
+  ) {
     const pause =
       DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
     // Не чекаємо паузи: `revalidate` завершується, а повтор — строк об'єкта в
     // планувальнику (на прихованій вкладці чекає `resume()`); іде тим самим
     // системним шляхом, склад не змінюється.
-    ctx.schedule(o.name, pause, { reason: "retry" }, new Set(discarded))
+    ctx.schedule(
+      o.name,
+      pause,
+      { reason: "retry" },
+      new Set(discarded.map(({ s }) => s))
+    )
   }
   // Дефект самотесту «системне перечитування через завантаження».
   if (ctx.defects.has("system-reread-via-load")) {
-    for (const { s, why } of results) {
+    for (const [s, { why }] of reads) {
       if (s.alive && !s.purged) ctx.registry.load(s, why)
     }
   }
@@ -1556,9 +1616,15 @@ export async function revalidateViews(
   await revalidateViews(
     ctx,
     o,
-    [...again]
-      .filter(([s]) => s.alive && !s.purged && s.flight === undefined)
-      .flatMap(([s, why]) => admitViews(ctx, [s], why))
+    answers
+      .filter(
+        ({ s, verdict }) =>
+          verdict.again !== undefined &&
+          s.alive &&
+          !s.purged &&
+          s.flight === undefined
+      )
+      .flatMap(({ s, verdict }) => admitViews(ctx, [s], verdict.again!))
   )
 }
 

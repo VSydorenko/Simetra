@@ -115,7 +115,7 @@ export interface ReaderContextBase {
 }
 
 /**
- * What the readers of one flight see: the source already carries the flight (`gated`), so a reader cannot read without one.
+ * What the readers of one flight see: the source already carries the flight (`readGated`), so a reader cannot read without one.
  */
 export interface ReaderContext extends ReaderContextBase {
   readonly source: BoundSource
@@ -126,7 +126,7 @@ export interface ReaderHost extends ReaderContextBase {
   readonly source: StoreSource
 }
 
-/** `C` over another source: the context a flight's readers get from {@link gated}. */
+/** `C` over another source: the context a flight's readers get from {@link readGated}. */
 export type WithSource<C, S> = Omit<C, "source"> & { readonly source: S }
 
 /** The part of a subset a reader's `apply` writes. */
@@ -186,12 +186,6 @@ export interface ReaderTarget {
 export type Write = (scope: Scope) => void
 
 /**
- * Applies a read result inside one `commit`; `false` — the session discarded
- * an epoch of the answer (P4-B spec §6.2) and nothing was written.
- */
-export type Apply = (scope: Scope) => boolean
-
-/**
  * The answer of one flight before the session judged it: the epochs of its
  * parts and the write it prepared. The settle pass judges the epochs (step 4)
  * and runs the write (step 5), so a point that settles through the pass
@@ -211,26 +205,6 @@ export async function readGated<C extends ReaderHost>(
   const { source, epochs } = tracked(ctx.source, flight)
   const write = await read({ ...ctx, source })
   return { epochs, write }
-}
-
-/**
- * {@link readGated} whose `Apply` judges the epochs itself: for the points
- * that have not moved onto the settle pass yet (`acceptEpochs` — the single
- * check before a write). The last of them to move deletes it.
- */
-export async function gated<C extends ReaderHost>(
-  ctx: C,
-  readEpoch: number,
-  read: (ctx: WithSource<C, BoundSource>) => Promise<Write>,
-  flight: Flight
-): Promise<Apply> {
-  const answer = await readGated(ctx, read, flight)
-  return (scope) => {
-    if (ctx.session.acceptEpochs(answer.epochs, readEpoch) === "discard")
-      return false
-    answer.write(scope)
-    return true
-  }
 }
 
 function lineOf(
