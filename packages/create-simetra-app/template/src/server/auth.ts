@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto"
 import { betterAuth, type BetterAuthOptions } from "better-auth"
+import { getEndpoints } from "better-auth/api"
 import { anonymous, emailOTP } from "better-auth/plugins"
 import type { Pool } from "pg"
 import { getAuthPool } from "./auth-db"
@@ -100,16 +101,25 @@ export const PARAM_AUTH_PATHS: readonly string[] = [
   "/reset-password/:token",
 ]
 
+// Контекст маршрутів переліку: його чекають лише виклики маршрутів, а перелік
+// їх не викликає. Відмова оброблена тут, тож висячої немає
+const NO_CONTEXT: Promise<never> = Promise.reject(
+  new Error("[simetra] the auth path list has no auth context")
+)
+NO_CONTEXT.catch(() => undefined)
+
 /**
- * Закриті шляхи — усе, що дає пробний екземпляр з тими самими опціями, поза
+ * Закриті шляхи — усе, що дає набір маршрутів з тими самими опціями, поза
  * переліками вище: новий маршрут бібліотеки чи плагіна закривається сам.
- * Проба — без бази (адаптер у пам'яті): маршрути дають лише ядро й плагіни, а
- * екземпляр над пулом звіряв би схему з базою ще раз. Серверні маршрути без
- * `path` (`api/to-auth-endpoints.mjs`) через HTTP недосяжні.
+ * Набір — `getEndpoints`, з якого `betterAuth(options).api` будує й сам
+ * екземпляр (`auth/base.mjs` `createBetterAuth`): маршрути дають лише ядро й
+ * плагіни. Другого екземпляра немає навмисно — він запускав би власний `init`
+ * (адаптер, звірку схеми), чиєї відмови ніхто не чекає, а необроблена відмова
+ * зупиняє процес. Серверні маршрути без `path` (`api/to-auth-endpoints.mjs`)
+ * через HTTP недосяжні.
  */
 function closedAuthPaths(options: BetterAuthOptions): string[] {
-  const probe = betterAuth({ ...options, database: undefined })
-  return Object.values(probe.api)
+  return Object.values(getEndpoints(NO_CONTEXT, options).api)
     .map((endpoint) => endpoint.path)
     .filter(
       (path): path is string =>

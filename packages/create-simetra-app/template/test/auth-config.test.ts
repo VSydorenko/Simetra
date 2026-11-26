@@ -13,6 +13,20 @@ import { OAUTH_PROVIDERS, type AuthSettings } from "../src/server/config"
 import { defer } from "../src/server/defer"
 import type { MailMessage, MailTransport } from "../src/server/mail"
 
+// Лічильник екземплярів Better Auth: перелік шляхів не має запускати другого
+// `init`, чиєї відмови ніхто б не чекав
+const instances = vi.hoisted(() => ({ count: 0 }))
+vi.mock("better-auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("better-auth")>()
+  return {
+    ...actual,
+    betterAuth: (options: Parameters<typeof actual.betterAuth>[0]) => {
+      instances.count += 1
+      return actual.betterAuth(options)
+    },
+  }
+})
+
 afterEach(() => vi.unstubAllEnvs())
 
 const pool = {} as Pool
@@ -399,10 +413,66 @@ describe("auth path allowlist (Р-D5-7)", () => {
     expect(response.status).not.toBe(404)
   })
 
+  it("builds the path list without a second Better Auth instance", () => {
+    instances.count = 0
+    authOptions(pool, ORIGIN, "secret", everyMethod("open"), mail)
+    expect(instances.count).toBe(0)
+  })
+
+  it("leaves no unhandled rejection behind, even over a pool that cannot init", async () => {
+    const unhandled: unknown[] = []
+    const listener = (reason: unknown) => unhandled.push(reason)
+    process.on("unhandledRejection", listener)
+    try {
+      authOptions(pool, ORIGIN, "secret", everyMethod("open"), mail)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    } finally {
+      process.off("unhandledRejection", listener)
+    }
+    expect(unhandled).toEqual([])
+  })
+
   it("refuses an anonymous record through the auth API (validateUserInfo)", async () => {
     await expect(
       memoryAuth(PASSWORD_ONLY).api.signInAnonymous()
     ).rejects.toMatchObject({ body: { code: "email_not_verified" } })
+  })
+})
+
+describe("password sign-in needs a verified email (I-8)", () => {
+  const PASSWORD = "correct-horse-battery-staple"
+
+  // Без гейта `validateUserInfo`: запис ставить тест, як скрипт чи адміністратор
+  async function signIn(emailVerified: boolean) {
+    const auth = betterAuth({
+      ...authOptions(pool, ORIGIN, "secret", PASSWORD_ONLY, mail),
+      database: undefined,
+      user: undefined,
+    })
+    const context = await auth.$context
+    const email = `${String(emailVerified)}@app.test`
+    const user = await context.internalAdapter.createUser(
+      { email, name: "User", emailVerified },
+      { method: "admin" }
+    )
+    await context.internalAdapter.linkAccount({
+      userId: user.id,
+      providerId: "credential",
+      accountId: user.id,
+      password: await context.password.hash(PASSWORD),
+    })
+    return auth.api.signInEmail({ body: { email, password: PASSWORD } })
+  }
+
+  it("refuses a record with an unverified email (403 EMAIL_NOT_VERIFIED)", async () => {
+    await expect(signIn(false)).rejects.toMatchObject({
+      statusCode: 403,
+      body: { code: "EMAIL_NOT_VERIFIED" },
+    })
+  })
+
+  it("lets a verified record in with the same password", async () => {
+    expect((await signIn(true)).user.email).toBe("true@app.test")
   })
 })
 
