@@ -3,6 +3,7 @@ import {
   BASE,
   baseAnswer,
   HIDDEN_TAB,
+  HIDDEN_TAB_BASIS,
   JUDGED_CONDITIONS,
   OVERRIDES,
   type JudgedCondition,
@@ -246,6 +247,36 @@ describe("base cells: the target table §5.3", () => {
       expect(
         baseAnswer({ reason: "requirement", requirement }, "view", "tab-hidden")
       ).toBe(HIDDEN_TAB[requirement])
+  })
+
+  it("every hidden-tab cell that differs from §5.2 names row 23 of §5.14, and only those", () => {
+    // Колонка §5.2 літералом: `by-setter` — відповідь залежить від
+    // постановника вимоги, якого SK-1 не несе, тож одна клітинка з нею
+    // розходиться завжди.
+    const spec: Record<
+      keyof typeof HIDDEN_TAB,
+      "defer" | "admit" | "by-setter"
+    > = {
+      "composition-unconfirmed": "defer",
+      "channel-rejoin": "defer",
+      "hydration-trust": "defer",
+      "access-narrowed": "admit",
+      "target-behind-header": "defer",
+      "min-version": "defer",
+      "value-hidden": "defer",
+      "row-unfinished": "defer",
+      "version-epoch-switched": "defer",
+      "rights-unconfirmed": "by-setter",
+      "version-unconfirmed": "by-setter",
+    }
+    const differing = REQUIREMENT_KINDS.filter(
+      (kind) => HIDDEN_TAB[kind] !== spec[kind]
+    )
+    expect(Object.keys(HIDDEN_TAB_BASIS).sort()).toEqual([...differing].sort())
+    expect(HIDDEN_TAB_BASIS).toEqual({
+      "rights-unconfirmed": { row: 23 },
+      "version-unconfirmed": { row: 23 },
+    })
   })
 
   it("discard-bound does not apply to service targets, for every reason", () => {
