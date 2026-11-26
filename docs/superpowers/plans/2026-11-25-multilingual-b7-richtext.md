@@ -142,15 +142,54 @@
 
 ## 7. Задачі
 
-| # | Задача | Файли | Готово, коли | Після | Перевірка |
-| --- | --- | --- | --- | --- | --- |
-| 0 | Якорі й поправки спеки | спеки й глосарій з §8 | `orient --plan` і `doc anchors` чисті; поправки §8 внесено одним комітом `docs(spec)` | — | `doc anchors` |
-| 1 | Тип і правила метаданих | `model/schemas/value-type.ts`, `attribute.ts`, `rules.ts`, `model/physical/pg-types.ts`, `compiler/messages.ts`, `compiler/search-fields.ts`, складені індекси, `custom-table.ts`, схеми регістрів і констант; JSON Schema генератором | `RichText` у `LOGICAL_TYPES`, фізичний `jsonb`. Кожна відмова Р-B7-9 має тест правила з кодом. Типовий `maxBytes` — 1 МіБ, явний дозволено. Опис `load` і `maxBytes` у `.meta` згадує `RichText`. Тест зворотного читання: `jsonb` → `Json` | 0 | `run-tests unit --changed` |
-| 2 | Профіль, перевірка, порожність у T0 | новий модуль `model/runtime/rich-text.ts` (чи `model/schemas/`, на вибір виконавиці) з експортом через `simetra/model`; `rich-text-cases.ts`; тести | `checkRichText` виконує Р-B7-2–Р-B7-4, `isRichTextEmpty` — Р-B7-7. Правила відмови — одна таблиця `it.each` з кодом правила. Прийняття — зразок документа зі всіма вузлами й позначками у формі `getJSON`, написаний за джерелами `pkg-src @tiptap/<пакет>@3.35.0` (пакети Р-B7-11); зразок лежить у фікстурі поряд із `rich-text-cases.ts`. Мутації §5 для профілю, `href`, `class`, глибини й таблиці порожності червоні | 0 | `run-tests unit --filter rich-text` |
-| 3 | Точка перевірки значення й тип у шляхах читання | `model/runtime/values.ts` (`encodeAttributeValue`, гілка `RichText`, `wireBytes`), `model/runtime/errors.ts`, `model/runtime/wire.ts`, `server/values.ts`, `server/read-filter.ts`, `server/read.ts`, `data/store/filter.ts`, `compiler/row-budget.ts`, `compiler/codegen.ts` | `encodeAttributes` кличе `encodeAttributeValue`, наявні тести `values.test.ts` без змін зелені. Тест порядку Р-B7-6 і межі на байт є. Фільтр, сортування й `where` по `RichText` — `command.invalid`, як для `Json`, у T3 і T4. Кодоген дає `RichTextDocument` | 1, 2 | `run-tests unit --changed` |
-| 4 | Лінивість і SQL-функція порожності | `compiler/runtime-catalog.ts`; `compiler/platform/units.ts`, `names.ts`; розпізнавач шару платформи (`compiler/platform/recogniser.ts`, `install.ts`) | `RichText` шапки без `load` у каталозі — `lazy`, у ТЧ — `eager`. Шар платформи кожного проєкту, з довідником «Користувачі» й без нього, містить функцію з грантами; тест шару платформи й розпізнавача бачить її як об'єкт платформи. Текст функції збудовано зі сталих T0. Unit-тест тексту: `IMMUTABLE STRICT PARALLEL SAFE`, набір пробільних символів — з `RICH_TEXT_WHITESPACE`. Тест шару для обох гілок (з «Користувачами» й без) | 2 | `run-tests unit --changed` |
-| 5 | DB-тест запису й читання | новий файл `rich-text.db.test.ts` у `packages/designer/src/__tests__/`. Домен — `Gauge` (фікстура прав `compiler/__tests__/fixtures/rights.ts`) з реквізитом `RichText` у шарі цього тесту, за зразком `wideBigintLayer` (`compiler/__tests__/fixtures/rights.ts`, реекспорт через `packages/simetra/test/support.ts`). Опора — `read-query.db.test.ts` і `support/db.ts` | на стенді `postgres` від ролі користувача: `create` з повним зразком документа, потім читання картки повертає рівний документ (глибока рівність; `jsonb` міняє порядок ключів), а списочне читання реквізиту не віддає. `update` з невідомим вузлом — `rich-text-profile`, рядок не змінився. Документ понад 1 МіБ — `too-large`. Фільтр за реквізитом — `command.invalid`. Кожен випадок `rich-text-cases.ts` через `simetra.rich_text_is_empty` дає очікуване. Функцію кличуть роль команд і роль користувача. Один сценарій на одній базі, а не окремі бази на випадок; причина DB-рівня — у назві: значення проходить `jsonb` і роль запиту, а функцію виконує Postgres. Тест лишає стенд чистим | 3, 4 | `run-tests db --filter rich-text` |
-| 6 | Звіт архітекторці | — | PR з `Refs #408`; у тілі — рішення на приймання й підсумок | 5 | — |
+### Задача 0. Якорі й поправки спеки
+
+- **Файли:** спеки й глосарій з §8
+- **Готово, коли:** `orient --plan` і `doc anchors` чисті; поправки §8 внесено одним комітом `docs(spec)`
+- **Після:** —
+- **Перевірка:** `doc anchors`
+
+### Задача 1. Тип і правила метаданих
+
+- **Файли:** `model/schemas/value-type.ts`, `attribute.ts`, `rules.ts`, `model/physical/pg-types.ts`, `compiler/messages.ts`, `compiler/search-fields.ts`, складені індекси, `custom-table.ts`, схеми регістрів і констант; JSON Schema генератором
+- **Готово, коли:** `RichText` у `LOGICAL_TYPES`, фізичний `jsonb`. Кожна відмова Р-B7-9 має тест правила з кодом. Типовий `maxBytes` — 1 МіБ, явний дозволено. Опис `load` і `maxBytes` у `.meta` згадує `RichText`. Тест зворотного читання: `jsonb` → `Json`
+- **Після:** 0
+- **Перевірка:** `run-tests unit --changed`
+
+### Задача 2. Профіль, перевірка, порожність у T0
+
+- **Файли:** новий модуль `model/runtime/rich-text.ts` (чи `model/schemas/`, на вибір виконавиці) з експортом через `simetra/model`; `rich-text-cases.ts`; тести
+- **Готово, коли:** `checkRichText` виконує Р-B7-2–Р-B7-4, `isRichTextEmpty` — Р-B7-7. Правила відмови — одна таблиця `it.each` з кодом правила. Прийняття — зразок документа зі всіма вузлами й позначками у формі `getJSON`, написаний за джерелами `pkg-src @tiptap/<пакет>@3.35.0` (пакети Р-B7-11); зразок лежить у фікстурі поряд із `rich-text-cases.ts`. Мутації §5 для профілю, `href`, `class`, глибини й таблиці порожності червоні
+- **Після:** 0
+- **Перевірка:** `run-tests unit --filter rich-text`
+
+### Задача 3. Точка перевірки значення й тип у шляхах читання
+
+- **Файли:** `model/runtime/values.ts` (`encodeAttributeValue`, гілка `RichText`, `wireBytes`), `model/runtime/errors.ts`, `model/runtime/wire.ts`, `server/values.ts`, `server/read-filter.ts`, `server/read.ts`, `data/store/filter.ts`, `compiler/row-budget.ts`, `compiler/codegen.ts`
+- **Готово, коли:** `encodeAttributes` кличе `encodeAttributeValue`, наявні тести `values.test.ts` без змін зелені. Тест порядку Р-B7-6 і межі на байт є. Фільтр, сортування й `where` по `RichText` — `command.invalid`, як для `Json`, у T3 і T4. Кодоген дає `RichTextDocument`
+- **Після:** 1, 2
+- **Перевірка:** `run-tests unit --changed`
+
+### Задача 4. Лінивість і SQL-функція порожності
+
+- **Файли:** `compiler/runtime-catalog.ts`; `compiler/platform/units.ts`, `names.ts`; розпізнавач шару платформи (`compiler/platform/recogniser.ts`, `install.ts`)
+- **Готово, коли:** `RichText` шапки без `load` у каталозі — `lazy`, у ТЧ — `eager`. Шар платформи кожного проєкту, з довідником «Користувачі» й без нього, містить функцію з грантами; тест шару платформи й розпізнавача бачить її як об'єкт платформи. Текст функції збудовано зі сталих T0. Unit-тест тексту: `IMMUTABLE STRICT PARALLEL SAFE`, набір пробільних символів — з `RICH_TEXT_WHITESPACE`. Тест шару для обох гілок (з «Користувачами» й без)
+- **Після:** 2
+- **Перевірка:** `run-tests unit --changed`
+
+### Задача 5. DB-тест запису й читання
+
+- **Файли:** новий файл `rich-text.db.test.ts` у `packages/designer/src/__tests__/`. Домен — `Gauge` (фікстура прав `compiler/__tests__/fixtures/rights.ts`) з реквізитом `RichText` у шарі цього тесту, за зразком `wideBigintLayer` (`compiler/__tests__/fixtures/rights.ts`, реекспорт через `packages/simetra/test/support.ts`). Опора — `read-query.db.test.ts` і `support/db.ts`
+- **Готово, коли:** на стенді `postgres` від ролі користувача: `create` з повним зразком документа, потім читання картки повертає рівний документ (глибока рівність; `jsonb` міняє порядок ключів), а списочне читання реквізиту не віддає. `update` з невідомим вузлом — `rich-text-profile`, рядок не змінився. Документ понад 1 МіБ — `too-large`. Фільтр за реквізитом — `command.invalid`. Кожен випадок `rich-text-cases.ts` через `simetra.rich_text_is_empty` дає очікуване. Функцію кличуть роль команд і роль користувача. Один сценарій на одній базі, а не окремі бази на випадок; причина DB-рівня — у назві: значення проходить `jsonb` і роль запиту, а функцію виконує Postgres. Тест лишає стенд чистим
+- **Після:** 3, 4
+- **Перевірка:** `run-tests db --filter rich-text`
+
+### Задача 6. Звіт архітекторці
+
+- **Файли:** —
+- **Готово, коли:** PR з `Refs #408`; у тілі — рішення на приймання й підсумок
+- **Після:** 5
+- **Перевірка:** —
 
 Нотатки виконавиці:
 

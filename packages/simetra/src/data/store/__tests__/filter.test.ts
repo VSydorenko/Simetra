@@ -216,6 +216,54 @@ describe("compareRows", () => {
   })
 })
 
+// `RichText` — як `Json`: ні рівності, ні порядку, лише `isNull` (Р-B7-10).
+// Реквізит — лише тут: спільна фікстура живить і тест рівності з базою.
+describe("RichText", () => {
+  const payload = filterObject.attributes.find((a) => a.name === "payload")!
+  const richInfo = fieldInfoOf({
+    ...filterObject,
+    attributes: [
+      ...filterObject.attributes,
+      { ...payload, name: "body", column: "body_col", type: "RichText" },
+    ],
+  })
+  const doc = { type: "doc", content: [] }
+
+  it.each<Filter>([
+    { attribute: "body", op: "eq", value: doc },
+    { attribute: "body", op: "ne", value: doc },
+    { attribute: "body", op: "in", value: [doc] },
+    { attribute: "body", op: "lt", value: doc },
+  ])("refuses $op", (filter) => {
+    expect(refusal(() => compileFilter(filter, richInfo, collator))).toEqual({
+      code: "command.invalid",
+      path: "where.op",
+    })
+  })
+
+  it("accepts isNull", () => {
+    const test = compileFilter(
+      { attribute: "body", op: "isNull" },
+      richInfo,
+      collator
+    )
+    expect([test({ body: null }), test({ body: doc })]).toEqual([true, false])
+  })
+
+  it("refuses sorting", () => {
+    expect(
+      refusal(() =>
+        compareRows(
+          [{ attribute: "body", direction: "asc" }],
+          richInfo,
+          "ref",
+          collator
+        )
+      )
+    ).toEqual({ code: "command.invalid", path: "orderBy.0.attribute" })
+  })
+})
+
 describe("checkFilterBudget", () => {
   const deep = (depth: number): Filter =>
     depth === 1 ? { attribute: "name", op: "isNull" } : { not: deep(depth - 1) }

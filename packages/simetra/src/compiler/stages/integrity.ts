@@ -980,17 +980,18 @@ function checkCompositeIndexes(
     const def = KIND_REGISTRY[object.kind]
     if (def.compositeIndexes !== true) continue
     const data = object.data as {
-      attributes?: { name: string }[]
+      attributes?: { name: string; type?: string }[]
       indexes?: Declared
       tabularSections?: {
         name: string
-        attributes: { name: string }[]
+        attributes: { name: string; type?: string }[]
         indexes?: Declared
       }[]
     }
     const report = (
       declared: Declared | undefined,
       known: ReadonlyMap<string, string>,
+      richTextNames: ReadonlySet<string>,
       prefix: string,
       section?: string
     ) => {
@@ -1015,6 +1016,15 @@ function checkCompositeIndexes(
                 params
               )
             )
+          } else if (richTextNames.has(name)) {
+            found.push(
+              diagnostic(
+                "index.attribute-rich-text",
+                object.file,
+                pointer,
+                params
+              )
+            )
           } else if (seen.has(canonical)) {
             found.push(
               diagnostic(
@@ -1029,6 +1039,15 @@ function checkCompositeIndexes(
         })
       })
     }
+    // Документ RichText не має порядку, тож у ключ індексу не йде.
+    const richTextOf = (
+      attributes: readonly { name: string; type?: string }[] | undefined
+    ) =>
+      new Set(
+        (attributes ?? [])
+          .filter((attribute) => attribute.type === "RichText")
+          .map((attribute) => attribute.name)
+      )
     // Стандартний реквізит — під канонічним ім'ям (обидва стилі ведуть до
     // однієї колонки), власний — під своїм.
     const known = (
@@ -1044,6 +1063,7 @@ function checkCompositeIndexes(
     report(
       data.indexes,
       known(def.standardColumns(object.data), data.attributes),
+      richTextOf(data.attributes),
       ""
     )
     if (def.tabularSectionColumns !== undefined) {
@@ -1054,6 +1074,7 @@ function checkCompositeIndexes(
         report(
           section.indexes,
           known(rowColumns, section.attributes),
+          richTextOf(section.attributes),
           `/tabularSections/${index}`,
           section.name
         )
@@ -1069,6 +1090,7 @@ const SEARCH_FIELD_CODES = {
   tabularSection: "search.field-tabular",
   ref: "search.field-ref",
   generated: "search.field-generated",
+  richText: "search.field-rich-text",
 } as const satisfies Record<SearchFieldProblem, RuleCode>
 
 /**

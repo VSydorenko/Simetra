@@ -16,6 +16,8 @@ import type { CatalogTable } from "simetra/model"
 export const CATALOG_UNIT_FORMS: Readonly<Record<string, string>> = {
   "function:simetra.signal_outbox_notify()":
     "CREATE OR REPLACE FUNCTION simetra.signal_outbox_notify()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\nBEGIN\n  PERFORM pg_notify('simetra_signal_outbox', '0');\n  RETURN NULL;\nEND\n$function$",
+  "function:simetra.rich_text_is_empty(jsonb)":
+    "CREATE OR REPLACE FUNCTION simetra.rich_text_is_empty(p_value jsonb)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\n SET search_path TO ''\nAS $function$\nSELECT NOT pg_catalog.jsonb_path_exists(p_value, 'strict $.** ? ((@.type == \"text\" && @.text like_regex \"[^\\u0009\\u000A\\u000B\\u000C\\u000D\\u0020\\u00A0\\u1680\\u2000\\u2001\\u2002\\u2003\\u2004\\u2005\\u2006\\u2007\\u2008\\u2009\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]\"))'::pg_catalog.jsonpath)\n$function$",
   "function:simetra.touch()":
     "CREATE OR REPLACE FUNCTION simetra.touch()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    NEW.version := nextval('simetra.row_version');\n  ELSE\n    NEW.version := GREATEST(nextval('simetra.row_version'), OLD.version + 1);\n  END IF;\n  NEW.updated_at := now();\n  IF current_setting('synchronous_commit') IN ('off', 'local') THEN\n    PERFORM set_config('synchronous_commit', 'on', true);\n  END IF;\n  PERFORM set_config('simetra.row_version_' || TG_RELID::text, NEW.version::text, true);\n  RETURN NEW;\nEND\n$function$",
   "function:simetra.key_immutable()":

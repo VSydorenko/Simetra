@@ -43,6 +43,7 @@ function baseType(value: ValueType, refTargetKind?: MetadataKind): string {
     case "Bytes":
       return "bytea"
     case "Json":
+    case "RichText":
       return "jsonb"
     case "Ref":
       // Перелічення зберігається текстом (спека М15), решта видів — uuid.

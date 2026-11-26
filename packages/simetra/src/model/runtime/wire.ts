@@ -238,6 +238,7 @@ function decodeScalar(
       }
       return value
     case "Json":
+    case "RichText":
     case "Raw":
       return value
     default:

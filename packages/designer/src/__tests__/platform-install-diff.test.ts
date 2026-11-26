@@ -42,6 +42,12 @@ let parse: SqlParser
 beforeAll(async () => {
   parse = await loadSqlParser()
 })
+const extra = (path: string) => ({
+  path,
+  kind: "extra" as const,
+  detail: "absent in first model",
+})
+
 const action = (produces: string[], consumes: string[], sql = "CREATE") => ({
   sql,
   produces,
@@ -56,7 +62,48 @@ const CONSUMER_GRANT = action(
 )
 const CONSUMER_PATH = `units.grant:grant:table:${T}:simetra_signal_consumer:delete,select`
 
-const PLAN = [
+/**
+ * Функція порожності `RichText` (Р-B7-8) і її гранти ролям сесії профілю:
+ * рядки тієї самої форми, що й записані вище (дія створення, відкликання від
+ * `PUBLIC` з ACL, грант із залежністю `role:`); роль — за профілем.
+ */
+const RICH_TEXT = "function:simetra.rich_text_is_empty(jsonb)"
+const RICH_TEXT_ROLES: Record<DatabaseProvider, string[]> = {
+  supabase: ["anon", "authenticated", "service_role", "simetra_command"],
+  postgres: ["simetra_anon", "simetra_command", "simetra_user"],
+}
+const richTextPlan = (provider: DatabaseProvider) => [
+  action([RICH_TEXT], ["schema:simetra"]),
+  action(
+    [`acl:(${RICH_TEXT}).PUBLIC`],
+    [RICH_TEXT],
+    `REVOKE ALL ON FUNCTION ${RICH_TEXT} FROM PUBLIC`
+  ),
+  // Живий diff зливає гранти ролей в одну дію
+  action(
+    [],
+    [RICH_TEXT, ...RICH_TEXT_ROLES[provider].map((role) => `role:${role}`)],
+    `GRANT EXECUTE ON FUNCTION ${RICH_TEXT} TO ${RICH_TEXT_ROLES[provider]
+      .map((role) => `"${role}"`)
+      .join(", ")}`
+  ),
+]
+const richTextDifferences = (provider: DatabaseProvider) => {
+  const signature = RICH_TEXT.slice("function:".length)
+  return [
+    `units.${RICH_TEXT}`,
+    `units.grant:revoke:function:${signature}:public:execute`,
+    ...RICH_TEXT_ROLES[provider].map(
+      (role) => `units.grant:grant:function:${signature}:${role}:execute`
+    ),
+  ].map(extra)
+}
+const richTextGrants = (provider: DatabaseProvider) => [
+  ...RICH_TEXT_ROLES[provider].map((role) => `grant|${RICH_TEXT}|${role}`),
+  `revoke|${RICH_TEXT}|public`,
+]
+
+const OUTBOX_PLAN = [
   action(
     [
       `table:${T}`,
@@ -101,13 +148,7 @@ const PLAN = [
   CONSUMER_GRANT,
 ]
 
-const extra = (path: string) => ({
-  path,
-  kind: "extra" as const,
-  detail: "absent in first model",
-})
-
-const DIFFERENCES = [
+const OUTBOX_DIFFERENCES = [
   `tables.${T}`,
   ...Object.values(U).map((f) => `units.${f}`),
   `units.grant:grant:table:${T}:simetra_command:insert(method)`,
@@ -123,7 +164,14 @@ const DIFFERENCES = [
   `units.trigger:${T}.simetra_signal_outbox_stamp`,
 ].map(extra)
 
-const DATA = { plan: PLAN, differences: DIFFERENCES }
+const dataOf = (provider: DatabaseProvider) => ({
+  plan: [...OUTBOX_PLAN, ...richTextPlan(provider)],
+  differences: [...OUTBOX_DIFFERENCES, ...richTextDifferences(provider)],
+})
+/** Звірки нижче — на `postgres`. */
+const DATA = dataOf("postgres")
+const PLAN = DATA.plan
+const DIFFERENCES = DATA.differences
 
 const EXACT = {
   foreignActions: [],
@@ -161,14 +209,15 @@ describe("installMismatch", () => {
       expect(objects.objects).toContain(`table:${T}`)
       // Видимі гранти: власні гранти установки й відкликання від `PUBLIC`
       // того, що `PUBLIC` має за замовчуванням (`EXECUTE` функцій)
-      expect(objects.grants).toEqual([
-        `grant|table:${T}|simetra_command`,
-        `grant|table:${T}|simetra_signal_consumer`,
-        ...Object.values(U)
-          .map((f) => `revoke|${f}|public`)
-          .sort(),
-      ])
-      expect(installMismatch(DATA, objects, parse)).toEqual(EXACT)
+      expect(objects.grants).toEqual(
+        [
+          `grant|table:${T}|simetra_command`,
+          `grant|table:${T}|simetra_signal_consumer`,
+          ...Object.values(U).map((f) => `revoke|${f}|public`),
+          ...richTextGrants(provider),
+        ].sort()
+      )
+      expect(installMismatch(dataOf(provider), objects, parse)).toEqual(EXACT)
     }
   )
 
