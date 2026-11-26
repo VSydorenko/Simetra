@@ -459,8 +459,9 @@ export function settleFlight(
 /**
  * Вимога поставлена. Нова не знижує вже стоячої того ж виду: `since` — більше
  * з двох. Вимога «шапка власника» з іншим ідентифікатором позначки — нова
- * вимога; з тим самим — повторна позначка, що зсуває лише епоху. Вимога
- * бар'єра лишається вимогою бар'єра, доки шапка не змінила її на сувору.
+ * вимога; з тим самим — повторна позначка, що зсуває лише епоху. Злита
+ * вимога бар'єра й шапки лишається вимогою бар'єра: суворіший доказ
+ * (системне перечитування) перемагає.
  */
 export function addRequirement(
   state: TargetState,
@@ -475,7 +476,7 @@ export function addRequirement(
         ...stands,
         since,
         barrier:
-          stands.barrier && (requirement as BehindHeaderRequirement).barrier,
+          stands.barrier || (requirement as BehindHeaderRequirement).barrier,
       }
     } else if (
       stands.kind === "owner-header" &&

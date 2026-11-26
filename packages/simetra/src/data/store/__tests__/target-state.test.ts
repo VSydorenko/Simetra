@@ -502,9 +502,18 @@ describe("TargetState: вимоги, видимість, ревізія", () => 
     expect(s.requirements).toEqual([ownerHeader(2, 2)])
   })
 
-  it("вимога бар'єра стає суворою, коли ту саму ціль відстала шапка", () => {
-    const s = withReqs(behind(5, true), behind(6, false))
-    expect(s.requirements).toEqual([behind(6, false)])
+  it("злиття бар'єра й шапки лишає бар'єр: завантаження не знімає, перечитування знімає", () => {
+    for (const order of [
+      [behind(5, true), behind(6, false)],
+      [behind(5, false), behind(6, true)],
+    ]) {
+      const s = withReqs(...order)
+      expect(s.requirements).toEqual([behind(6, true)])
+      expect(kinds(settleFlight(s, settle({ flight: "load" })))).toEqual([
+        "target-behind-header",
+      ])
+      expect(kinds(settleFlight(s, settle({ flight: "reread" })))).toEqual([])
+    }
   })
 
   it("ревізію рухає вимога складу, доказ складу й видимість за вимоги; вимоги рядків — ні", () => {
