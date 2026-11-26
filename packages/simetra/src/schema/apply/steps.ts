@@ -4,7 +4,13 @@ import {
   unitIdentity,
   type SqlParser,
 } from "simetra/compiler"
-import { quoteIdent, type CatalogModel, type CatalogTable } from "simetra/model"
+import {
+  deletionMarkColumn,
+  publishedColumn,
+  quoteIdent,
+  type CatalogModel,
+  type CatalogTable,
+} from "simetra/model"
 import type {
   EngineAction,
   EngineDiagnostic,
@@ -698,7 +704,17 @@ export function conditionalToPlain(
       )
       const before = unit === undefined ? undefined : usingOf(unit.sql)
       if (table === undefined || before === undefined) continue
-      const columns = new Set(table.columns.map((c) => c.name))
+      // Лише колонки публікації: інакше будь-який ідентифікатор виразу
+      // (`current_user_id`, `simetra`) збігся б із колонкою-реквізитом таблиці
+      // і рядкова політика `authenticated` лишилась би без дозволу. Копії в ТЧ
+      // мають ті самі фізичні імена (Р-D1-9).
+      const publication = new Set([
+        publishedColumn().physicalName,
+        deletionMarkColumn().physicalName,
+      ])
+      const columns = new Set(
+        table.columns.map((c) => c.name).filter((n) => publication.has(n))
+      )
       const reads = (text: string) =>
         [...identifiersOf(text)].some((id) => columns.has(id))
       if (reads(before) && !reads(now)) out.add(stepId(offset + i))

@@ -1221,8 +1221,8 @@ describe("conditionalToPlain", () => {
     columns: names.map(column),
     indexes: [],
   })
-  const appliedWith = (using: string): CatalogModel => ({
-    tables: [itemsTable("published", "deleted")],
+  const appliedWith = (using: string, ...extra: string[]): CatalogModel => ({
+    tables: [itemsTable("published", "deletion_mark", ...extra)],
     enumTypes: [],
     units: [
       {
@@ -1234,7 +1234,7 @@ describe("conditionalToPlain", () => {
       },
     ],
   })
-  const CONDITIONAL = appliedWith("published AND NOT deleted")
+  const CONDITIONAL = appliedWith("published AND NOT deletion_mark")
   const alter = (using: string) =>
     action(`ALTER POLICY items_public_read ON app.items USING (${using})`, {
       consumes: ["policy:app.items.items_public_read"],
@@ -1289,6 +1289,23 @@ describe("conditionalToPlain", () => {
     )
     expect(conditionalToPlain([alter("true")], undefined, 0)).toEqual(new Set())
   })
+
+  it.each([
+    ["current_user_id", '(SELECT "simetra"."current_user_id"()) IS NOT NULL'],
+    ["simetra", '(SELECT "simetra"."current_user_id"()) IS NOT NULL'],
+    [
+      "current_user_id",
+      " ( SELECT simetra.current_user_id() AS current_user_id) IS NOT NULL",
+    ],
+  ])(
+    "flags the authenticated form on a table with a `%s` column (%s)",
+    (extra, using) => {
+      const applied = appliedWith("published AND NOT deletion_mark", extra)
+      expect(conditionalToPlain([alter(using)], applied, 0)).toEqual(
+        new Set(["s1"])
+      )
+    }
+  )
 
   it("gives a permission separate from the column drop", () => {
     const actions = [alter("true"), dropColumn("published")]

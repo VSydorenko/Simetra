@@ -36,7 +36,10 @@ const sites = {
 }
 
 /** Модель з довідником «Повідомлення» у заданій формі `publicRead` і з ТЧ. */
-async function model(publicRead: unknown): Promise<CompiledModel> {
+async function model(
+  publicRead: unknown,
+  attributes: unknown[] = []
+): Promise<CompiledModel> {
   const layer: Layer = {
     [NOTICE_FILE]: {
       id: uuid(9700),
@@ -46,6 +49,7 @@ async function model(publicRead: unknown): Promise<CompiledModel> {
       kindLabel: "notice",
       scope: "none",
       publicRead,
+      attributes,
       tabularSections: [sites],
     },
   }
@@ -121,6 +125,38 @@ describe("conditional publicRead on apply", () => {
       expect(requiredPermissions).toEqual(
         expect.arrayContaining([drop!.id, policy!.id])
       )
+    })
+  }, 300_000)
+
+  it("turning the authenticated condition into the string form needs a permission even with a `current_user_id` column", async () => {
+    // Реквізит `currentUser` дає колонку `current_user_id`, яку текст
+    // рядкової політики `authenticated` читає як функцію, а не як колонку
+    const reference = [
+      {
+        id: uuid(9703),
+        name: "currentUser",
+        physicalName: "current_user_id",
+        type: "Ref",
+        ref: { kind: "Catalog", name: "Notice" },
+      },
+    ]
+    const conditional = await model(
+      { role: "authenticated", published: true },
+      reference
+    )
+    await withModelTarget(conditional, async (url) => {
+      const outcome = await planOn(url, await model("authenticated", reference))
+      if (outcome.status !== "planned") throw new Error(outcome.status)
+      const { steps, requiredPermissions } = outcome.artifact
+      const policy = steps.find(
+        (s) =>
+          s.class === "relaxation" &&
+          [...s.produced, ...s.consumed].some(
+            (r) => r.kind === "policy" && r.name === "notice_public_read"
+          )
+      )
+      expect(policy).toBeDefined()
+      expect(requiredPermissions).toContain(policy!.id)
     })
   }, 300_000)
 })
