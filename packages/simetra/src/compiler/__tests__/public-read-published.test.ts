@@ -1,11 +1,11 @@
-import { describe, expect, it, vi } from "vitest"
+import { beforeAll, describe, expect, it, vi } from "vitest"
 import {
   KIND_REGISTRY,
   isObjectTable,
   type PhysicalSnapshot,
   type PhysicalTable,
 } from "simetra/model"
-import type { CompiledModel } from "simetra/compiler"
+import { compile, type CompiledModel } from "simetra/compiler"
 import { accessContracts } from "../access-units"
 import {
   carrierBackfillStatements,
@@ -26,7 +26,14 @@ import {
   withRoles,
   type Layer,
 } from "./fixtures/rights"
+import { kitchenSink } from "./fixtures/kitchen-sink"
 import { snakeCaseTwin } from "./fixtures/snake-case"
+import {
+  bodyShape,
+  expectedFunction,
+  loadShapeParsers,
+  tree,
+} from "./fixtures/sql-shape"
 import { metaFiles, project, uuid } from "./helpers"
 
 const CONDITIONAL = { role: "anon", published: true }
@@ -299,6 +306,12 @@ describe("rights.public-read-published-read (Р-D1-13)", () => {
 })
 
 describe("copies of the publication condition in tabular sections (Р-D1-9)", () => {
+  beforeAll(loadShapeParsers)
+  const unitOf = (model: CompiledModel, identity: string) => {
+    const found = model.sqlUnits.find((u) => u.identity === identity)
+    expect(found, identity).toBeDefined()
+    return found!
+  }
   const REGION = { schema: "public", name: "region" }
   const copiesOf = (table: PhysicalTable) =>
     table.columns
@@ -376,6 +389,32 @@ describe("copies of the publication condition in tabular sections (Р-D1-9)", ()
         `trigger:public.${LINES_TABLE}.${LINES_TABLE}_simetra_carriers`,
         `function:public.${LINES_TABLE}_simetra_carriers()`,
       ])
+    )
+    // Поширення — на шапці: зміна V (публікація, позначка) переписує копії.
+    expect(
+      unitOf(model, "trigger:public.region.region_simetra_carriers_out").tree
+    ).toEqual(
+      tree(
+        "CREATE TRIGGER region_simetra_carriers_out AFTER UPDATE ON public.region FOR EACH ROW WHEN (OLD.deletion_mark IS DISTINCT FROM NEW.deletion_mark OR OLD.published IS DISTINCT FROM NEW.published) EXECUTE FUNCTION public.region_simetra_carriers_out();"
+      )
+    )
+    expect(
+      bodyShape(
+        unitOf(model, "function:public.region_simetra_carriers_out()").sql
+      )
+    ).toEqual(
+      bodyShape(
+        expectedFunction(
+          "public.region_simetra_carriers_out",
+          [
+            "BEGIN",
+            `  UPDATE public.${LINES_TABLE} d SET published = NEW.published, deletion_mark = NEW.deletion_mark`,
+            "    WHERE d.org_id = NEW.org_id AND d.parent_id = NEW.id AND (d.published IS DISTINCT FROM NEW.published OR d.deletion_mark IS DISTINCT FROM NEW.deletion_mark);",
+            "  RETURN NULL;",
+            "END",
+          ].join("\n")
+        )
+      )
     )
     const backfill = carrierBackfillStatements(model.physical, [
       {
@@ -460,4 +499,27 @@ describe("copies of the publication condition in tabular sections (Р-D1-9)", ()
       ])
     }
   )
+  it("carries the copies end to end in the kitchen sink (Item with a section)", async () => {
+    const result = await compile(kitchenSink())
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    const model = result.model!
+    expect(
+      tableOf(model, "item").columns.find((c) => c.name === "published")
+    ).toMatchObject({ type: "boolean", notNull: true })
+    const item = { schema: "public", name: "item" }
+    expect(copiesOf(tableOf(model, "item_barcodes"))).toEqual(
+      expect.arrayContaining(
+        ["published", "deletion_mark"].map((column) => ({
+          name: column,
+          type: "boolean",
+          notNull: false,
+          copyOf: { table: item, column, through: "parent_id" },
+        }))
+      )
+    )
+    expect(
+      model.contracts.access.find((a) => a.table.name === "item_barcodes")!
+        .published
+    ).toEqual({ column: "published", mark: "deletion_mark" })
+  })
 })
