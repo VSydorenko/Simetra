@@ -5,11 +5,13 @@ import {
   LANGUAGES_FILE,
   LANGUAGES_TABLE,
   PROJECT_FILE,
+  attribute,
   languagesLayer,
   policyDomain,
   profileLayer,
   superuserClient,
   type Layer,
+  uuid,
 } from "../../../simetra/test/support"
 import { applyOn, planOn, withModelTarget } from "./support/db"
 
@@ -46,6 +48,38 @@ const withoutRole: Layer = {
 const primary = (code: string): Layer => ({
   [PROJECT_FILE]: { primaryDataLanguage: code },
 })
+
+/**
+ * Непов'язана зміна моделі (новий реквізит «Мов»): хеш інший, тож план не
+ * `unchanged` і звірка засіву виконується над засіяною ціллю.
+ */
+const unrelatedChange: Layer = {
+  [LANGUAGES_FILE]: {
+    attributes: [
+      attribute("note", { id: uuid(9990), type: "String", length: 20 }),
+    ],
+  },
+}
+
+/**
+ * План засіяної цілі зі зміною моделі: вердикт `seeded` (дозволений стан 2
+ * Р-B2-8) — план без помилок і без кроку засіву.
+ */
+const seededPlan = async (url: string, m: CompiledModel) => {
+  const outcome = await planOn(url, m)
+  return {
+    status: outcome.status,
+    errors: outcome.diagnostics
+      .filter((d) => d.severity === "error")
+      .map((d) => d.code),
+    seedSteps:
+      outcome.status === "planned"
+        ? outcome.artifact.steps.filter((s) => s.origin === "seeds").length
+        : null,
+  }
+}
+
+const SEEDED_PLAN = { status: "planned", errors: [], seedSteps: 0 }
 
 const database = (url: string) => new URL(url).pathname.slice(1)
 
@@ -107,8 +141,11 @@ describe("the seed of the primary language on apply", () => {
         expect(
           await rows(client, "code, state, is_primary, predefined_name")
         ).toEqual([SEEDED])
-        // Повторний план — без кроку засіву: змін немає
+        // Повторний план тієї самої моделі — ярлик хешу, звірки немає
         expect((await planOn(url, uk)).status).toBe("unchanged")
+        // Зі зміною моделі звірка бачить засіяну ціль: план без кроку засіву
+        const changed = await model(unrelatedChange)
+        expect(await seededPlan(url, changed)).toEqual(SEEDED_PLAN)
         // Інша основна мова в конфігу — відмова плану до будь-якого кроку
         expect(await refusalOf(url, await model(primary("en")))).toEqual(
           refused("en")
@@ -146,8 +183,8 @@ describe("the seed of the primary language on apply", () => {
             await committedReplica(client, restore)
           }
         }
-        // Відновлена ціль — знову засіяна: план без змін
-        expect((await planOn(url, uk)).status).toBe("unchanged")
+        // Відновлена ціль — знову засіяна
+        expect(await seededPlan(url, changed)).toEqual(SEEDED_PLAN)
       } finally {
         await client.end()
       }
@@ -205,6 +242,10 @@ describe("the seed of the primary language on apply", () => {
           },
           SEEDED,
         ])
+        // Повторний план зі зміною моделі — засіяно, кроку засіву немає
+        expect(await seededPlan(url, await model(unrelatedChange))).toEqual(
+          SEEDED_PLAN
+        )
       } finally {
         await client.end()
       }
