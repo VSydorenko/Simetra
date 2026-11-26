@@ -78,6 +78,14 @@ describe("languages catalog role refusals (Р-B2-2)", () => {
       "/codeLength",
     ],
     [
+      // Без колонки `code` тригер стану мови не будується, а не ламає компіляцію
+      "codeLength 0",
+      base({ [FILE]: languages({ codeLength: 0 }) }),
+      "languages.code-form",
+      FILE,
+      "/codeLength",
+    ],
+    [
       "autonumber",
       base({ [FILE]: languages({ autonumber: true }) }),
       "languages.code-form",

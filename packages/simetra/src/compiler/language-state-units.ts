@@ -19,7 +19,7 @@ import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 import type { ParsedObject } from "./stages/files"
-import { standardColumn } from "./standard-column"
+import { findStandardColumn } from "./standard-column"
 import { sqlLiteral } from "./stages/model"
 
 const ROW_LABEL = "simetra_language"
@@ -77,25 +77,32 @@ export function languageStateTables(
     if (kind.languagesCatalog?.(object.data) !== true) continue
     const state = kind.languageState?.(object.data)
     if (state === undefined) continue
+    // Довідник без колонки ролі (`codeLength: 0`) уже відмовляє правило
+    // `languages.code-form` стадії цілісності; ця функція кличеться раніше
+    // (`derivedFunctions`), тож такої таблиці не будує, а не падає.
     const defs = kind.standardColumns(object.data)
     const column = (logicalName: string) => {
       const def = defs.find((d) => d.logicalName === logicalName)
-      if (def === undefined)
-        throw new Error(
-          `internal: ${object.name} has no standard column ${logicalName}`
-        )
-      return standardColumn(table, def, attributeCase).name
+      return def === undefined
+        ? undefined
+        : findStandardColumn(table, def, attributeCase)?.name
     }
-    result.push({
-      table,
-      state,
-      columns: {
-        state: column(state.stateColumn),
-        primary: column(state.primaryColumn),
-        code: column(state.codeColumn),
-        mark: standardColumn(table, deletionMarkColumn(), attributeCase).name,
-      },
-    })
+    const columns = {
+      state: column(state.stateColumn),
+      primary: column(state.primaryColumn),
+      code: column(state.codeColumn),
+      mark: findStandardColumn(table, deletionMarkColumn(), attributeCase)
+        ?.name,
+    }
+    const { state: s, primary, code, mark } = columns
+    if (
+      s === undefined ||
+      primary === undefined ||
+      code === undefined ||
+      mark === undefined
+    )
+      continue
+    result.push({ table, state, columns: { state: s, primary, code, mark } })
   }
   return result.sort(
     (a, b) =>

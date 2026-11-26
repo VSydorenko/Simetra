@@ -26,7 +26,9 @@ export interface CommandFixedColumns {
 /**
  * Факт ролі довідника `fixedColumns` (логічні імена) як визначення його
  * стандартних колонок: ім'я в стилі проєкту дає лише визначення реєстру.
- * Без факту — `undefined`; невідоме ім'я — дефект реєстру.
+ * Без факту — `undefined`. Колонки, якої довідник не має (`codeLength: 0`),
+ * немає й у грантах; таку форму відмовляє `languages.code-form`, а компіляція
+ * доходить до правила, а не падає.
  */
 export function roleFixedColumns(
   object: Pick<ParsedObject, "kind" | "data">
@@ -36,12 +38,7 @@ export function roleFixedColumns(
   if (fixed === undefined) return undefined
   const defs = kind.standardColumns(object.data)
   const of = (names: readonly string[]) =>
-    names.map((name) => {
-      const def = defs.find((d) => d.logicalName === name)
-      if (def === undefined)
-        throw new Error(`internal: unknown role fixed column ${name}`)
-      return def
-    })
+    defs.filter((d) => names.includes(d.logicalName))
   return { insert: of(fixed.insert), update: of(fixed.update) }
 }
 
