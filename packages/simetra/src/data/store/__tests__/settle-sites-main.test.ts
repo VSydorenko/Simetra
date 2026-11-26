@@ -699,6 +699,53 @@ const REREAD: Record<string, Scenario> = {
       await settle()
       return log(rec)
     },
+  "reread applied on a never-loaded section (R12): loaded stays false":
+    async () => {
+      // Те саме, що збій R12, але перечитування вдале: воно не є завантаженням
+      // і `loaded` вигляду не ставить (його ставить лише завантаження).
+      const h = setup({
+        now: () => Date.now(),
+        rightsSnapshot: true,
+        objects: [WITH_NOTES, org],
+        mode: "manual",
+        limits: { revalidateIntervalMs: 10_000_000 },
+      })
+      h.fake.rightsSnapshot = BOTH_SCOPES
+      h.fake.rightsVersion = "1".padStart(64, "0")
+      h.core.requestRights()
+      await settle()
+      seed(h.fake, 1, 1)
+      const lines = [{ ref: key(901), qty: 1, lineNumber: 1 }]
+      h.fake.setLines(TASK, key(1), "lines", lines)
+      h.fake.setLines(TASK, key(1), "notes", lines)
+      const rec = record(h)
+      const section = (name: string): ViewSpec => ({
+        kind: "section",
+        object: TASK,
+        owner: key(1),
+        section: name,
+      })
+      const named = (name: string) => (read: FakeRead) =>
+        (read.query as { tabularSection?: string } | undefined)
+          ?.tabularSection === name
+      rec.watch(h.core.view(section("lines")), "lines")
+      await settle()
+      h.fake.take(named("lines")).fail("command.unavailable")
+      await settle()
+      rec.watch(h.core.view(section("notes")), "notes")
+      await settle()
+      h.fake.rightsVersion = "2".padStart(64, "0")
+      h.core.requestRights()
+      await settle()
+      // Читання `notes` стартувало до нового знімка й осідає після нього:
+      // бар'єр відкидає відповідь і перечитує `lines`, яке не летить.
+      h.fake.take(named("notes")).answer()
+      await settle()
+      rec.mark()
+      h.fake.take(named("lines")).answer()
+      await settle()
+      return log(rec)
+    },
   "reread failed: apply throws": async () => {
     const { h, rec } = await loadedRig()
     throwOnPut(h)
@@ -1545,6 +1592,22 @@ describe("the kind table against the recorded behaviour of main", () => {
         /failures=1/
       )
     ).toBe(countsFor(R.reread.failureCounts, false))
+  })
+
+  it("a system re-read does not make a never-loaded view loaded: only a load sets `loaded`", () => {
+    // Запис `loaded` у журналі різниць був би рядком `section.loaded=true`.
+    expect(
+      has(
+        "reread applied on a never-loaded section (R12): loaded stays false",
+        /loaded=/
+      )
+    ).toBe(false)
+    expect(
+      has(
+        "reread applied on a never-loaded section (R12): loaded stays false",
+        /okReadEpoch=set/
+      )
+    ).toBe(true)
   })
 
   it("liftsBanners and setsBanners: load lifts, page and reread leave, only reread sets", () => {
