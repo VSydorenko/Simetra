@@ -51,9 +51,17 @@ export interface PlanStep {
    * створюють колонки-копії, і до кроків середовища. Крок заповнення
    * (платформна спека §6.6) стоїть у блоці двигуна безпосередньо перед
    * кроком, що робить його колонку `NOT NULL`.
+   * Крок засіву (Р-B2-7) вставляє передвизначений рядок після блоку
+   * `versions`: таблиця, її тригери й послідовність версій уже є.
    */
   origin:
-    "intent" | "engine" | "backfill" | "carriers" | "versions" | "environment"
+    | "intent"
+    | "engine"
+    | "backfill"
+    | "carriers"
+    | "versions"
+    | "seeds"
+    | "environment"
   sql: string
   verb: EngineAction["verb"]
   class: StepClass

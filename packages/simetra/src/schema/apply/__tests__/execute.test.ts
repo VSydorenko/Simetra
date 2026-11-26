@@ -1955,6 +1955,59 @@ describe("executePlan", () => {
     })
   })
 
+  describe("seed steps", () => {
+    const engineSteps = plan.steps
+    const n = engineSteps.length + 1
+    const seed = step(
+      `s${n}`,
+      "INSERT INTO app.languages (id) VALUES (pg_catalog.gen_random_uuid()) ON CONFLICT (predefined_name) WHERE predefined_name IS NOT NULL DO NOTHING",
+      { origin: "seeds", class: "dataStep", lockClass: "shareRowExclusive" }
+    )
+    const environment = step(`s${n + 1}`, "GRANT SELECT ON app.n TO anon", {
+      origin: "environment",
+    })
+    const withSeeds: ExecutablePlan = {
+      ...plan,
+      steps: [...engineSteps, seed, environment],
+    }
+
+    // Засів (Р-B2-7) — після DDL, з тригерами рядка й без мовчазного
+    // пропуску рядка політиками: той самий раннер, що й у кроків копій
+    it("runs seed steps with row security off after the engine, in their own phase", async () => {
+      const fake = clocked()
+      const outcome = await executePlan(fake.db, target, withSeeds, {
+        ...withMode("rehearse"),
+        clock: fake.clock,
+      })
+      if (outcome.status !== "rolledBack")
+        throw new Error(`not rolled back: ${outcome.status}`)
+      const order = [...engineSteps, seed, environment].map((s) =>
+        fake.log.indexOf(s.sql)
+      )
+      expect(order.every((i) => i >= 0)).toBe(true)
+      expect(order).toEqual([...order].sort((a, b) => a - b))
+      expect(fake.seen[seed.sql]).toEqual([{ ...SESSION, row_security: "off" }])
+      expect(fake.seen[environment.sql]).toEqual([SESSION])
+      expect(
+        outcome.evidence.durations.steps
+          .filter((s) => s.phase === "seeds")
+          .map((s) => s.id)
+      ).toContain(seed.id)
+    })
+
+    it("refuses seed steps in replica mode", async () => {
+      const { db, log } = fakeDb({ replicationRole: "replica" })
+      const outcome = await executePlan(db, target, withSeeds, options)
+      expect(outcome).toMatchObject({
+        status: "refused",
+        diagnostics: [
+          { code: "apply.replication-role", params: { value: "replica" } },
+        ],
+      })
+      expect(log).not.toContain(seed.sql)
+    })
+  })
+
   it("runs a preamble of the search path alone as it is", async () => {
     const { db, seen } = fakeDb()
     const outcome = await executePlan(db, target, plan, options)
@@ -2819,6 +2872,15 @@ describe("executePlan", () => {
       "whose environment step precedes a versions step",
       ["environment", "versions"] as const,
     ],
+    ["whose seed step precedes an engine step", ["seeds", "engine"] as const],
+    [
+      "whose seed step precedes a versions step",
+      ["seeds", "versions"] as const,
+    ],
+    [
+      "whose environment step precedes a seed step",
+      ["environment", "seeds"] as const,
+    ],
   ])("refuses a plan %s before BEGIN", async (_, origins) => {
     const { db, log } = fakeDb()
     const run = executePlan(
@@ -2833,7 +2895,7 @@ describe("executePlan", () => {
       options
     )
     await expect(run).rejects.toThrow(
-      "plan steps are out of origin order: intent, engine, carriers, versions, environment"
+      "plan steps are out of origin order: intent, engine, carriers, versions, seeds, environment"
     )
     expect(log).toEqual([])
   })
