@@ -101,6 +101,8 @@ export interface Stand {
   signUp(): Promise<Credentials>
   /** Новий браузер, у якому щойно зареєстрований користувач увійшов. */
   browser(app: App): Promise<Browser>
+  /** Сесійний верифікатор людини шаблону (`createVerifySession`) над Better Auth стенду. */
+  verifySession: AgentInteractionOptions["verifySession"]
   close(): Promise<void>
 }
 
@@ -175,6 +177,7 @@ export async function startStand(tag: string): Promise<Stand> {
   }
 
   let seq = 0
+  const verifySession = createVerifySession((args) => auth.api.getSession(args))
   const stand: Stand = {
     set,
     pool,
@@ -197,9 +200,7 @@ export async function startStand(tag: string): Promise<Stand> {
         pool,
         origin: ORIGIN,
         cookieKeys: keys.cookieKeys,
-        verifySession:
-          o.verifySession ??
-          createVerifySession((args) => auth.api.getSession(args)),
+        verifySession: o.verifySession ?? verifySession,
         requiresTenant: o.requiresTenant ?? false,
       })
       const fetch = withAgentOauth(
@@ -227,6 +228,7 @@ export async function startStand(tag: string): Promise<Stand> {
       await browser.signIn(await stand.signUp())
       return browser
     },
+    verifySession,
     close: async () => {
       docServer.close()
       await pool.end()

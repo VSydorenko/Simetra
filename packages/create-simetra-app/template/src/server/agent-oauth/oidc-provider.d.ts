@@ -23,6 +23,7 @@ declare module "oidc-provider" {
     accountId?: string
     clientId?: string
     exp?: number
+    readonly isExpired: boolean
     save(): Promise<string>
     destroy(): Promise<void>
     addOIDCScope(scope: string): void
@@ -39,6 +40,7 @@ declare module "oidc-provider" {
     isExpired?: boolean
     extra?: Record<string, unknown>
     jkt?: string
+    "x5t#S256"?: string
   }
 
   export interface KoaContextWithOIDC {

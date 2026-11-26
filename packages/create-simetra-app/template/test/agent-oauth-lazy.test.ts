@@ -14,10 +14,17 @@ vi.mock("../src/server/runtime", () => ({ serverHash: "hash" }))
 vi.mock("oidc-provider", () => {
   throw new Error("oidc-provider was imported")
 })
+// Адаптер MCP і SDK — так само лише на першому запиті `/mcp` (Р-F4-5)
+vi.mock("simetra/shell/mcp", () => {
+  throw new Error("simetra/shell/mcp was imported")
+})
+vi.mock("@modelcontextprotocol/server", () => {
+  throw new Error("@modelcontextprotocol/server was imported")
+})
 
 // Знахідка 7 F0: бібліотека в графі імпорту entry робила старт повільним
 describe("entry import graph", () => {
-  it("imports the entry and serves a non-agent path without loading oidc-provider", async () => {
+  it("imports the entry and serves a non-agent path without loading oidc-provider or the MCP adapter", async () => {
     const entry = (await import("../src/server")).default as unknown as {
       fetch: (request: Request) => Promise<Response>
     }

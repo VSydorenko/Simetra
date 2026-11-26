@@ -1,7 +1,12 @@
 // Portions copied from munin-mcp (https://github.com/VSydorenko/munin-mcp, gateway/src/oauth/keys.ts)
 // Copyright 2026 Volodymyr Sydorenko
 // Licensed under Apache-2.0. Modified: keys come from the environment (or are ephemeral per process in development) instead of being derived from a master key.
-import { createHash, generateKeyPairSync, randomBytes } from "node:crypto"
+import {
+  createHash,
+  generateKeyPairSync,
+  hkdfSync,
+  randomBytes,
+} from "node:crypto"
 import type { AgentOauthKeys } from "../config"
 
 export interface ProviderKeys {
@@ -46,4 +51,18 @@ export function providerKeys(keys: AgentOauthKeys | undefined): ProviderKeys {
     cookieKeys,
     jwks: { keys: [{ ...signingKey, kid, use: "sig", alg: "EdDSA" }] },
   }
+}
+
+// Своя мітка HKDF: ключ хешу входу (Р-F4-9) виводиться з ключа cookie, але
+// не збігається з ним, тож журнал подій не дає матеріалу для підробки cookie
+const INPUT_HASH_INFO = "simetra/agent-call/input-hash"
+
+/** Ключ HMAC хешу входу в подіях виклику агента: підключ поточного ключа cookie. */
+export function agentInputHashKey(
+  keys: AgentOauthKeys | undefined
+): Uint8Array {
+  const [current] = providerKeys(keys).cookieKeys
+  return new Uint8Array(
+    hkdfSync("sha256", current!, new Uint8Array(0), INPUT_HASH_INFO, 32)
+  )
 }

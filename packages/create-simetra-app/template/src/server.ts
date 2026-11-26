@@ -10,6 +10,7 @@ import {
   authSecret,
   signalsConfig,
 } from "./server/config"
+import { withAgentEntry } from "./server/agent-entry"
 import { withAgentOauth } from "./server/agent-oauth/mount"
 import { BodyTooLarge, bodyExceeded, limitBody } from "./server/body-limit"
 import { serverHash } from "./server/runtime"
@@ -141,6 +142,6 @@ export function createEntryFetch<Rest extends unknown[]>(inner: Fetch<Rest>) {
 
 export default createServerEntry({
   fetch: createEntryFetch(
-    withAgentOauth(createStartHandler(defaultStreamHandler))
+    withAgentEntry(withAgentOauth(createStartHandler(defaultStreamHandler)))
   ),
 })

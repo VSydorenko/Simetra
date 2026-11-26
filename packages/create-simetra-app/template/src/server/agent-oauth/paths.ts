@@ -3,6 +3,14 @@
 /** Шлях ресурсу MCP під походженням застосунку: токен обов'язково прив'язаний до нього. */
 export const AGENT_MCP_PATH = "/mcp"
 
+/** Метадані захищеного ресурсу (RFC 9728) для `AGENT_MCP_PATH`; шлях будує адаптер MCP так само. */
+export const AGENT_PRM_PATH = `/.well-known/oauth-protected-resource${AGENT_MCP_PATH}`
+
+/** Шляхи входу MCP (Р-F4-5): їх обслуговує адаптер, а не Start і не сервер авторизації. */
+export function isAgentEntryPath(pathname: string): boolean {
+  return pathname === AGENT_MCP_PATH || pathname === AGENT_PRM_PATH
+}
+
 /** Сторінка взаємодії: бібліотека ставить cookie `_interaction` саме з цим шляхом. */
 export const agentConnectPath = (uid: string): string => `/agent/connect/${uid}`
 
