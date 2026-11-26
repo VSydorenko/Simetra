@@ -933,14 +933,14 @@ const PLACES: readonly Group[] = [
     inventory: true,
     atInventory: true,
     reason:
-      "Іменовані перевірки (рішення архітекторки 25.11, PR #433): `fireWave` — ефекти хвилі поза читанням (варіант (в)); `onFlush` — схований об'єкт не-цілі (R10); `receiver.run` — не-читальні ефекти пачки на прихованій вкладці й несумісного об'єкта (Р-SK1-8); `subsets.confirm` — іменована перевірка над `gate.tabHidden()` у `loadMore` → `confirm` (Р-SK1-8): мить зняття позначки сторінки до сповіщення, наслідок осідання",
+      "Іменовані перевірки (рішення архітекторки 25.11, PR #433): `fireWave` — ефекти хвилі поза читанням (варіант (в)); `onFlush` — схований об'єкт не-цілі (R10); `receiver.run` — не-читальні ефекти пачки на прихованій вкладці й несумісного об'єкта (Р-SK1-8); `subsets.settleTarget` — та сама іменована перевірка над `gate.tabHidden()` у `loadMore` (раніше замикання `confirm`, злите в єдиний шов кроку 7, SK-2 В; перевірку передає параметр `tabHidden` гачка сторінки) (Р-SK1-8): мить зняття позначки сторінки до сповіщення, наслідок осідання",
     sites: [
       "core.ts::createCore.fireWave token",
       "core.ts::createCore.fireWave staleObjects",
       "core.ts::createCore.onFlush staleObjects",
       "receiver.ts::createReceiver.run gate.tabHidden via ReceiverContext.tabHidden",
       "receiver.ts::createReceiver.run staleObjects via ReaderContextBase.isStale",
-      "subsets.ts::createRegistry.confirm gate.tabHidden via RegistryContext.tabHidden",
+      "subsets.ts::settleTarget gate.tabHidden via settleTarget.tabHidden",
     ],
   },
   {
