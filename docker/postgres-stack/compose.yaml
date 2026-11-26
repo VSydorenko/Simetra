@@ -1,6 +1,8 @@
 # Локальний стек профілю `postgres`. Запускати лише через `pnpm db:pg:start` /
 # `pnpm db:pg:stop`: скрипт бере замок стека, щоб не зупинити його під
-# DB-прогоном. Порти — лише на 127.0.0.1: Docker інакше відкриває їх на всіх
+# DB-прогоном. Стек N ≥ 2 — `SIMETRA_STACK=N pnpm db:pg:start`: скрипт передає
+# проєкт, порти й індекс змінними; голий `docker compose -f …` без них дає
+# стек 1. Порти — лише на 127.0.0.1: Docker інакше відкриває їх на всіх
 # інтерфейсах в обхід брандмауера, а в стеку суперкористувач з відомим паролем
 # і admin Garage.
 name: simetra-pg
@@ -17,8 +19,10 @@ services:
     image: simetra-pg/postgres:17.12
     environment:
       POSTGRES_PASSWORD: postgres
+    # Індекс стека звітує сервер: сторож звіряє його з замком (§10.3)
+    command: ["postgres", "-c", "simetra.stack_index=${SIMETRA_STACK:-1}"]
     ports:
-      - "127.0.0.1:54422:5432"
+      - "127.0.0.1:${SIMETRA_PG_PORT:-54422}:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data
     healthcheck:
@@ -36,11 +40,15 @@ services:
       simetra.stack-files-hash: ${SIMETRA_STACK_FILES_HASH:-}
     # RPC (3901) не публікується: вузол один, і зовні до нього ходить лише S3 та admin
     ports:
-      - "127.0.0.1:3900:3900"
-      - "127.0.0.1:3903:3903"
+      - "127.0.0.1:${SIMETRA_GARAGE_S3_PORT:-3900}:3900"
+      - "127.0.0.1:${SIMETRA_GARAGE_ADMIN_PORT:-3903}:3903"
     env_file: dev-secrets.env
+    # Конфіг — inline, не bind-монтування: шлях checkout-а не потрапляє
+    # у контейнер, і стеки з різних worktree мають однакові файли
+    configs:
+      - source: garage-config
+        target: /etc/garage.toml
     volumes:
-      - ./garage.toml:/etc/garage.toml:ro
       - garage-meta:/var/lib/garage/meta
       - garage-data:/var/lib/garage/data
     # `/health` admin API до застосування layout відповідає помилкою, а layout
@@ -50,6 +58,28 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
+
+configs:
+  garage-config:
+    content: |
+      # Garage стека розробки `postgres`: один вузол, без реплікації. `rpc_secret`
+      # і `admin_token` сюди не пишуться — Garage бере їх із середовища
+      # (`GARAGE_RPC_SECRET`, `GARAGE_ADMIN_TOKEN` з `dev-secrets.env`), щоб секрети
+      # стека жили в одному файлі.
+      metadata_dir = "/var/lib/garage/meta"
+      data_dir = "/var/lib/garage/data"
+      db_engine = "sqlite"
+      replication_factor = 1
+
+      rpc_bind_addr = "[::]:3901"
+      rpc_public_addr = "127.0.0.1:3901"
+
+      [s3_api]
+      s3_region = "garage"
+      api_bind_addr = "0.0.0.0:3900"
+
+      [admin]
+      api_bind_addr = "0.0.0.0:3903"
 
 volumes:
   pg-data:

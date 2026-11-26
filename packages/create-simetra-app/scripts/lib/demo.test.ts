@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest"
 import {
   DEMO_DATABASE,
   DEMO_MARK,
+  busyMessage,
   demoStack,
   demoState,
   demoStep,
+  noDemoMessage,
+  stackNote,
   withStand,
   type DemoState,
 } from "./demo.mts"
@@ -61,6 +64,16 @@ describe("demoStack", () => {
     expect(new URL(dsns.SIMETRA_AUTH_DATABASE_URL).password).toBe("auth-pw")
   })
 
+  it("builds the DSNs to the Postgres port of stack 2", () => {
+    const { maintenanceUrl, dsns } = demoStack(
+      "postgresql://postgres:postgres@127.0.0.1:54432/simetra",
+      SECRETS
+    )
+    expect(new URL(maintenanceUrl).port).toBe("54432")
+    for (const url of Object.values(dsns))
+      expect(new URL(url).port).toBe("54432")
+  })
+
   it("refuses a stack that is not on this machine", () => {
     expect(() =>
       demoStack(
@@ -68,6 +81,23 @@ describe("demoStack", () => {
         SECRETS
       )
     ).toThrow(/not loopback/)
+  })
+})
+
+describe("stack index in refusals", () => {
+  it("keeps the stack 1 texts unchanged", () => {
+    expect(stackNote(1)).toBe("")
+    expect(busyMessage(1, "x")).toBe(
+      "DB run in progress on the postgres stack, retry when it ends (x)"
+    )
+    expect(noDemoMessage(1)).toBe(
+      `demo: no ${DEMO_DATABASE} database; nothing to drop`
+    )
+  })
+
+  it("names the index for another stack", () => {
+    expect(busyMessage(2, "x")).toContain("SIMETRA_STACK=2")
+    expect(noDemoMessage(3)).toContain("SIMETRA_STACK=3")
   })
 })
 
