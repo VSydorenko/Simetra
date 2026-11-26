@@ -394,6 +394,8 @@ const LANGUAGE_STATES = ["draft", "published", "disabled"] as const
 // Одне джерело опублікованого стану для CHECK основної, політики читання,
 // пояснення прав і тригера стану.
 const PUBLISHED_STATE = LANGUAGE_STATES[1]
+// Одне джерело стану вставки для DEFAULT колонки й тригера стану.
+const DRAFT_STATE = LANGUAGE_STATES[0]
 
 /**
  * Колонки «Мов» (Р-B2-1): стан мови й ознака основної. CHECK-и тримають те, що
@@ -407,7 +409,7 @@ function languageColumns(): StandardColumnDef[] {
       physicalName: "state",
       type: { type: "Text" },
       notNull: true,
-      default: "'draft'",
+      default: `'${DRAFT_STATE}'`,
       check: `state IN (${LANGUAGE_STATES.map((v) => `'${v}'`).join(", ")})`,
       title: { uk: "Стан", en: "State" },
     },
@@ -525,7 +527,7 @@ const CATALOG_ROLES: Record<
       primaryColumn: "isPrimary",
       codeColumn: "code",
       states: LANGUAGE_STATES,
-      insertState: "draft",
+      insertState: DRAFT_STATE,
       publishedState: PUBLISHED_STATE,
       // Матриця §5.2: `disabled ↔ draft` в обидва боки, `published → draft` ні.
       transitions: [
