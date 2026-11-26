@@ -55,6 +55,10 @@ const ALLOWED: Record<string, string> = {
   "section-store.ts resetCompleteness row-spread": "copies its own epoch",
   "section-store.ts resetCompleteness row-value sections.set":
     "copies its own epoch",
+  // Наслідок запитувачу `write-confirm`: рядок ключа вже записав `patchRows`
+  // за правилом епох, а в наслідок він лягає з епохою через `heldEpoch`.
+  "sync/flight.ts rereadOutcomeOf row-value":
+    "the requester's copy of an already written row",
   // Локальна мапа рядків відповіді, не стан: у сховище вони йдуть через `put`.
   "writer.ts readFullAgain row-value got.set": "a local map of answer rows",
 }

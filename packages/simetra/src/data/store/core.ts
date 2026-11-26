@@ -1432,7 +1432,7 @@ export function createCore(options: {
           },
         ],
         {
-          token,
+          token: required(flight.token, "its token"),
           what: `tail ${o.name}`,
           refused: () => true,
           lost: () => (tail.gen === gen ? "closed" : "after-purge"),

@@ -6,13 +6,22 @@ import { REREAD_TIMEOUT_MS } from "../writer"
 import type { ViewHandle, ViewSpec } from "../types"
 import type { FakeRead } from "../testing/fake-source"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
-import { channelTopic } from "simetra/model"
-import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
+import {
+  channelTopic,
+  type CatalogEntry,
+  type RightsSnapshot,
+} from "simetra/model"
+import {
+  SCOPE_KIND_ID,
+  catalogEntrySection,
+  catalogRights,
+} from "../../../model/runtime/__tests__/entries"
 import {
   S,
   TASK,
   key,
   keysOf,
+  org,
   seed,
   settle,
   setup,
@@ -524,6 +533,40 @@ const BANNERS: Record<string, Scenario> = {
   },
 }
 
+/** Каталог із другою ТЧ власника й знімок прав на два скоупи (бар'єр R12). */
+const WITH_NOTES: CatalogEntry = {
+  ...task,
+  rights: catalogRights(),
+  tabularSections: [
+    ...task.tabularSections,
+    catalogEntrySection({
+      id: "notes",
+      name: "notes",
+      table: { schema: "public", name: "task_notes" },
+    }),
+  ],
+}
+const OTHER_SCOPE = "00000000-0000-4000-8000-0000000000b2"
+const BOTH_SCOPES: RightsSnapshot = {
+  userId: "00000000-0000-4000-8000-0000000000a1",
+  scopeSets: [S, OTHER_SCOPE].map((scope) => ({
+    scopeKind: SCOPE_KIND_ID,
+    scope,
+  })),
+  rights: [S, OTHER_SCOPE].map((scope) => ({
+    level: "scope" as const,
+    levelId: null,
+    scope,
+    container: null,
+    object: "task",
+    action: "read" as const,
+    extent: "any" as const,
+    dimensionId: null,
+  })),
+  members: [],
+  dimensionValues: [],
+}
+
 /** Системне перечитування (`writer.ts::revalidateViews`, R3/R16/R17/R18). */
 const REREAD: Record<string, Scenario> = {
   "reread applied": async () => {
@@ -606,21 +649,55 @@ const REREAD: Record<string, Scenario> = {
       await settle()
       return log(rec)
     },
-  "reread is not started for a view that never loaded": async () => {
-    // Вигляд, що жодного разу не завантажився (перше читання відмовило), не
-    // читає системне перечитування: кожен шлях до нього питає `loaded`. Тому
-    // клітинка збою «завжди» проти «якщо завантажено» для читання спостережно
-    // не розрізняється: політ читання з незавантаженим виглядом не буває.
-    const { h, rec } = freshRig(FULL, 3, { mode: "manual" })
-    await settle()
-    fail(h)
-    await settle()
-    rec.mark()
-    void h.core.revalidate(TASK, { visibleOnly: false })
-    await settle()
-    expect(h.fake.pending).toHaveLength(0)
-    return log(rec)
-  },
+  "reread failed: read refused on a section that never loaded (R12)":
+    async () => {
+      // Системне перечитування бачить вигляд, що жодного разу не завантажився:
+      // ТЧ, чий власний перший політ відмовив, а бар'єр знімка прав сусідньої
+      // ТЧ того самого власника перечитує обох (R12). Збій такого читання
+      // рахує паузу збоїв — клітинка reread «завжди», а не «якщо завантажено».
+      const h = setup({
+        now: () => Date.now(),
+        rightsSnapshot: true,
+        objects: [WITH_NOTES, org],
+        mode: "manual",
+        limits: { revalidateIntervalMs: 10_000_000 },
+      })
+      h.fake.rightsSnapshot = BOTH_SCOPES
+      h.fake.rightsVersion = "1".padStart(64, "0")
+      h.core.requestRights()
+      await settle()
+      seed(h.fake, 1, 1)
+      const lines = [{ ref: key(901), qty: 1, lineNumber: 1 }]
+      h.fake.setLines(TASK, key(1), "lines", lines)
+      h.fake.setLines(TASK, key(1), "notes", lines)
+      const rec = record(h)
+      const section = (name: string): ViewSpec => ({
+        kind: "section",
+        object: TASK,
+        owner: key(1),
+        section: name,
+      })
+      const named = (name: string) => (read: FakeRead) =>
+        (read.query as { tabularSection?: string } | undefined)
+          ?.tabularSection === name
+      rec.watch(h.core.view(section("lines")), "lines")
+      await settle()
+      h.fake.take(named("lines")).fail("command.unavailable")
+      await settle()
+      rec.watch(h.core.view(section("notes")), "notes")
+      await settle()
+      h.fake.rightsVersion = "2".padStart(64, "0")
+      h.core.requestRights()
+      await settle()
+      // Читання `notes` стартувало до нового знімка й осідає після нього:
+      // бар'єр відкидає відповідь і перечитує `lines`, яке не летить.
+      h.fake.take(named("notes")).answer()
+      await settle()
+      rec.mark()
+      h.fake.take(named("lines")).fail("command.unavailable")
+      await settle()
+      return log(rec)
+    },
   "reread failed: apply throws": async () => {
     const { h, rec } = await loadedRig()
     throwOnPut(h)
@@ -1176,12 +1253,14 @@ describe("the kind table against the recorded behaviour of main", () => {
         /failures=1/
       )
     ).toBe(countsFor(R.reread.failureCounts, true))
-    // Клітинку reread «завжди» проти «якщо завантажено» записом не розрізнити:
-    // на вигляд, що не завантажився, системне перечитування не стартує, тож
-    // незавантаженого польоту, збій якого можна було б порахувати, немає.
-    expect(lines("reread is not started for a view that never loaded")).toEqual(
-      []
-    )
+    // Вигляд, що жодного разу не завантажився (ТЧ, яку перечитує бар'єр R12):
+    // збій його перечитування теж рахує паузу збоїв.
+    expect(
+      has(
+        "reread failed: read refused on a section that never loaded (R12)",
+        /failures=1/
+      )
+    ).toBe(countsFor(R.reread.failureCounts, false))
   })
 
   it("liftsBanners and setsBanners: load lifts, page and reread leave, only reread sets", () => {

@@ -404,12 +404,35 @@ describe("the signal receiver point settles through the pass", () => {
     )
   })
 
-  it("keeps the epoch gate of the point: a discarded gate writes nothing", async () => {
-    const { view, emit } = await signalCore()
+  it("the epoch gate of the pass is a hook; the inner gate of Writer.apply still discards an abandoned epoch", async () => {
+    const EA = "a".repeat(64)
+    const EB = "b".repeat(64)
+    const { h, view, emit } = await signalCore()
+    const pass = (epoch: string) =>
+      h.core.commit(
+        (w) =>
+          void w.apply(
+            TASK,
+            { rows: [], absent: [] },
+            h.core.readEpoch(),
+            epoch
+          ),
+        h.core.token()
+      )
+    h.fake.epoch = EA
+    void h.core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    // Епоха EA покинута: відповіді з неї відкидаються.
+    pass(EA)
+    pass(EB)
+    seen.calls.length = 0
     seen.skip.add("keys K1 gate")
     await emit()
-    // Брама проходу відповіла «застосувати»: пише лише власне застосування.
+    // Брама проходу пропустила (гачок підмінено), але друга брама
+    // `Writer.apply` — та, що лишає §3, — відкинула: рядок не записано.
     expect(seen.calls).toContain("keys K1 apply")
-    expect(JSON.stringify(view.getSnapshot().rows)).toContain("from the signal")
+    expect(JSON.stringify(view.getSnapshot().rows)).not.toContain(
+      "from the signal"
+    )
   })
 })
