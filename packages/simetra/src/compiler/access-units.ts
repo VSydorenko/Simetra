@@ -271,6 +271,21 @@ function publicReadPurposes(
   return [...purposes].sort(compareStrings)
 }
 
+/**
+ * Зворотне до `publicReadPurposes`: роль `publicRead` з призначень контракту
+ * доступу. `authenticated` — рівно `["user"]`, а не «містить `user`»: `anon`
+ * теж відкриває `user`. Єдине місце, де роль читається з контракту (каталог
+ * рантайму й попередження самореєстрації).
+ */
+export function publicReadRoleOf(
+  purposes: readonly RequestRolePurpose[]
+): PublicReadRole | undefined {
+  if (purposes.includes("anonymous")) return "anon"
+  return purposes.length === 1 && purposes[0] === "user"
+    ? "authenticated"
+    : undefined
+}
+
 /** Модель без помилок гарантує наявність; відсутність — дефект компілятора. */
 function must<T>(value: T | undefined): T {
   if (value === undefined) throw new Error("internal: missing access input")

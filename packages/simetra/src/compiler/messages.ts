@@ -3499,6 +3499,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Надайте ролі читання цих об'єктів або оголосіть роль із fullAccess.",
     },
   },
+  "project.self-sign-up": {
+    en: (p) =>
+      `Open self sign-up lets anyone from the Internet become a signed-in user: objects open to every signed-in user (${p.objects || "none"}) and the grants of everyUser roles (${p.roles || "none"}) are exposed to them`,
+    uk: (p) =>
+      `Відкрита самореєстрація дає змогу будь-кому з Інтернету стати дійсним користувачем: йому відкрито об'єкти для кожного користувача (${p.objects || "немає"}) і гранти ролей everyUser (${p.roles || "немає"})`,
+    hint: {
+      en: "Check that these objects and grants are meant for anyone, or set selfSignUp to false.",
+      uk: "Переконайтеся, що ці об'єкти й гранти призначено для будь-кого, або вимкніть selfSignUp.",
+    },
+  },
   "rights.ownership-target": {
     en: (p) =>
       p.reason === "key"

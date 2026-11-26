@@ -659,6 +659,8 @@ export function createCore(options: {
     // `tab-hidden` — стан `visible` ядра (`suspend` / `resume`), один для ядра,
     // приймача й вимоги складу (Р-SK1-8).
     tabHidden: () => !visible,
+    epoch: () => session.epochs.now(),
+    now,
     defects,
   })
   const batcher = createBatcher(options.source, {
@@ -1328,6 +1330,7 @@ export function createCore(options: {
   const registry = createRegistry({
     session,
     tabHidden: () => gate.tabHidden(),
+    closed: () => gate.closed(),
     source,
     index,
     limits,
@@ -1612,9 +1615,9 @@ export function createCore(options: {
   let wave: { at: number; readonly objects: Set<ObjectName> } | undefined
   let lastWaveAt: number | undefined
   function joinWave(object: ObjectName) {
-    // Хвиля — строк планувальника: несумісний об'єкт у неї не йде (запит
-    // умови шлюзу для таймера, Р-SK1-9).
-    if (!session.token().valid || gate.staleObject(object)) return
+    // Хвиля — строк планувальника: закрита сесія й несумісний об'єкт у неї не
+    // йдуть (запити умов шлюзу для таймера, Р-SK1-9).
+    if (gate.closed() || gate.staleObject(object)) return
     // Мутація самотесту: хвилі немає — ні читання, ні вимоги, ні строку.
     if (defects.has("rejoin-wave-no-read")) return
     if (wave === undefined) {
@@ -1756,8 +1759,9 @@ export function createCore(options: {
     for (const o of objects.values()) {
       for (const key of o.rows.keys()) rowViews.touch(o.name, key)
       // Несумісний об'єкт не перечитується (§10): його вигляди лишаються в
-      // стані `isStale`, а не переходять в `error`.
-      if (staleObjects.has(o.name)) continue
+      // стані `isStale`, а не переходять в `error`. Строк R1 — запит умови
+      // шлюзу для таймера (Р-SK1-9).
+      if (gate.staleObject(o.name)) continue
       if (scheduled.get(o.name)?.whole !== undefined) continue
       if (!activeViews(writerContext, o.name).some((v) => v.visible)) continue
       schedule(
@@ -1887,7 +1891,8 @@ export function createCore(options: {
         if (at !== undefined && (due === undefined || at < due)) due = at
     }
     for (const o of objects.values()) {
-      if (staleObjects.has(o.name)) continue
+      // Строк виглядів несумісного об'єкта — запит шлюзу для таймера (Р-SK1-9).
+      if (gate.staleObject(o.name)) continue
       const at = nextViewDue(writerContext, o.name)
       if (at !== undefined && (due === undefined || at < due)) due = at
     }
@@ -1918,7 +1923,10 @@ export function createCore(options: {
     // Запит шлюзу для таймера (Р-SK1-8, Р-SK1-9): прихована вкладка таймера
     // не ставить і не спрацьовує.
     visible: () => !gate.tabHidden(),
-    closed: () => closed !== undefined || !session.token().valid,
+    // Запит умови шлюзу для таймера (Р-SK1-9): `core.close` ставить знімок
+    // закриття й робить токен недійсним без коду між ними, тож окремої
+    // перевірки знімка не треба (Р-SK1-5).
+    closed: () => gate.closed(),
     dueAt: schedulerDue,
     tick() {
       // Запит шлюзу для таймера (Р-SK1-9): охороняє не-читальні ефекти такту —
@@ -1933,7 +1941,7 @@ export function createCore(options: {
       let read = false
       for (const o of objects.values())
         if (
-          !staleObjects.has(o.name) &&
+          !gate.staleObject(o.name) &&
           hasDueViews(writerContext, o.name, minAgeMs)
         )
           read = true
@@ -2154,7 +2162,8 @@ export function createCore(options: {
     freshness: {
       lastTickAt: () => lastTickAt,
       requestReread(names, { jitterMs }) {
-        if (!session.token().valid) return
+        // Строк R1 — запит умови шлюзу для таймера (Р-SK1-9).
+        if (gate.closed()) return
         for (const name of names)
           schedule(name, Math.floor(Math.random() * jitterMs), {
             reason: "requirement",
@@ -2211,7 +2220,7 @@ export function createCore(options: {
     },
     staleClient(object) {
       const o = objects.get(object)
-      if (o === undefined || !session.token().valid) return
+      if (o === undefined || gate.closed()) return
       const token = session.token()
       let turned = false
       session.commit(
@@ -2230,8 +2239,9 @@ export function createCore(options: {
       core.requestVersion()
     },
     dehydrate() {
-      if (closed !== undefined || !session.token().valid)
-        throw new TypeError("the core is closed")
+      // Запит умови шлюзу (Р-SK1-5): знімок закриття ставить `core.close`
+      // разом із недійсним токеном.
+      if (gate.closed()) throw new TypeError("the core is closed")
       // SSR-рантайм нічого не пише: знімок після запису — помилка host-а, а
       // журнал мутацій у знімок не переходить.
       if (overlay.size() > 0)
@@ -2239,7 +2249,7 @@ export function createCore(options: {
       return dehydrate(ssr)
     },
     hydrate(snapshot) {
-      if (closed !== undefined || !session.token().valid) return
+      if (gate.closed()) return
       if (hydration !== "none" || [...registry.subsets()].length > 0)
         throw new TypeError("the core is hydrated or already holds views")
       const parsed = parseSnapshot(ssr, snapshot)
@@ -2427,14 +2437,6 @@ export function createCore(options: {
     ...(fields.dueCause === undefined ? {} : { dueCause: fields.dueCause }),
   })
 
-  // Таймери `main` читають об'єкт лише на видимій вкладці, поки він сумісний
-  // і сесія в межі відкинутих — ті самі умови, що в `schedulerDue` і такті.
-  const timersRead = (object: ObjectName) =>
-    !gate.tabHidden() &&
-    !staleObjects.has(object) &&
-    (!session.versions.unavailable() ||
-      defects.has("scheduler-reads-unavailable"))
-
   // Обіцянку чи умову судить кожна вимога окремо (§5.3, §5.13): політ, що
   // обіцяє одну, нічого не каже про пізнішу. Ціль має умову, лише коли її має
   // кожна вимога; `promised` — лише коли всі обіцяні.
@@ -2450,7 +2452,7 @@ export function createCore(options: {
   // відкинутої відповіді. На прихованій вкладці планувальник не спрацьовує.
   function timerDue(s: Subset): number | undefined {
     const object = s.form.object.name
-    if (!timersRead(object)) return undefined
+    if (!gate.timersRead(object)) return undefined
     const held = scheduled.get(object)
     const byTick = revalidateTargets(writerContext, object, {
       visibleOnly: true,
@@ -2465,15 +2467,6 @@ export function createCore(options: {
 
   function syncState(): SyncState[] {
     const out: SyncState[] = []
-    const shut = closed !== undefined || !session.token().valid
-    const refusalOf = (object?: ObjectName): SyncRefusal | undefined =>
-      shut
-        ? "closed"
-        : object !== undefined && staleObjects.has(object)
-          ? "stale-object"
-          : object !== undefined && session.versions.unavailable()
-            ? "discard-bound"
-            : undefined
     const record = (
       base: Omit<SyncState, "deferral" | "refusal">,
       refusal: SyncRefusal | undefined,
@@ -2581,7 +2574,7 @@ export function createCore(options: {
                 : undefined,
           }
         ),
-        refusalOf(object),
+        gate.refusal(object),
         () => deferralOf(requirements.map(conditionOf))
       )
     }
@@ -2657,7 +2650,7 @@ export function createCore(options: {
             },
             {
               due: earliest(
-                timersRead(o.name) ? retry?.at : undefined,
+                gate.timersRead(o.name) ? retry?.at : undefined,
                 // Вигляд-тримач у паузі повтору читає кінець паузи, а не таймери
                 // об'єкта (вони читають вигляд у польоті лише хвостом).
                 ...holders
@@ -2666,7 +2659,7 @@ export function createCore(options: {
               ),
             }
           ),
-          refusalOf(o.name),
+          gate.refusal(o.name),
           () =>
             deferralOf(
               requirements.map((r) =>
@@ -2694,7 +2687,7 @@ export function createCore(options: {
           flights,
           queued,
         },
-        refusalOf(),
+        gate.refusal(),
         () => (promised(requirements, flights, queued) ? "promised" : undefined)
       )
     }
@@ -2721,7 +2714,7 @@ export function createCore(options: {
           },
           { proof: rights?.rightsEpoch, due: rightsDueAt() }
         ),
-        refusalOf(),
+        gate.refusal(),
         () => (promised(requirements, flights, queued) ? "promised" : undefined)
       )
     }

@@ -2,13 +2,24 @@ import { getAuthTables } from "better-auth/db"
 import type { Pool } from "pg"
 import { describe, expect, it } from "vitest"
 import { authOptions } from "../src/server/auth"
+import type { MailTransport } from "../src/server/mail"
 import { authSchemaOptions } from "../scripts/auth-options.mjs"
+import { testAuthOptions } from "../../../simetra/test/db/better-auth"
 
 // `db-setup` мігрує схему за опціями скрипта, а рантайм працює за
 // `src/server/auth.ts`: розбіжність у формі схеми лишила б рантайм без
 // таблиці (так було з `rateLimit`).
 const pool = {} as Pool
 const ORIGIN = "https://app.test"
+const mail: MailTransport = { send: () => Promise.resolve() }
+// Усі плагіни рантайму: `emailOTP` додається лише з `email-code`
+const runtimeOptions = authOptions(
+  pool,
+  ORIGIN,
+  "secret",
+  { signUp: "closed", password: true, emailCode: true, providers: [] },
+  mail
+)
 
 /** Форма схеми: таблиця → її колонки. */
 function shape(options: Parameters<typeof getAuthTables>[0]) {
@@ -25,7 +36,7 @@ function shape(options: Parameters<typeof getAuthTables>[0]) {
 }
 
 describe("script Better Auth options", () => {
-  const runtime = shape(authOptions(pool, ORIGIN, "secret"))
+  const runtime = shape(runtimeOptions)
 
   it("shape the same schema as the runtime options", () => {
     expect(
@@ -40,6 +51,18 @@ describe("script Better Auth options", () => {
         })
       )
     ).toEqual(runtime)
+  })
+
+  // `emailOTP` таблиць не додає: форма схеми цієї розбіжності не бачить
+  it("carry the plugin set of the runtime, as the simetra test config does", () => {
+    const ids = (options: { plugins: { id: string }[] }) =>
+      options.plugins.map((plugin) => plugin.id).sort()
+    const runtime = ids(runtimeOptions)
+    expect(runtime).toEqual(["anonymous", "email-otp"])
+    expect(
+      ids(authSchemaOptions(pool, { origin: ORIGIN, secret: "secret" }))
+    ).toEqual(runtime)
+    expect(ids(testAuthOptions(pool))).toEqual(runtime)
   })
 
   it("include the rate-limit table that the runtime limiter uses", () => {

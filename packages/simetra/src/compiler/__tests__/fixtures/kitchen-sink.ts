@@ -208,6 +208,7 @@ export function kitchenSink(): Map<string, string> {
     database: { provider: "supabase" },
     naming: { attributeCase: "camelCase" },
     timezone: "Europe/Kyiv",
+    selfSignUp: true,
     scopeKinds: [
       {
         id: id(),

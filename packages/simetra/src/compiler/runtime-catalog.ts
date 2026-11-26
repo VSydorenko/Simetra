@@ -19,7 +19,11 @@ import {
   type RuntimeSection,
   type ObjectTable,
 } from "simetra/model"
-import { isSignalObject, readBoundaries } from "./access-units"
+import {
+  isSignalObject,
+  publicReadRoleOf,
+  readBoundaries,
+} from "./access-units"
 import { canonicalize } from "./canonical"
 import { compareStrings } from "./diagnostics"
 import type {
@@ -96,6 +100,7 @@ export function buildRuntimeCatalog(model: CompiledModel): RuntimeCatalog {
     ...(hasRightsFunctions(model.contracts, model.project.database.provider)
       ? { rightsSnapshot: true as const, ...adoptedFactsOf(model) }
       : {}),
+    ...(model.project.selfSignUp ? { selfSignUp: true as const } : {}),
     objects: model.objects.flatMap((object): RuntimeObject[] => {
       const contract = contracts.get(object.id)
       if (contract === undefined) return []
@@ -151,10 +156,8 @@ function publicReadOf(
         a.table.schema === table.schema &&
         a.table.name === table.name
     )?.publicRead ?? []
-  if (purposes.length === 0) return {}
-  return {
-    publicRead: purposes.includes("anonymous") ? "anon" : "authenticated",
-  }
+  const publicRead = publicReadRoleOf(purposes)
+  return publicRead === undefined ? {} : { publicRead }
 }
 
 // Межа файлу — з метаданих об'єкта як є: окремого виводу немає.

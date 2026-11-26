@@ -71,6 +71,11 @@ export interface RegistryContext {
    * public `needsRefresh` ask it, not the tab state.
    */
   readonly tabHidden: () => boolean
+  /**
+   * The gate's query of `closed` (Р-SK1-5): `preload` of a closed core is
+   * refused before it holds a view, as a public call of a closed core.
+   */
+  readonly closed: () => boolean
   readonly source: StoreSource
   readonly index: CatalogIndex
   readonly limits: CoreLimits
@@ -1472,7 +1477,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     },
 
     preload(spec, options) {
-      if (isClosed()) return Promise.resolve()
+      // Публічний виклик закритого ядра (рішення архітекторки 26.11): без
+      // відмови тут `acquire` тримав би вигляд після закриття, а `load`, якому
+      // шлюз відмовляє, не осідає — обіцянка не виконалась би.
+      if (ctx.closed()) return Promise.resolve()
       const s = acquire(formOf(ctx, spec))
       if (s.listeners.size === 0) {
         s.preloads++

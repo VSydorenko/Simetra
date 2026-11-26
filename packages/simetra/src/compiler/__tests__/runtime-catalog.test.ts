@@ -1292,6 +1292,16 @@ describe("buildRuntimeCatalog: rights snapshot fields", () => {
     expect(entry).not.toHaveProperty("rights")
   })
 
+  it("selfSignUp is carried only when the project sets it", () => {
+    const withFlag = (selfSignUp: boolean) =>
+      buildRuntimeCatalog({
+        ...model,
+        project: { ...model.project, selfSignUp },
+      })
+    expect(withFlag(true).selfSignUp).toBe(true)
+    expect(withFlag(false)).not.toHaveProperty("selfSignUp")
+  })
+
   it("rightsSnapshot is set when the project has rights functions", () => {
     expect(hasRightsFunctions(model.contracts, "supabase")).toBe(true)
     expect(catalog.rightsSnapshot).toBe(true)

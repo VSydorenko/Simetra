@@ -1,9 +1,9 @@
 {
   "$schema": "../../../../node_modules/simetra/schemas/roles.schema.json",
-  "id": "2e534046-9e26-4a10-a1ec-44cef99eb5d9",
+  "id": "5002ab4a-3df5-41a9-a293-f577a29e9843",
   "kind": "Role",
   "name": "ClientOwner",
-  "assignedOn": "global",
+  "assignedOn": "everyUser",
   "grants": [
     {
       "grant": {
@@ -15,18 +15,6 @@
         ],
         "actions": ["read", "create", "update"],
         "extent": "own"
-      }
-    },
-    {
-      "grant": {
-        "objects": [
-          {
-            "kind": "Catalog",
-            "name": "Country"
-          }
-        ],
-        "actions": ["read"],
-        "extent": "any"
       }
     }
   ]

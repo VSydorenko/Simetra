@@ -66,7 +66,7 @@ chromium/webkit × production/dev і стиснення відповідей (§
 | Дх1 | **Окрема спека П4-D**, а не розділ спеки П4. Будова як у спеці П4: загальна частина, далі детальна частина зрізу; решта П4-D допишеться сюди | спека П4 §1 дає кожній частині власну спеку; Додаток А спеки П4-B адресує правки саме «спеці П4-D» | спека П4 §2 — посилання (Додаток А) |
 | Дх2 | **Шаблон host-а — пакет `packages/create-simetra-app`**, поки приватний. Усередині `template/` — працездатний застосунок TanStack Start, окремий пакет воркспейсу (`create-simetra-app-template`, глоб у `pnpm-workspace.yaml`), який збирається й тестується у воркспейсі. Копіювальник CLI й публікація — мінімальна доставка (#215). Тестовий host B3-6 (`packages/test-host`) лишається полігоном оракула з фейковим рантаймом; код застосунку шаблону від нього не залежить | [ADR-0089](../../adr/0089-host-template-package-and-session.md) | платформна спека §3.2 (Додаток А) |
 | Дх3 | **Профіль зрізу — лише `postgres`, сесія — Better Auth** (Р40). Адаптер `verifySession` над Better Auth пишеться в зрізі, у шаблоні. Зріз залежить від ПГ-2a, ПГ-2b і ПГ-3 | [ADR-0089](../../adr/0089-host-template-package-and-session.md) | немає |
-| Дх4 | **Dev-сесія — та сама справжня сесія Better Auth.** Реєстрацію в застосунку вимкнено (`emailAndPassword.disableSignUp: true`). Скрипт `dev:user` поза `src/` має власний екземпляр Better Auth з дозволеною реєстрацією, той самий конфіг бази, і заводить користувача на стеку розробки; вхід — звичайна форма email і пароль. Другого адаптера `verifySession`, dev-маршруту чи dev-cookie немає. Production-збірка не містить скрипта — це тест (§8.3) | [ADR-0089](../../adr/0089-host-template-package-and-session.md) | немає |
+| Дх4 | **Dev-сесія — та сама справжня сесія Better Auth.** Реєстрація паролем вимкнена завжди (`emailAndPassword.disableSignUp: true`); реєстрація в застосунку — лише за налаштуванням `signUp` (кодом з email чи OAuth, [спека публічної частини](2026-11-25-public-app-part-design.md) §5.5), паролем ніколи. Скрипт `dev:user` поза `src/` має власний екземпляр Better Auth з дозволеною реєстрацією (`signUpEmail`), той самий конфіг бази, і заводить користувача на стеку розробки; записи скрипта — з `emailVerified: true` (`signUpEmail` пише `false`, тож скрипт ставить позначку сам); вхід — звичайна форма email і пароль. Другого адаптера `verifySession`, dev-маршруту чи dev-cookie немає. Production-збірка не містить скрипта — це тест (§8.3) | [ADR-0089](../../adr/0089-host-template-package-and-session.md) | немає |
 | Дх5 | **Редагування в картці — лише атрибути шапки**, через чернетку форми на TanStack Form у T5 за контрактом спеки П4-B §7.1 (база, ревізії, `conflict`, «Скасувати», `purged`). Політику дії (`await` чи `predict`) бере `DataWriter` з каталогу. ТЧ у зрізі лише для читання | B3-4 і B3-5 стоять до B3-6, тож контракт чернетки й квитанції до зрізу вже є; редагування ТЧ — окремий механізм з власними станами, і без візуальної мови його розмітку довелося б переробити двічі | немає |
 | Дх6 | **Підписи — логічні імена; колонки списку — не ліниві атрибути шапки в порядку каталогу.** Нового поля метаданих (представлення, колонки, `title` у клієнтському каталозі, `residency`) зріз не вводить. Стратегію списку задають налаштування рантайму даних (Рд19) | `title` і переклади — одна робота з локаллю; поле колонок — частина декларації хостів сторінок решти П4-D | немає |
 | Дх7 | **Два шляхи транспорту, розділені будовою.** Клієнтський рантайм шле конверт через одну Server Function даних (`dataFn`); вона завжди передає обробнику факти HTTP-запиту. Серверний рантайм під час SSR кличе обробник з `{ inProcess: true }` через серверну функцію `ssrTransport` у `src/server/ssr-transport.ts`, обгорнуту `createServerOnlyFn` (виклик на клієнті кидає виняток), а не `createServerFn`. Літерал `inProcess` і `createServerFn` поруч з ним лінт дозволяє лише там, де названо (§4.7) | [ADR-0089](../../adr/0089-host-template-package-and-session.md) | закриває вимогу «правильність розрізнення — тест шаблону» спеки П4-B §4.5 |
@@ -116,6 +116,11 @@ chromium/webkit × production/dev і стиснення відповідей (§
 | `src/server/runtime.ts` | **зв'язування рантайму**: пул `simetra_runtime` на рівні модуля (Рт17) з DSN `SIMETRA_RUNTIME_DATABASE_URL`, `createCommandRuntime({ database: fromPgPool(pool), catalog, defer })`, `createDataHandler` |
 | `src/server/auth-db.ts` | пул Better Auth з DSN `SIMETRA_AUTH_DATABASE_URL` (роль `simetra_auth`, власник схеми `better_auth`) |
 | `src/server/auth.ts` | конфіг Better Auth (§4.3) і `verifySession` |
+| `src/server/defer.ts` | `defer` — фонова робота через `waitUntil` запиту; окремий модуль, бо `auth.ts` імпортують і поза Nitro (фікстура e2e), а `runtime.ts` тягне рантайм і каталог |
+| `src/server/start-checks.ts` | відмови старту входу (`assertAuthStartable`), спільні для `startupPlugin` і `src/server.ts` (§4.1) |
+| `src/server/sign-in-code-slot.ts` | слот надсилання коду на адресу в `hooks.before` (§4.3, спека публічної частини §5.5) |
+| `src/server/mail.ts`, `src/server/mail-dev.ts` | порт пошти й шов застосунку `appMailTransport()`; транспорт розробки поза production (спека публічної частини §5.5) |
+| `src/server/login-methods.ts`, `src/server/login-methods-fn.ts` | способи входу для екрана — лише прапорці й ідентифікатори провайдерів, без секретів; серверна функція `/login` |
 | `src/server/origin.ts` | факти походження й канонічне походження застосунку |
 | `src/server/data-fn.ts` | одна Server Function даних (§4.2) |
 | `src/server/data-request.ts` | `handleDataRequest`: кроки §4.2 винесено з файлу Server Function, щоб `auth`, пул і каталог рантайму не потрапляли в клієнтський пакет |
@@ -140,6 +145,17 @@ chromium/webkit × production/dev і стиснення відповідей (§
 (схема, хост, порт без шляху); на старті сервер перевіряє, що значення
 канонічне (`new URL(v).origin === v`), інакше відмовляє стартувати.
 `BETTER_AUTH_SECRET` у production обов'язковий: без нього — відмова старту.
+Налаштування входу — env, розбирає `config.ts` під час виклику:
+`SIMETRA_SIGN_UP` (`closed`, типово, чи `open`), `SIMETRA_SIGN_IN_METHODS`
+(перелік через кому з `password`, `email-code` і ідентифікаторів провайдерів
+OAuth; типово `password`), для провайдера `<id>` —
+`SIMETRA_OAUTH_<ID>_CLIENT_ID` і `SIMETRA_OAUTH_<ID>_CLIENT_SECRET` через
+`requiredEnv`; перелік провайдерів шаблону — стала в `config.ts`, застосунок
+розширює її. Відмова старту (у `startupPlugin` і на верхньому рівні
+`src/server.ts`, як для `appOrigin` і `authSecret`): невідоме значення, порожній
+перелік чи провайдер без пари змінних; `SIMETRA_SIGN_UP=open`, а в каталозі
+рантайму немає `selfSignUp`; `email-code` у production, а `appMailTransport()`
+дає `undefined`.
 
 ### 4.2 Server Function даних
 
@@ -179,8 +195,13 @@ production показує лише код; помилка `pg` (хост, рол
 | `baseURL` | `SIMETRA_APP_ORIGIN` |
 | `trustedOrigins` | `[SIMETRA_APP_ORIGIN]` |
 | `secret` | `BETTER_AUTH_SECRET` (§4.1) |
-| `emailAndPassword` | `{ enabled: true, disableSignUp: true }` (Дх4) |
-| плагіни | `anonymous` (Дх11); `disabledPaths: ["/sign-in/anonymous"]`, доки немає екрана гостя: endpoint без екрана лише плодить рядки `better_auth.user` |
+| `emailAndPassword` | `{ enabled: <password у SIMETRA_SIGN_IN_METHODS>, disableSignUp: true, requireEmailVerification: true }` за будь-якого `signUp` (Дх4); `emailVerification.sendVerificationEmail` не задається, тож вхід паролем на запис з `emailVerified: false` — `403` |
+| плагіни | `anonymous` (Дх11); `emailOTP` — лише з `email-code` (§5.5 спеки публічної частини: `disableSignUp: signUp === "closed"`, `allowedAttempts: 5`, `expiresIn: 600`, `storeOTP: { hash }`, `rateLimit: { window: 60, max: 3 }`, лист — через порт пошти) |
+| `socialProviders` | кожен увімкнений провайдер: `{ clientId, clientSecret, disableSignUp: signUp === "closed" }` у опціях провайдера; `account.accountLinking` не задається |
+| `user.validateUserInfo` | відмовляє створенню запису з `emailVerified !== true` для будь-якого способу |
+| `disabledPaths` | усі шляхи пробного екземпляра `betterAuth(<ті самі опції без disabledPaths>).api` мінус закріплений перелік відкритих шляхів і `:`-шляхи (§5.5 спеки публічної частини); endpoint без екрана (зокрема `/sign-in/anonymous`) лише плодить рядки `better_auth.user` |
+| `advanced.backgroundTasks.handler` | `defer` шаблону (`defer.ts`) |
+| `hooks.before` | слот надсилання коду на `/email-otp/send-verification-otp` (§5.5 спеки публічної частини) |
 | `session.cookieCache` | вимкнено |
 | `rateLimit` | `{ enabled: true, storage: "database" }`; окреме правило для `/sign-in/email` |
 | IP клієнта | `advanced.ipAddress.ipAddressHeaders: ["x-simetra-client-ip"]`: серверний entry видаляє клієнтське значення цього заголовка й ставить своє — з адреси сокета на `node-server` без проксі, з заголовка довіреного проксі за проксі й на Vercel; джерело задає конфіг сервера `SIMETRA_CLIENT_IP_SOURCE` (`socket` чи ім'я заголовка проксі), без значення — `socket`. Без адреси клієнта Better Auth рахував би всіх клієнтів одним лічильником на шлях, і перебір паролів блокував би вхід усім |
@@ -594,6 +615,8 @@ DOM і журнал Server Function з точним результатом). З�
 | `POST /api/auth/sign-up/email` | D2 | відмова (реєстрацію вимкнено) |
 | вхід зі змінним `X-Forwarded-For` і `x-simetra-client-ip` з однієї адреси сокета | D2 | межа частоти вичерпується (429); запит з іншої адреси сокета проходить |
 | `POST /api/auth/sign-in/anonymous` | D2 | 404 |
+| шлях auth поза закріпленим переліком відкритих (перелік пробного екземпляра) | D5 | 404 |
+| захоплювач пошти (`e2e/mail-capture.ts`) у складі production-збірки шаблону | D5 | відсутній: у `src/**` та збірці шаблону його немає, його підміняє лише збірка D7 |
 | конверт зі `subject` іншого користувача | D2 | `command.unauthenticated` `session-changed` |
 | `get-session` і HTML | D2 | `Cache-Control: no-store`; HTML — `private, no-store` і `Vary: Cookie` |
 | кожен id серверної функції з маніфесту production-збірки: `POST` з сесією і дійсним конвертом `read` суб'єкта сесії в протоколі серіалізації Start, двічі — з `Sec-Fetch-Site: cross-site` і того самого походження | D3 | міжсайтово жодна відповідь не несе значень рядків, `dataFn` теж; того самого походження рядки віддає лише `dataFn` |
