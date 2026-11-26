@@ -21,6 +21,7 @@ import {
   type PublicRead,
   type PublicReadRole,
   type RequestRolePurpose,
+  type StandardColumnDef,
 } from "simetra/model"
 import type { CompiledModel, CompiledScopeKind } from "./compile"
 import {
@@ -120,7 +121,7 @@ export function accessContracts(
       const published =
         parsePublicRead((object.data as { publicRead?: PublicRead }).publicRead)
           ?.conditional === true
-          ? publishedColumnsOf(table, attributeCase)
+          ? publishedColumnsOf(table, physical, attributeCase)
           : undefined
       const command = KIND_REGISTRY[object.kind].commandWrites
         ? commandColumns(table, {
@@ -208,23 +209,43 @@ function publishedRow(contract: AccessContract, sessionUser: boolean): string {
 }
 
 /**
- * Фізичні колонки умови публікації таблиці умовного об'єкта (Р-D1-2). Таблиця
- * без них — дефект компілятора: політика з умовою без колонки не побудується, а
+ * Фізичні колонки умови публікації таблиці умовного об'єкта (Р-D1-2): у шапки
+ * — її стандартні колонки, у ТЧ — їхні копії (Р-D1-9). Копію впізнаємо за
+ * походженням (`copyOf` — колонка шапки), а не за іменем: реквізит ТЧ з тим
+ * самим іменем не копія, і політика читала б чуже значення. Таблиця без колонок
+ * — дефект компілятора: політика з умовою без колонки не побудується, а
  * мовчазне пропускання таблиці відкрило б усі її рядки, тож кидаємо помилку,
  * а не повертаємо порожнє.
  */
 function publishedColumnsOf(
   table: ObjectTable,
+  physical: PhysicalSnapshot,
   attributeCase: AttributeCase
 ): NonNullable<AccessContract["published"]> {
-  const column = findStandardColumn(table, publishedColumn(), attributeCase)
-  const mark = findStandardColumn(table, deletionMarkColumn(), attributeCase)
+  const header = must(mainTableOf(physical, table.origin.objectId))
+  const isHeader =
+    table.origin.tabularSectionId === undefined &&
+    table.origin.part === undefined
+  const columnOf = (def: StandardColumnDef): string | undefined => {
+    const own = findStandardColumn(header, def, attributeCase)?.name
+    if (isHeader || own === undefined) return own
+    // Похідна таблиця (не ТЧ) копій не має — лишається без колонок.
+    if (table.origin.tabularSectionId === undefined) return undefined
+    return table.columns.find(
+      (c) =>
+        c.origin.copyOf?.table.schema === header.schema &&
+        c.origin.copyOf.table.name === header.name &&
+        c.origin.copyOf.column === own
+    )?.name
+  }
+  const column = columnOf(publishedColumn())
+  const mark = columnOf(deletionMarkColumn())
   if (column === undefined || mark === undefined) {
     throw new Error(
       `internal: conditional public read of ${table.name} has no publication columns`
     )
   }
-  return { column: column.name, mark: mark.name }
+  return { column, mark }
 }
 
 /** Гість бачить не більше за користувача: `anon` відкриває обидві ролі запиту. */

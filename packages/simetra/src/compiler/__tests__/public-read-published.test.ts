@@ -1,5 +1,17 @@
 import { describe, expect, it, vi } from "vitest"
-import { KIND_REGISTRY } from "simetra/model"
+import {
+  KIND_REGISTRY,
+  isObjectTable,
+  type PhysicalSnapshot,
+  type PhysicalTable,
+} from "simetra/model"
+import type { CompiledModel } from "simetra/compiler"
+import { accessContracts } from "../access-units"
+import {
+  carrierBackfillStatements,
+  carrierLinks,
+} from "../rights/carrier-units"
+import type { ParsedObject } from "../stages/files"
 import { checkPublishedPublicRead } from "../rights/checks"
 import type { RightsCheckContext } from "../rights/checks"
 import {
@@ -14,9 +26,17 @@ import {
   withRoles,
   type Layer,
 } from "./fixtures/rights"
+import { snakeCaseTwin } from "./fixtures/snake-case"
 import { metaFiles, project, uuid } from "./helpers"
 
 const CONDITIONAL = { role: "anon", published: true }
+const LINES_TABLE = "region_lines"
+const LINES = {
+  id: uuid(7803),
+  name: "lines",
+  physicalName: LINES_TABLE,
+  attributes: [],
+}
 
 const conditionalRegion = (extra: Record<string, unknown> = {}): Layer => ({
   [REGION_FILE]: { publicRead: CONDITIONAL, ...extra },
@@ -111,24 +131,65 @@ describe("conditional publicRead in the compiled model (Р-D1-8)", () => {
   })
 
   it("refuses to build a contract for a table of a conditional object without publication columns", async () => {
-    // Копії умови в ТЧ приходять із задачею про копії (Р-D1-9); до них таблиця
-    // без колонок — внутрішня помилка, а не відкритий доступ.
-    await expect(
-      compileRights(
-        withRoles(
-          conditionalRegion({
-            tabularSections: [
-              {
-                id: uuid(7803),
-                name: "lines",
-                physicalName: "region_lines",
-                attributes: [],
-              },
-            ],
-          })
-        )
+    // Копії V у ТЧ кладе стадія 3 (Р-D1-9); знімок без них — дефект
+    // компілятора, і будівник контрактів кидає, а не відкриває таблицю. З
+    // файлів такий знімок недосяжний, тож копії прибираємо з готового.
+    const model = await compiledRegion({ tabularSections: [LINES] })
+    const withLines = (
+      columns: (table: PhysicalTable) => PhysicalTable["columns"]
+    ): PhysicalSnapshot => ({
+      ...model.physical,
+      tables: model.physical.tables.map((t) =>
+        t.name === LINES_TABLE ? { ...t, columns: columns(t) } : t
+      ),
+    })
+    const withoutCopies = withLines((t) =>
+      t.columns.filter((c) => c.origin.copyOf === undefined)
+    )
+    // Колонка з іменем копії, що копією не є, — не V: будівник впізнає копію
+    // за походженням, а не за іменем.
+    const namedLikeCopies = withLines((t) =>
+      t.columns.map((c) =>
+        c.origin.copyOf === undefined
+          ? c
+          : { ...c, origin: { ...c.origin, copyOf: undefined } }
       )
-    ).rejects.toThrow(/internal: conditional public read of region_lines/)
+    )
+    const region = model.objects.find((o) => o.name === "Region")!
+    const objects: ParsedObject[] = [
+      {
+        file: REGION_FILE,
+        kind: "Catalog",
+        name: "Region",
+        id: region.id,
+        data: { publicRead: CONDITIONAL },
+      },
+    ]
+    const build = (snapshot: PhysicalSnapshot) =>
+      accessContracts(
+        objects,
+        {
+          ...snapshot,
+          tables: snapshot.tables.filter(
+            (t) => isObjectTable(t) && t.origin.objectId === region.id
+          ),
+        },
+        [],
+        new Map(),
+        [],
+        undefined,
+        "camelCase",
+        new Set()
+      )
+    // Той самий виклик на повному знімку будує контракт: кидає саме брак копій.
+    expect(
+      build(model.physical).find((a) => a.table.name === LINES_TABLE)!.published
+    ).toEqual({ column: "published", mark: "deletion_mark" })
+    for (const snapshot of [withoutCopies, namedLikeCopies]) {
+      expect(() => build(snapshot)).toThrow(
+        /internal: conditional public read of region_lines/
+      )
+    }
   })
 })
 
@@ -235,4 +296,168 @@ describe("rights.public-read-published-read (Р-D1-13)", () => {
       spy.mockRestore()
     }
   })
+})
+
+describe("copies of the publication condition in tabular sections (Р-D1-9)", () => {
+  const REGION = { schema: "public", name: "region" }
+  const copiesOf = (table: PhysicalTable) =>
+    table.columns
+      .filter((c) => c.origin.copyOf !== undefined)
+      .map((c) => ({
+        name: c.name,
+        type: c.type,
+        notNull: c.notNull,
+        copyOf: c.origin.copyOf,
+      }))
+  const EXPECTED_COPIES = ["published", "deletion_mark"].map((column) => ({
+    name: column,
+    type: "boolean",
+    notNull: false,
+    copyOf: { table: REGION, column, through: "parent_id" },
+  }))
+  const tableOf = (model: CompiledModel, name: string) =>
+    model.physical.tables.find((t) => t.name === name)!
+
+  it("copies published and deletion_mark of the header into each tabular section", async () => {
+    const model = await compiledRegion({ tabularSections: [LINES] })
+    expect(copiesOf(tableOf(model, LINES_TABLE))).toEqual(EXPECTED_COPIES)
+    // Шапка копій не має: V — її власні колонки.
+    expect(copiesOf(tableOf(model, "region"))).toEqual([])
+    const plain = await compileRights(
+      withRoles({
+        [REGION_FILE]: { publicRead: "anon", tabularSections: [LINES] },
+      })
+    )
+    expect(copiesOf(tableOf(plain.model!, LINES_TABLE))).toEqual([])
+  })
+
+  it("gives the same copies in a snake_case project", async () => {
+    // Ім'я носія пише платформа, тож посилання стадії 2 мусить резолвитися в
+    // стилі проєкту: `deletion_mark`, а не `deletionMark`.
+    const result = await compileRights(
+      snakeCaseTwin(withRoles(conditionalRegion({ tabularSections: [LINES] })))
+    )
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    expect(copiesOf(tableOf(result.model!, LINES_TABLE))).toEqual(
+      EXPECTED_COPIES
+    )
+  })
+
+  it("points the access contract of the section at its copies", async () => {
+    const model = await compiledRegion({ tabularSections: [LINES] })
+    const lines = model.contracts.access.find(
+      (a) => a.table.name === LINES_TABLE
+    )!
+    expect(lines.published).toEqual({
+      column: "published",
+      mark: "deletion_mark",
+    })
+    // Копії пише лише платформа: колонковий грант ролі команд їх не дає.
+    for (const column of ["published", "deletion_mark"]) {
+      expect(lines.command!.insert).not.toContain(column)
+      expect(lines.command!.update).not.toContain(column)
+    }
+  })
+
+  it("derives, propagates and backfills both copies by the carrier mechanism", async () => {
+    const model = await compiledRegion({ tabularSections: [LINES] })
+    const link = carrierLinks(model.physical).find(
+      (l) => l.table.name === LINES_TABLE
+    )!
+    expect(link.copies).toEqual([
+      { name: "published", column: "published" },
+      { name: "deletion_mark", column: "deletion_mark" },
+    ])
+    const carrierUnits = model.sqlUnits
+      .filter((u) => u.generator === "carriers")
+      .map((u) => u.identity)
+    expect(carrierUnits).toEqual(
+      expect.arrayContaining([
+        `trigger:public.${LINES_TABLE}.${LINES_TABLE}_simetra_carriers`,
+        `function:public.${LINES_TABLE}_simetra_carriers()`,
+      ])
+    )
+    const backfill = carrierBackfillStatements(model.physical, [
+      {
+        table: { schema: "public", name: LINES_TABLE },
+        columns: ["published", "deletion_mark"],
+      },
+    ])
+    expect(backfill.map((s) => [s.table.name, s.source.name])).toEqual([
+      [LINES_TABLE, "region"],
+    ])
+    expect(backfill[0]!.sql).toMatch(
+      /SET \(published, deletion_mark\) = \(SELECT s\.published, s\.deletion_mark FROM public\.region AS s/
+    )
+  })
+
+  it.each([
+    {
+      field: "ownership",
+      value: { ownership: ["published"] },
+      at: "/ownership/0",
+    },
+    {
+      field: "ownership",
+      value: { ownership: ["deletionMark"] },
+      at: "/ownership/0",
+    },
+    {
+      field: "containerBinding",
+      value: { containerBinding: "published" },
+      at: "/containerBinding",
+    },
+  ])(
+    "keeps rights.carrier-not-ref for $field on a publication column ($at)",
+    async ({ value, at }) => {
+      const result = await compileRights(
+        withRoles(conditionalRegion({ tabularSections: [LINES], ...value }))
+      )
+      expect(
+        result.diagnostics
+          .filter((d) => d.code.startsWith("rights.carrier"))
+          .map((d) => [d.code, d.file, d.pointer])
+      ).toEqual([["rights.carrier-not-ref", REGION_FILE, at]])
+    }
+  )
+
+  it.each([
+    { name: "published", pointer: "/publicRead/published" },
+    { name: "deletion_mark", pointer: "/publicRead/deletionMark" },
+  ])(
+    "refuses a section attribute that takes the copy name $name",
+    async ({ name, pointer }) => {
+      const result = await compileRights(
+        withRoles(
+          conditionalRegion({
+            tabularSections: [
+              {
+                ...LINES,
+                attributes: [
+                  {
+                    id: uuid(7804),
+                    name: name === "published" ? "published" : "deletionMark",
+                    physicalName: name,
+                    type: "Boolean",
+                  },
+                ],
+              },
+            ],
+          })
+        )
+      )
+      expect(
+        result.diagnostics
+          .filter((d) => d.severity === "error")
+          .map((d) => [d.code, d.file, d.pointer, d.params])
+      ).toEqual([
+        [
+          "rights.carrier-column-taken",
+          REGION_FILE,
+          pointer,
+          { table: LINES_TABLE, column: name },
+        ],
+      ])
+    }
+  )
 })

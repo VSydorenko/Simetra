@@ -3,6 +3,8 @@ import {
   UUID_TEXT,
   grantEntryForm,
   isUuidColumn,
+  parsePublicRead,
+  publicationCarriers,
   type AccessMapping,
   type ActionEffects,
   type AssignedOn,
@@ -14,6 +16,7 @@ import {
   type ObjectSelector,
   type PhysicalSnapshot,
   type Project,
+  type PublicRead,
   type RightsCarrier,
   type RoleAssignedOn,
   type SourceCondition,
@@ -137,17 +140,22 @@ export function accessCarrier(
 }
 
 /**
- * Усі носії прав об'єкта — власності, прив'язки й мапінгів `access` — з
- * вказівником, полем для діагностики й роллю першого кроку в індексі
- * посилань: стадія 3 будує за ними копії, стадія 4 — перевіряє їх.
+ * Усі носії прав об'єкта — власності, прив'язки, мапінгів `access` і умови
+ * публікації — з вказівником, полем для діагностики й роллю першого кроку в
+ * індексі посилань: стадія 3 будує за ними копії, стадія 4 — перевіряє їх.
+ * Носії публікації (Р-D1-9) файл не перелічує: умовний `publicRead` дає їх
+ * безумовно, бо без копій V у ТЧ політика рядка ТЧ не мала б що читати.
  */
 export function carrierDeclarations(object: ParsedObject): {
   carrier: RightsCarrier
   pointer: string
-  field: "ownership" | "containerBinding" | "access"
+  field: "ownership" | "containerBinding" | "access" | "publication"
   role: "rights.carrier" | "access.attribute"
 }[] {
   const binding = bindingOf(object)
+  const conditional =
+    parsePublicRead((object.data as { publicRead?: PublicRead }).publicRead)
+      ?.conditional === true
   return [
     ...ownershipOf(object).map((carrier, index) => ({
       carrier,
@@ -170,6 +178,14 @@ export function carrierDeclarations(object: ParsedObject): {
       field: "access" as const,
       role: "access.attribute" as const,
     })),
+    ...(conditional ? publicationCarriers() : []).map(
+      ({ pointer, column }) => ({
+        carrier: column.logicalName,
+        pointer,
+        field: "publication" as const,
+        role: "rights.carrier" as const,
+      })
+    ),
   ]
 }
 

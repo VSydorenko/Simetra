@@ -29,6 +29,7 @@ import {
   accessReferences,
   bindingReferences,
   ownershipReferences,
+  publicationReferences,
 } from "./standard"
 
 function standardColumns(obj: unknown): StandardColumnDef[] {
@@ -504,6 +505,7 @@ export const catalogKind: KindDefinition = {
     ...ownershipReferences(obj as Catalog, standardColumns(obj)),
     ...bindingReferences(obj as Catalog, standardColumns(obj)),
     ...accessReferences(obj as Catalog, standardColumns(obj)),
+    ...publicationReferences(obj as Catalog),
   ],
   projectReferences: (obj) => accessDimensionReferences(obj as Catalog),
   references(obj) {
