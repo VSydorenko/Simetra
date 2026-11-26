@@ -89,6 +89,12 @@ export interface TargetState {
   readonly flightCause: ReadCause | undefined
   /** Ревізія шапки на старті завантаження в польоті. */
   readonly flightRevision: number | undefined
+  /**
+   * Спроба польоту в польоті ще не осіла, тож її відповідь ще може писати
+   * рядки; після осідання останньої спроби місце польоту стоїть до кінця
+   * ланцюга, але нічого не несе (#465).
+   */
+  readonly answerPending: boolean
   /** Наступне завантаження в черзі й причина першого запиту злитої черги. */
   readonly trailing: ReadCause | undefined
   /** Перевірка, що чекає кінця польоту, під рядком першої, що її відклала. */
@@ -119,20 +125,30 @@ export interface TargetState {
   readonly revision: number
 }
 
-/** Початковий запис: ціль без вимог, доказів і польотів. */
-export function createTargetState(): TargetState {
+/** Доказ, який ціль приносить без читання (гідратація знімка). */
+export interface InitialProof {
+  readonly sectionRead?: number
+  readonly readStart?: number
+}
+
+/**
+ * Початковий запис: ціль без вимог і польотів. Доказ — лише той, що приніс
+ * знімок гідратації (`adopt`): епоха гідратації як епоха читання ТЧ.
+ */
+export function createTargetState(proof: InitialProof = {}): TargetState {
   return {
     requirements: [],
     okReadEpoch: undefined,
     readRevision: undefined,
-    readStart: undefined,
-    sectionRead: undefined,
+    readStart: proof.readStart,
+    sectionRead: proof.sectionRead,
     ownerHeaderRead: undefined,
     gen: 0,
     flight: undefined,
     flightEpoch: undefined,
     flightCause: undefined,
     flightRevision: undefined,
+    answerPending: false,
     trailing: undefined,
     recheck: undefined,
     rereadEpochs: [],
@@ -191,8 +207,12 @@ function withRevision(prev: TargetState, next: TargetState): TargetState {
 
 export interface FlightStart {
   readonly kind: FlightKind
-  /** Епоха сесії в мить допуску. */
-  readonly epoch: number
+  /**
+   * Епоха сесії в мить допуску. Без неї завантаження лише займає місце
+   * польоту: епоху старту дає його перша спроба (`retry`), а `flightEpoch`
+   * до неї не змінюється, як на `main`.
+   */
+  readonly epoch?: number
   readonly cause: ReadCause
   /** Ревізія шапки на старті (завантаження картки чи ТЧ). */
   readonly headerRevision?: number
@@ -203,36 +223,55 @@ export interface FlightStart {
   /** Той, хто чекає осідання системного перечитування. */
   readonly waiter?: () => void
   /**
-   * Повтор спроби польоту, що стоїть (M7, M8): нова епоха старту й ревізія
-   * шапки, пауза знята; покоління, причина й черга лишаються.
+   * Спроба польоту, що стоїть (перша спроба завантаження, повтори M7 і M8):
+   * нова епоха старту й ревізія шапки, пауза знята, відповідь очікується;
+   * покоління, причина й черга лишаються.
    */
   readonly retry?: true
+  /**
+   * Тимчасово, рядок 20 `main`: спроба одразу пише `readRevision` і
+   * `readStart` зі своєї ревізії й епохи старту, тож збій і відкинуте теж
+   * зсувають доказ. Знімає задача 9 плану SK-3 разом із рядком 20.
+   */
+  readonly proofAtStart?: true
+  /**
+   * Новий запит заступає завантаження в польоті (`purge` ключа, звуження
+   * прав): покоління зростає, тож поточне завантаження більше не пише, а
+   * запит стає в чергу; місце польоту стоїть до кінця його ланцюга.
+   */
+  readonly supersede?: true
 }
 
 /**
  * Політ стартував. Завантаження, службове читання й хвіст ключів мають одне
  * місце польоту: коли воно зайняте, запит зливається в чергу (`trailing`,
- * причина першого запиту), а не стартує другий політ. Повтор спроби — `retry`. Системні перечитування
+ * причина першого запиту), а не стартує другий політ. Спроба польоту, що
+ * стоїть, — `retry`; заступлення — `supersede`. Системні перечитування
  * летять разом; сторінка стану цілі не міняє (її позначки — власні).
  */
 export function startFlight(
   state: TargetState,
   start: FlightStart
 ): TargetState {
-  const withWaiters: TargetState = {
-    ...state,
-    ...(start.recheck !== undefined && state.recheck === undefined
-      ? { recheck: start.recheck }
-      : {}),
-    ...(start.tail === undefined ? {} : { rereadTail: start.tail }),
-    ...(start.waiter === undefined
-      ? {}
-      : { rereadWaiters: [...state.rereadWaiters, start.waiter] }),
-  }
+  let withWaiters = state
+  if (start.recheck !== undefined)
+    withWaiters = slotChanged(withWaiters, {
+      kind: "recheck",
+      why: start.recheck,
+    })
+  if (start.tail !== undefined)
+    withWaiters = { ...withWaiters, rereadTail: start.tail }
+  if (start.waiter !== undefined)
+    withWaiters = slotChanged(withWaiters, {
+      kind: "waiter",
+      waiter: start.waiter,
+    })
   switch (start.kind) {
     case "page":
       return withWaiters
     case "reread":
+      if (start.epoch === undefined)
+        throw new Error("a system re-read starts at an epoch")
       return {
         ...withWaiters,
         // Старт перечитування й є тією перевіркою, що чекала.
@@ -242,12 +281,22 @@ export function startFlight(
     case "load":
     case "service":
     case "keys": {
+      if (start.supersede === true)
+        return {
+          ...withWaiters,
+          gen: state.gen + 1,
+          trailing: state.trailing ?? start.cause,
+        }
       if (start.retry === true && state.flight !== undefined)
         return {
           ...withWaiters,
           flightEpoch: start.epoch,
           flightRevision: start.headerRevision,
           retryAt: undefined,
+          answerPending: true,
+          ...(start.proofAtStart === true && start.headerRevision !== undefined
+            ? { readRevision: start.headerRevision, readStart: start.epoch }
+            : {}),
         }
       if (state.flight !== undefined)
         return {
@@ -259,7 +308,7 @@ export function startFlight(
         ...withWaiters,
         gen,
         flight: gen,
-        flightEpoch: start.epoch,
+        flightEpoch: start.epoch ?? state.flightEpoch,
         flightCause: start.cause,
         flightRevision: start.headerRevision,
         trailing: undefined,
@@ -280,25 +329,20 @@ export interface SettleInput {
   readonly evidence: Evidence | undefined
   /** Політ — читання самої цілі, а не чужий політ, що її покриває. */
   readonly own: boolean
-  /** Покоління польоту (завантаження, службове, хвіст): чужого не знімаємо. */
-  readonly gen?: number
-  /** Епоха старту польоту: вона ж ключ системного перечитування. */
-  readonly epoch: number
   /** Монотонний годинник на старті польоту (строк, пауза збоїв). */
   readonly startedAt: number
   /** Ціль уже читалась успішно: збій завантаження рахує паузу лише тоді. */
   readonly loaded: boolean
-  /**
-   * Пробудження паузи відкинутого завантаження, пораховане шляхом (сесійний
-   * лічильник відкинутих); без нього відкинуте завантаження пауз не має.
-   */
-  readonly retryAt?: number
   /** Збій став у застосуванні відповіді, а не в читанні: паузи збоїв не рахує. */
   readonly applyFailed?: boolean
   /** Ревізія шапки на старті: є в завантаження картки чи ТЧ. */
   readonly headerRevision?: number
-  /** Завантаження ТЧ (пише `sectionRead`). */
-  readonly section?: boolean
+  /**
+   * Звіт запису ТЧ (крок 5, завантаження й системне перечитування): епоха
+   * читання, яку прийняв запис рядків; бар'єр знімка прав його не дає. Запис
+   * уже відбувся, тож значення пишеться за будь-якого наслідку, як на `main`.
+   */
+  readonly sectionRead?: number
   /** Завантаження ТЧ несло частину шапки власника. */
   readonly carriedHeader?: boolean
   /** Чужий політ покриває ключ шапки цієї цілі. */
@@ -351,9 +395,10 @@ function lifts(requirement: Requirement, input: SettleInput): boolean {
 /**
  * Політ осів. Вимоги знімає лише застосоване читання з доказом потрібного
  * виду польоту й старту (`lifts`); збій, відкинуте за епохою, `evicted`,
- * `after-purge` і `closed` вимог не знімають і доказу не пишуть. Місце
- * польоту звільняється, крім відкинутого завантаження чи сторінки: політ тоді
- * стоїть під паузою `retryAt`, поки його не повторить `retry`.
+ * `after-purge` і `closed` вимог не знімають і доказу не пишуть. Місця
+ * польоту осідання не звільняє: на `main` його звільняє кінець ланцюга спроб
+ * після повторів M7 і M8, а епоху перечитування — прихід усіх відповідей
+ * проходу, до осідання (перехід «місце польоту змінилось»).
  */
 export function settleFlight(
   state: TargetState,
@@ -368,62 +413,34 @@ export function settleFlight(
     requirements: state.requirements.filter((r) => !lifts(r, input)),
   }
 
-  // Чужий політ лише може зняти вимогу шапки (`lifts`): місця польоту, паузи,
-  // доказу й строку цілі він не чіпає.
+  // Чужий політ лише може зняти вимогу шапки (`lifts`): доказу й строку цілі
+  // він не чіпає.
   if (!input.own) return withRevision(state, next)
 
-  // Місце польоту. Паузу (`retryAt`) веде лише завантаження: відкинуте
-  // завантаження з паузою тримає політ, без паузи (відповідь за межею
-  // відкинутих) звільняє, як і будь-яке інше осідання. Сторінка й
-  // перечитування паузи завантаження не чіпають.
-  if (input.flight === "reread") {
-    const at = next.rereadEpochs.indexOf(input.epoch)
-    if (at !== -1)
-      next = {
-        ...next,
-        rereadEpochs: next.rereadEpochs.filter((_, i) => i !== at),
-      }
-  } else if (input.flight !== "page") {
-    const pauses =
-      input.flight === "load" &&
-      input.outcome === "discarded-by-epoch" &&
-      input.retryAt !== undefined
-    if (input.gen === next.flight) {
-      next = pauses
-        ? { ...next, retryAt: input.retryAt }
-        : {
-            ...next,
-            flight: undefined,
-            flightEpoch: undefined,
-            flightCause: undefined,
-            flightRevision: undefined,
-            retryAt: undefined,
-          }
-    }
-  }
+  if (input.sectionRead !== undefined)
+    next = { ...next, sectionRead: input.sectionRead }
 
   if (applied && start !== undefined) {
-    // Доказ ціли: лише вперед, пізніше застосоване раніше стартоване не
-    // зсуває його назад.
+    // Доказ складу — старт останнього застосованого читання, як на `main`:
+    // пізніше осіле раніше стартоване перечитування зсуває його назад.
     if (
       rules.confirms === "view-with-composition" ||
       rules.confirms === "view-stable" ||
       rules.confirms === "service"
     )
-      next = { ...next, okReadEpoch: Math.max(next.okReadEpoch ?? -1, start) }
-    if (input.flight === "load" && input.headerRevision !== undefined) {
-      if (next.readStart === undefined || start >= next.readStart)
-        next = {
-          ...next,
-          readStart: start,
-          readRevision: input.headerRevision,
-        }
-      if (input.section === true)
-        next = {
-          ...next,
-          sectionRead: Math.max(next.sectionRead ?? -1, start),
-        }
-    }
+      next = { ...next, okReadEpoch: start }
+    // Доказ шапки в мить застосування (рядок 20, задача 9): лише вперед,
+    // пізніше застосоване раніше стартоване його не зсуває.
+    if (
+      input.flight === "load" &&
+      input.headerRevision !== undefined &&
+      (next.readStart === undefined || start >= next.readStart)
+    )
+      next = {
+        ...next,
+        readStart: start,
+        readRevision: input.headerRevision,
+      }
     if (input.flight === "load" && input.carriedHeader === true)
       next = {
         ...next,
@@ -450,6 +467,123 @@ export function settleFlight(
     next = { ...next, failures: next.failures + 1, failedAt: input.startedAt }
 
   return withRevision(state, next)
+}
+
+// ---------------------------------------------------------------------------
+// Перехід 7: «місце польоту змінилось»
+// ---------------------------------------------------------------------------
+
+/**
+ * Зміна місця й черги польоту в ті моменти, у які їх робить `main`, окремо
+ * від старту й осідання спроби (рішення архітекторки 26.11, F1): ланцюг
+ * спроб завантаження тримає місце через повтори M7 і M8 і звільняє його в
+ * кінці, а прохід перечитування знімає свою епоху, щойно прийшли всі
+ * відповіді, ще до осідання.
+ */
+export type SlotChange =
+  /** Остання спроба осіла: місце польоту стоїть, але відповіді вже не несе. */
+  | { readonly kind: "answered" }
+  /** Відкинуте завантаження чекає повтору M8 до `retryAt` (облік `sync()`). */
+  | { readonly kind: "paused"; readonly retryAt: number }
+  /** Пауза скінчилась: далі повтор, якщо його допустить шлюз. */
+  | { readonly kind: "pause-ended" }
+  /** Ланцюг спроб скінчився: місце польоту вільне. */
+  | { readonly kind: "freed" }
+  /**
+   * Кінець ланцюга забрав чергу: відкладену перевірку завжди, наступне
+   * завантаження — лише живої цілі (`trailing`).
+   */
+  | { readonly kind: "queue-taken"; readonly trailing: boolean }
+  /** Прийшли всі відповіді проходу перечитування, що стартував у `epoch`. */
+  | { readonly kind: "reread-ended"; readonly epoch: number }
+  /** Перевірка шапки знайшла політ: вона чекає його кінця (перша лишається). */
+  | { readonly kind: "recheck"; readonly why: ReadWhy }
+  /** Хвіст явного перечитування чекає цілі в польоті (перший лишається). */
+  | { readonly kind: "tail"; readonly tail: Promise<void> }
+  /** Хвіст дочекався. */
+  | { readonly kind: "tail-ended" }
+  /** Хтось чекає осідання системного перечитування. */
+  | { readonly kind: "waiter"; readonly waiter: () => void }
+  /** Ті, хто чекав перечитування, розбуджені. */
+  | { readonly kind: "waiters-resolved" }
+
+/**
+ * Місце польоту змінилось. Входів похідних свіжості перехід не змінює, тож
+ * ревізії не рухає; вимог не знімає й доказу не пише.
+ */
+export function slotChanged(
+  state: TargetState,
+  change: SlotChange
+): TargetState {
+  switch (change.kind) {
+    case "answered":
+      return { ...state, answerPending: false }
+    case "paused":
+      return { ...state, retryAt: change.retryAt }
+    case "pause-ended":
+      return { ...state, retryAt: undefined }
+    case "freed":
+      // Епоха старту лишається, як на `main`: її читають лише поруч із
+      // зайнятим місцем, а наступне завантаження до першої спроби — ні.
+      return {
+        ...state,
+        flight: undefined,
+        flightCause: undefined,
+        flightRevision: undefined,
+        retryAt: undefined,
+      }
+    case "queue-taken":
+      return {
+        ...state,
+        recheck: undefined,
+        ...(change.trailing ? { trailing: undefined } : {}),
+      }
+    case "reread-ended": {
+      const at = state.rereadEpochs.indexOf(change.epoch)
+      return at === -1
+        ? state
+        : {
+            ...state,
+            rereadEpochs: state.rereadEpochs.filter((_, i) => i !== at),
+          }
+    }
+    case "recheck":
+      return state.recheck === undefined
+        ? { ...state, recheck: change.why }
+        : state
+    case "tail":
+      return state.rereadTail === undefined
+        ? { ...state, rereadTail: change.tail }
+        : state
+    case "tail-ended":
+      return { ...state, rereadTail: undefined }
+    case "waiter":
+      return {
+        ...state,
+        rereadWaiters: [...state.rereadWaiters, change.waiter],
+      }
+    case "waiters-resolved":
+      return { ...state, rereadWaiters: [] }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Лише самотест (дефекти `defects.ts`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Лише для дефекту самотесту `page-drops-requirement` (`defects.ts`): знімає
+ * вимогу без доказу, як навмисно хибне осідання сторінки. Робочий шлях вимог
+ * без доказу не знімає (`settleFlight`).
+ */
+export function dropRequirementForDefect(
+  state: TargetState,
+  kind: StoredRequirementKind
+): TargetState {
+  return withRevision(state, {
+    ...state,
+    requirements: state.requirements.filter((r) => r.kind !== kind),
+  })
 }
 
 // ---------------------------------------------------------------------------
