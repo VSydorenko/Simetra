@@ -161,6 +161,7 @@ export type {
   Contracts,
   MembershipSourceContract,
   PostingContract,
+  PredefinedSeedContract,
   QualifiedName,
   RightsLevelKey,
   RegisterContract,

@@ -311,6 +311,7 @@ export const COMPILER_RULES = [
   "apply.drift-partial",
   "apply.drift-unverifiable",
   "apply.versions-changed",
+  "apply.primary-language-changed",
   "apply.plan-versions",
   "apply.plan-format",
   "apply.plan-hash",

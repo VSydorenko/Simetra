@@ -4545,6 +4545,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Переконайтеся, що від останнього застосування базу ніхто не змінював повз платформу, перегляньте кроки плану й дозвольте drift, щоб застосувати.",
     },
   },
+  "apply.primary-language-changed": {
+    en: (p) =>
+      `The languages table ${p.table} on the target does not match the primary language "${p.language}" of the configuration: the primary language is assigned once, and the seed would not change it`,
+    uk: (p) =>
+      `Таблиця мов ${p.table} на цілі не відповідає основній мові "${p.language}" конфігурації: основну мову призначають один раз, і засів її не змінить`,
+    hint: {
+      en: "Restore primaryDataLanguage in project.meta.json to the code of the primary language in the database; a row with the primary code or the primary flag must be the seeded primary row.",
+      uk: "Поверніть primaryDataLanguage у project.meta.json до коду основної мови в базі; рядок з кодом основної чи ознакою основної має бути засіяним рядком основної мови.",
+    },
+  },
   "apply.plan-versions": {
     en: (p) =>
       `The plan was built with ${p.field} ${p.plan}, but the current one is ${p.current}`,

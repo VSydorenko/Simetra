@@ -191,6 +191,36 @@ export interface PredefinedContract {
 }
 
 /**
+ * Передвизначений рядок до засіву (Р-B2-7): крок даних apply вставляє його після
+ * DDL `INSERT … ON CONFLICT (<мітка>) WHERE <предикат> DO NOTHING`. Apply читає
+ * лише цей факт, а не `project.meta.json`; факт входить у хеш моделі, тож зміна
+ * поля проєкту, з якого взято рядок, не дає плану `unchanged` в обхід звірки.
+ * Імена колонок — фізичні.
+ */
+export interface PredefinedSeedContract {
+  objectId: string
+  table: QualifiedName
+  /**
+   * Колонка мітки, мітка рядка й предикат часткового унікального індексу мітки —
+   * арбітр `ON CONFLICT`.
+   */
+  label: { column: string; value: string; where: string }
+  /** Ключ рядка: значення дає `gen_random_uuid()` засіву (DEFAULT ключа немає). */
+  keyColumn: string
+  /** Значення колонок рядка, у порядку колонок таблиці. */
+  values: { column: string; value: string | boolean }[]
+  /**
+   * Звірка цілі перед засівом (Р-B2-8). `unique` — колонки, значення яких з
+   * `values` не може мати рядок без мітки; рядок з міткою мусить мати значення
+   * з `values` у колонках `unique` і `fixed`.
+   */
+  unique: string[]
+  fixed: string[]
+  /** Значення, яким діагностика звірки називає рядок (код основної мови). */
+  subject: string
+}
+
+/**
  * Нумерація першим записом (спека П2, М21): номер призначає оболонка при
  * першому записі; лічильники й генерацію — П3. Префікса поки немає.
  */
@@ -611,6 +641,8 @@ export interface Contracts {
   predefined: PredefinedContract[]
   /** За `objectId`. */
   numbering: NumberingContract[]
+  /** За `objectId`: передвизначені рядки, які засіває apply (Р-B2-7). */
+  predefinedSeeds: PredefinedSeedContract[]
   /** За `table.schema`, далі `table.name`: кожна таблиця виду з RLS. */
   access: AccessContract[]
   /** За `bucket`: вид скоупу вказано id, бо ім'я виду може змінитися. */
@@ -1106,7 +1138,11 @@ export function buildContracts(
   elementChecks: ModelStageResult["elementChecks"],
   project: Pick<
     Project,
-    "scopeKinds" | "storageBuckets" | "defaultSchema" | "database"
+    | "scopeKinds"
+    | "storageBuckets"
+    | "defaultSchema"
+    | "database"
+    | "primaryDataLanguage"
   >,
   access: readonly AccessContract[],
   eventSubscriptions: readonly EventSubscriptionContract[],
@@ -1157,6 +1193,7 @@ export function buildContracts(
     registers,
     predefined: predefinedContracts(objects, physical, style),
     numbering: numberingContracts(objects, physical, style),
+    predefinedSeeds: predefinedSeedContracts(objects, physical, style, project),
     access: [...access],
     storageBuckets: project.storageBuckets
       .map(({ bucket, scopeKind }) => ({
@@ -1649,6 +1686,72 @@ function predefinedContracts(
     })
     .sort((a, b) => compareStrings(a.objectId, b.objectId))
 }
+
+/**
+ * Передвизначені рядки ролі довідника (Р-B2-7): таблицю й колонки стану мови
+ * дає `languageStateTables` (поле реєстру `languagesCatalog`), мітку й поле
+ * проєкту — факт ролі `predefinedSeed`, значення стану — `languageState`.
+ * Рядок — основна мова: код з поля проєкту, найменування — той самий код,
+ * опублікований стан і ознака основної. Без значення поля рядка немає: таку
+ * модель відмовляє `languages.primary-missing`, а контракти будуються лише для
+ * моделі без помилок.
+ */
+function predefinedSeedContracts(
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot,
+  style: AttributeCase,
+  project: Pick<Project, "primaryDataLanguage">
+): PredefinedSeedContract[] {
+  const byId = new Map(objects.map((o) => [o.id ?? "", o]))
+  return languageStateTables(physical, objects, style)
+    .flatMap(({ table, state, columns }): PredefinedSeedContract[] => {
+      const object = must(byId.get(table.origin.objectId))
+      const kind = KIND_REGISTRY[object.kind]
+      const seed = kind.predefinedSeed?.(object.data)
+      const code = seed === undefined ? undefined : project[seed.projectField]
+      if (seed === undefined || code === undefined) return []
+      const defs = kind.standardColumns(object.data)
+      const physicalOf = (logicalName: string) => {
+        const def = must(defs.find((d) => d.logicalName === logicalName))
+        return must(
+          table.columns.find(
+            (c) => c.origin.standard === standardLogicalName(def, style)
+          )
+        )
+      }
+      const label = physicalOf(PREDEFINED_NAME)
+      const labelDef = must(defs.find((d) => d.logicalName === PREDEFINED_NAME))
+      const values = new Map<string, string | boolean>([
+        [columns.code, code],
+        [physicalOf(DESCRIPTION).name, code],
+        [columns.state, state.publishedState],
+        [columns.primary, true],
+      ])
+      return [
+        {
+          objectId: table.origin.objectId,
+          table: { schema: table.schema, name: table.name },
+          label: {
+            column: label.name,
+            value: seed.predefinedName,
+            where: must(labelDef.partialUnique),
+          },
+          keyColumn: physicalOf(keyColumn(false).logicalName).name,
+          values: table.columns.flatMap((c) => {
+            const value = values.get(c.name)
+            return value === undefined ? [] : [{ column: c.name, value }]
+          }),
+          unique: [columns.primary, columns.code],
+          fixed: [columns.state],
+          subject: code,
+        },
+      ]
+    })
+    .sort((a, b) => compareStrings(a.objectId, b.objectId))
+}
+
+/** Стандартний реквізит найменування: рядок засіву називається своїм кодом. */
+const DESCRIPTION = "description"
 
 function registerContract(
   register: ParsedObject,
