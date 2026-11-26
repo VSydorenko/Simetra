@@ -366,9 +366,13 @@ function analyze(
     !ts.isShorthandPropertyAssignment(n.parent) &&
     ts.getNameOfDeclaration(n.parent as ts.Declaration) === n
 
-  const tokenKind = (n: ts.Identifier): Kind => {
+  const tokenKind = (n: ts.Node): Kind => {
     const access = n.parent
-    if (!ts.isPropertyAccessExpression(access)) return "token"
+    if (
+      !ts.isPropertyAccessExpression(access) &&
+      !ts.isElementAccessExpression(access)
+    )
+      return "token"
     const receiver = unwrap(access.expression)
     if (!ts.isIdentifier(receiver)) return "token"
     const made = declsOf(checker, receiver).some(
@@ -384,10 +388,7 @@ function analyze(
     return made ? "child-token" : "token"
   }
 
-  const kindOf = (
-    decls: readonly ts.Node[],
-    n: ts.Identifier
-  ): Kind | undefined => {
+  const kindOf = (decls: readonly ts.Node[], n: ts.Node): Kind | undefined => {
     if (decls.includes(tokenValid)) return tokenKind(n)
     if (decls.includes(unavailable)) return "unavailable"
     for (const d of decls) {
@@ -527,6 +528,21 @@ function analyze(
             here.members.push({ to: d, settled: inner, ...at(n) })
           else here.refs.push({ to: d, settled: inner, ...at(n) })
         }
+      }
+      // Доступ рядковим ключем (`token()["valid"]`) — той самий член, що й
+      // `token().valid`: символ ключа розв'язує checker.
+      if (
+        ts.isElementAccessExpression(n) &&
+        ts.isStringLiteralLike(n.argumentExpression)
+      ) {
+        const key = n.argumentExpression
+        const decls = declsOf(checker, key)
+        const kind = kindOf(decls, key)
+        if (kind !== undefined)
+          here.reads.push({ kind, settled: inner, ...at(key) })
+        for (const d of decls)
+          if (isMemberDecl(d))
+            here.members.push({ to: d, settled: inner, ...at(key) })
       }
       if (ts.isBindingElement(n)) {
         const kind = bindingKind(n)
@@ -1304,6 +1320,28 @@ describe("read gate guard self-test: the raw closed state", () => {
       )
     ).toEqual([
       "core.ts::createCore.load closed: found 4, listed 3 @16, @17, @18, @19",
+    ])
+  })
+})
+
+describe("read gate guard self-test: access by a string key", () => {
+  it("reads through an element access are the same reads", () => {
+    const t = selfTest(`  function load(ctx: Ctx) {
+    if (session.token()["valid"]) return 1
+    if (session.versions["unavailable"]()) return 2
+    if (gate["tabHidden"]()) return 3
+    return ctx["isStale"]("a")
+  }
+  const ctx: Ctx = {
+    isStale: (o) => staleObjects.has(o),
+    hidden: gate.tabHidden,
+    closedSnapshot: () => closed,
+  }`)
+    expect(t.closure([LOAD])).toEqual([
+      "core.ts::createCore.load gate.tabHidden",
+      "core.ts::createCore.load staleObjects via Ctx.isStale",
+      "core.ts::createCore.load token",
+      "core.ts::createCore.load unavailable",
     ])
   })
 })
