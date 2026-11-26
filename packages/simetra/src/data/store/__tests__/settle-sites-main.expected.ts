@@ -445,6 +445,7 @@ export const EXPECTED: Readonly<Record<string, readonly string[]>> = {
     "attempt.settled reread failed (command.unavailable)",
     "lease.release",
   ],
+  "reread is not started for a view that never loaded": [],
   "reread failed: apply throws": [
     "~ full.rereadEpochs=1",
     "attempt.start reread R7",

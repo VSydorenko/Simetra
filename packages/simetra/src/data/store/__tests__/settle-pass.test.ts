@@ -11,7 +11,12 @@ import {
   type SettleHooks,
 } from "../sync/settle-pass"
 import { TASK, setup } from "./core-support"
-import { createGate, isPermit, type Flight } from "../sync/flight"
+import {
+  createGate,
+  isPermit,
+  rereadOutcomeOf,
+  type Flight,
+} from "../sync/flight"
 import {
   FLIGHT_KINDS,
   FLIGHT_KIND_RULES,
@@ -379,7 +384,7 @@ describe("settlePass: one outcome per flight, in the order of the steps", () => 
       load: false,
       page: false,
       reread: true,
-      keys: false,
+      keys: true,
       service: false,
     })
   })
@@ -510,6 +515,48 @@ describe("settlePass: one outcome per flight, in the order of the steps", () => 
     expect(
       settlePass(r.session, [{ flight: flightOf("keys") }], hooks)
     ).toEqual([{ outcome: "closed" }])
+  })
+
+  it("a quiet flight opens no region and no log, and its lease is released", () => {
+    const r = rig()
+    const lease = new FakeLease()
+    const calls: string[] = []
+    const result = settlePass(
+      r.session,
+      [{ flight: flightOf("keys", { lease }) }],
+      {
+        ...r.hooks,
+        quiet: () => true,
+        settled: (_entry, outcome) => void calls.push(`settled:${outcome}`),
+      }
+    )
+    expect(result).toEqual([{ outcome: "closed" }])
+    expect(r.calls).toEqual([])
+    expect(calls).toEqual(["settled:closed"])
+    expect(lease.released).toBe(1)
+  })
+
+  it("the hook of a read failure runs inside the region at step 3, before step 7", () => {
+    const r = rig()
+    const readFailed: SettleHooks<SettleEntry, string>["readFailed"] = () =>
+      void r.calls.push("readFailed")
+    settlePass(
+      r.session,
+      [{ flight: flightOf("keys"), failure: { error: new Error("x") } }],
+      { ...r.hooks, readFailed }
+    )
+    expect(r.calls).toEqual([
+      "refused",
+      "commit:begin",
+      "invalid",
+      "failureDetail",
+      "readFailed",
+      "settleTarget:failed",
+      "sweep",
+      "finish:failed",
+      "commit:end",
+      "settled:failed:x",
+    ])
   })
 
   it("a step without a hook is a step without an action", () => {
@@ -650,6 +697,23 @@ describe("settleAfter: the dependency of settlements (Р-SK2-8)", () => {
     settleSections()
     expect(await result).toEqual([{ outcome: "applied" }])
     expect(r.calls.slice(0, 2)).toEqual(["commit:begin", "invalid"])
+  })
+})
+
+describe("rereadOutcomeOf: the answer to the requester derives from the pass outcome", () => {
+  it("maps the three outcomes a requester is told and leaves the rest", () => {
+    const row = { key: "k", version: 1, values: {} }
+    expect(rereadOutcomeOf("applied", row)).toEqual({ kind: "read", row })
+    expect(rereadOutcomeOf("applied", undefined)).toEqual({
+      kind: "read",
+      row: undefined,
+    })
+    expect(rereadOutcomeOf("discarded-by-epoch", row)).toEqual({
+      kind: "discarded",
+    })
+    expect(rereadOutcomeOf("failed", row)).toEqual({ kind: "failed" })
+    for (const outcome of ["closed", "evicted", "after-purge"] as const)
+      expect(rereadOutcomeOf(outcome, row)).toBeUndefined()
   })
 })
 

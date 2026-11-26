@@ -606,6 +606,21 @@ const REREAD: Record<string, Scenario> = {
       await settle()
       return log(rec)
     },
+  "reread is not started for a view that never loaded": async () => {
+    // Вигляд, що жодного разу не завантажився (перше читання відмовило), не
+    // читає системне перечитування: кожен шлях до нього питає `loaded`. Тому
+    // клітинка збою «завжди» проти «якщо завантажено» для читання спостережно
+    // не розрізняється: політ читання з незавантаженим виглядом не буває.
+    const { h, rec } = freshRig(FULL, 3, { mode: "manual" })
+    await settle()
+    fail(h)
+    await settle()
+    rec.mark()
+    void h.core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(h.fake.pending).toHaveLength(0)
+    return log(rec)
+  },
   "reread failed: apply throws": async () => {
     const { h, rec } = await loadedRig()
     throwOnPut(h)
@@ -1161,6 +1176,12 @@ describe("the kind table against the recorded behaviour of main", () => {
         /failures=1/
       )
     ).toBe(countsFor(R.reread.failureCounts, true))
+    // Клітинку reread «завжди» проти «якщо завантажено» записом не розрізнити:
+    // на вигляд, що не завантажився, системне перечитування не стартує, тож
+    // незавантаженого польоту, збій якого можна було б порахувати, немає.
+    expect(lines("reread is not started for a view that never loaded")).toEqual(
+      []
+    )
   })
 
   it("liftsBanners and setsBanners: load lifts, page and reread leave, only reread sets", () => {
@@ -1194,11 +1215,14 @@ describe("the kind table against the recorded behaviour of main", () => {
     expect(has("page applied", /^ops\.own/)).toBe(
       R.page.confirms === "own-page"
     )
-    expect(R.keys.confirms).toBe("rows")
+    // Ключі підтверджують рядки: хвіст пише рядок, а не склад вигляду.
+    expect(has("tail read", /^ops\.put/)).toBe(R.keys.confirms === "rows")
+    expect(has("tail read", /^ops\.own/)).toBe(
+      R.keys.confirms === "view-with-composition"
+    )
     expect(has("reread applied", /^ops\.own/)).toBe(
       R.reread.confirms === "view-with-composition"
     )
-    expect(has("tail read", /^ops\.own/)).toBe(false)
     // Завантаження знімає вимогу власним польотом, сторінка — лише читанням,
     // яке вона викликає після себе.
     const own = lines(
@@ -1216,7 +1240,14 @@ describe("the kind table against the recorded behaviour of main", () => {
   })
 
   it("discarded: load and page pause then retry, reread moves the object deadline, keys do nothing", () => {
-    expect(R.keys.discarded).toBe("nothing")
+    // Ключі: відкинута відповідь не пише й не ставить повтору.
+    const silent = (name: string) =>
+      !lines(name).some((l) =>
+        /^(ops\.put|scheduled|attempt\.start)/.test(l)
+      ) && lines(name).filter((l) => l.startsWith("read ")).length === 1
+    expect(silent("tail discarded by epoch")).toBe(
+      R.keys.discarded === "nothing"
+    )
     expect(
       has("load discarded by epoch, pause, then M8", /^attempt\.start load M8/)
     ).toBe(R.load.discarded === "pause-then-retry")
@@ -1235,42 +1266,44 @@ describe("the kind table against the recorded behaviour of main", () => {
     expect(
       lines("tail discarded by epoch").filter((l) => l.startsWith("read "))
     ).toHaveLength(1)
-    expect(keysDiscarded("signal")).toBe("nothing")
-    expect(keysDiscarded("requirement")).toBe("nothing")
+    expect(silent("signal read discarded by epoch")).toBe(
+      keysDiscarded("signal") === "nothing"
+    )
+    expect(silent("tail discarded by epoch")).toBe(
+      keysDiscarded("requirement") === "nothing"
+    )
   })
 
   it("keys failure by reason: signal and K2 mark the views, the tail marks nothing", () => {
-    expect(KEYS_FAILURE.signal).toBe("composition-unconfirmed")
-    expect(KEYS_FAILURE.requirement).toBe("requirement-budget")
-    expect(
+    const marks = (name: string) =>
       has(
-        "signal read failed: refused (needsRefresh and the composition mark)",
-        /needsRefresh=true/
+        name,
+        /needsRefresh=true.*unconfirmedSince|unconfirmedSince.*needsRefresh=true/
       )
-    ).toBe(true)
     expect(
-      has(
-        "tail failed: read refused (no retry)",
-        /needsRefresh|unconfirmedSince/
+      marks(
+        "signal read failed: refused (needsRefresh and the composition mark)"
       )
-    ).toBe(false)
+    ).toBe(KEYS_FAILURE.signal === "composition-unconfirmed")
+    expect(marks("tail failed: read refused (no retry)")).toBe(
+      KEYS_FAILURE.requirement === "composition-unconfirmed"
+    )
     // K2 — перевизначення: збій як K1, а повтор іде після області запису.
     expect(Object.keys(SITE_OVERRIDES)).toEqual(["K2"])
-    expect(keysFailureOf("K2", "requirement")).toBe("composition-unconfirmed")
-    expect(keysFailureOf("K3", "requirement")).toBe("requirement-budget")
-    expect(
-      has(
-        "min-version retry read refused (K2 fails like K1)",
-        /needsRefresh=true/
-      )
-    ).toBe(true)
-    expect(SITE_OVERRIDES.K2?.schedulesRetryAfterCommit).toBe(true)
+    expect(marks("min-version retry read refused (K2 fails like K1)")).toBe(
+      keysFailureOf("K2", "requirement") === "composition-unconfirmed"
+    )
+    // K3 — хвіст: його збій читає правило причини, а не перевизначення.
+    expect(keysFailureOf("K3", "requirement")).toBe(KEYS_FAILURE.requirement)
+    expect(keysFailureOf("K1", "signal")).toBe(KEYS_FAILURE.signal)
     const retry = lines(
       "signal read with a version below the promised one: min-version retry after the region"
     )
+    // Повтор K2 іде гачком після області запису (клітинка перевизначення).
     expect(
-      retry.findIndex((l) => l.startsWith("read keys K2"))
-    ).toBeGreaterThan(retry.indexOf("flush"))
+      retry.findIndex((l) => l.startsWith("read keys K2")) >
+        retry.indexOf("flush")
+    ).toBe(SITE_OVERRIDES.K2?.schedulesRetryAfterCommit)
   })
 
   it("reasons: every read of the recordings carries a reason of its kind", () => {

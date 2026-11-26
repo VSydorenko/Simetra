@@ -9,6 +9,7 @@ import type {
   ReadCause,
   ReadTarget,
   ReadWhy,
+  SettleOutcome,
   SiteCode,
   TestSite,
 } from "./vocabulary"
@@ -90,8 +91,35 @@ export type RereadOutcome =
   | { readonly kind: "read"; readonly row: ServerRow | undefined }
   | { readonly kind: "failed" | "discarded" }
 
+/**
+ * Наслідок читання ключа з наслідку проходу: `applied` — `read` (рядок ключа
+ * дає шлях), `discarded-by-epoch` — `discarded`, `failed` — `failed`. Інші
+ * наслідки (`closed`, `evicted`, `after-purge`) запитувачу не віддаються: або
+ * області запису не було, або вона не дійшла до відповіді.
+ */
+export function rereadOutcomeOf(
+  outcome: SettleOutcome,
+  row: ServerRow | undefined
+): RereadOutcome | undefined {
+  switch (outcome) {
+    case "applied":
+      return { kind: "read", row }
+    case "discarded-by-epoch":
+      return { kind: "discarded" }
+    case "failed":
+      return { kind: "failed" }
+    default:
+      return undefined
+  }
+}
+
 /** Те, що шлях додає до польоту, крім причини, цілі й коду. */
 export interface FlightExtras {
+  /**
+   * Епоха старту підробленого польоту самотесту: шлюз його не видавав, тож
+   * епохи йому не ставив. Видані шлюзом польоти беруть її з допуску.
+   */
+  readonly epoch?: number
   readonly attempt?: number
   readonly caller?: Subset
   readonly lease?: WriteLease

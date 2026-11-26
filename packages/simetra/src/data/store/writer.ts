@@ -40,7 +40,6 @@ import type { RowViews } from "./snapshot"
 import {
   ReadLimiterClosed,
   readKeys,
-  settle,
   tracked,
   type BoundSource,
 } from "./source"
@@ -56,6 +55,7 @@ import {
 } from "./subsets"
 import {
   isPermit,
+  rereadOutcomeOf,
   type Flight,
   type Permit,
   type RereadOutcome,
@@ -1660,32 +1660,47 @@ export async function rereadKey(
   )
   if (!isPermit(admitted)) return
   const o = ctx.objectOf(object)
-  const startEpoch = session.epochs.now()
   const token = session.token()
-  let done = false
-  const fire = (outcome: RereadOutcome, scope: Scope) => {
-    if (done) return
-    done = true
-    limit.abort()
+  // Запитувач і строк — поля польоту (Р-SK2-2): «покликано» спільне для строку
+  // й осідання, тож пізня відповідь після строку проходить прохід без
+  // запитувача (Р-SK2-9).
+  const limit = new AbortController()
+  const requester = (outcome: RereadOutcome, scope: Scope) => {
     if (outcome.kind !== "read" && unconfirmed !== undefined) {
       o.rows.markUnconfirmed(scope, key, unconfirmed.version, unconfirmed.epoch)
       if (o.rows.get(key) !== undefined) ctx.rowViews.touch(o.name, key)
     }
     onCommit?.(outcome, scope)
   }
-  // Межа часу (§7.2, крок 4): мутація не чекає перечитування без кінця.
-  // Очікування — сон сесії: закриття будить його одразу й таймера не лишає.
-  const limit = new AbortController()
-  void session.sleep(REREAD_TIMEOUT_MS, limit.signal).then(() => {
-    if (done || !token.valid) return
-    session.commit(
-      (scope) => fire({ kind: "failed" }, scope),
-      token,
-      "reread timeout"
-    )
-  })
   const lease = ctx.source.lease()
-  const read = tracked(ctx.source, admitted.flight({ lease }))
+  const flight = admitted.flight({
+    lease,
+    kind: "keys",
+    requester,
+    deadlineMs: REREAD_TIMEOUT_MS,
+    done: { fired: false },
+  })
+  const reply = (outcome: RereadOutcome, scope: Scope) => {
+    const done = required(flight.done, "its reply mark")
+    if (done.fired) return
+    done.fired = true
+    limit.abort()
+    required(flight.requester, "its requester")(outcome, scope)
+  }
+  // Межа часу (§7.2, крок 4): мутація не чекає перечитування без кінця; це
+  // окрема область запису (Р-SK2-9). Очікування — сон сесії: закриття будить
+  // його одразу й таймера не лишає.
+  void session
+    .sleep(required(flight.deadlineMs, "its deadline"), limit.signal)
+    .then(() => {
+      if (required(flight.done, "its reply mark").fired || !token.valid) return
+      session.commit(
+        (scope) => reply({ kind: "failed" }, scope),
+        token,
+        "reread timeout"
+      )
+    })
+  const read = tracked(ctx.source, flight)
   let rows: readonly ServerRow[] | undefined
   try {
     rows = await readKeys(
@@ -1699,43 +1714,63 @@ export async function rereadKey(
   } catch {
     rows = undefined
   }
-  settle(lease, () => {
-    if (!token.valid) {
-      limit.abort()
-      return
-    }
-    session.commit(
-      (scope) => {
-        if (rows === undefined) {
-          fire({ kind: "failed" }, scope)
-          return
-        }
-        // Шлюз відповіді — той самий, що в `Writer.apply`: епохи частин і
-        // рядків; відкинута відповідь не пише нічого.
+  // Рядок ключа з його власною епохою, як він прийшов: його лишає застосування
+  // для запитувача (`read`).
+  let answer: ServerRow | undefined
+  settlePass<SettleEntry>(
+    session,
+    [
+      {
+        flight,
+        ...(rows === undefined ? { failure: { error: undefined } } : {}),
+      },
+    ],
+    {
+      token,
+      what: `reread ${o.name}`,
+      // Токен ключа недійсний: області запису немає, журналу пізньої
+      // відповіді теж (як на `main`).
+      quiet: () => !token.valid,
+      // Шлюз відповіді — той самий, що в `Writer.apply`: епохи частин і
+      // рядків; відкинута відповідь не пише нічого.
+      gate: () => {
         const epochs = new Set<string | null>(read.epochs)
-        for (const row of rows) epochs.add(row.versionEpoch ?? null)
-        if (session.acceptEpochs(epochs, startEpoch) === "discard") {
-          fire({ kind: "discarded" }, scope)
-          return
-        }
-        patchRows(ctx, scope, o, rows, startEpoch, null, form === "card")
-        const found = rows.find(
+        for (const row of required(rows, "its answer"))
+          epochs.add(row.versionEpoch ?? null)
+        return session.acceptEpochs(
+          epochs,
+          required(flight.epoch, "its start epoch")
+        ) === "discard"
+          ? "discard"
+          : "apply"
+      },
+      apply: (_entry, scope) => {
+        const answered = required(rows, "its answer")
+        const startEpoch = required(flight.epoch, "its start epoch")
+        patchRows(ctx, scope, o, answered, startEpoch, null, form === "card")
+        const found = answered.find(
           (r) => r.key.toLowerCase() === key.toLowerCase()
         )
         if (found === undefined && (o.rows.get(key)?.owners ?? 0) > 0)
           removeKeys(ctx, scope, o, [key], startEpoch)
-        // Підсумок несе рядок відповіді з його власною епохою, як він прийшов:
-        // у сховище цей рядок уже записав `patchRows` за правилом епох.
-        const answer =
+        // У сховище цей рядок уже записав `patchRows` за правилом епох.
+        answer =
           found === undefined
             ? undefined
             : { ...found, versionEpoch: heldEpoch(found.versionEpoch) }
-        fire({ kind: "read", row: answer }, scope)
       },
-      token,
-      `reread ${o.name}`
-    )
-  })
+      applyFailed: (_entry, error) =>
+        ctx.log({ kind: "listener-failed", error }),
+      // Наслідок запитувачу — з наслідку проходу, у тій самій області запису.
+      finish: (_entry, outcome, scope) => {
+        const replied = rereadOutcomeOf(outcome, answer)
+        if (replied !== undefined) reply(replied, scope)
+      },
+      settled: (_entry, outcome) => {
+        if (outcome === "closed") limit.abort()
+      },
+    }
+  )
 }
 
 /**

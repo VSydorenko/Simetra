@@ -29,7 +29,6 @@ import {
   ReadLimiterClosed,
   readKeys,
   requestOf,
-  settle,
   tracked,
   type CorePart,
   type CoreReadItem,
@@ -46,6 +45,7 @@ import {
   type Flight,
   type Permit,
 } from "./sync/flight"
+import { settlePass, type SettleEntry } from "./sync/settle-pass"
 import type {
   AdmissionCondition,
   DueCause,
@@ -65,6 +65,7 @@ import {
 import { createScheduler } from "./scheduler"
 import {
   createRegistry,
+  required,
   requirementHold,
   requirementPending,
   type Subset,
@@ -100,6 +101,7 @@ import {
   type CoreSnapshot,
   type GenerationToken,
   type Key,
+  type ServerRow,
   type Mutation,
   type ObjectName,
   type RightsState,
@@ -692,7 +694,7 @@ export function createCore(options: {
   // Оренди запису за об'єктами (§8.4, правило 2): запис відпущеного каналу
   // тримається, поки існує оренда на запис рядків його об'єкта. Видає її
   // читання в мить відправки — за частинами (план читання); знімає лише
-  // `settle` польоту, що записав відповідь одним `commit` чи відкинув її.
+  // прохід осідання польоту, що записав відповідь одним `commit` чи відкинув її.
   const pendingWrites = new Map<ObjectName, number>()
   const source: StoreSource = {
     close: () => batcher.close(),
@@ -1401,49 +1403,71 @@ export function createCore(options: {
     tail.flying = keys
     const gen = tail.gen
     const token = session.childToken(() => tail.gen === gen)
-    const readEpoch = session.epochs.now()
     const lease = source.lease()
-    const read = tracked(
-      source,
-      // Мутації самотесту: політ підроблено чи взято з тестового входу, шлюз
-      // його не видавав.
-      defects.has("read-bypasses-gate")
-        ? forgeFlight(tailCause, tailTarget, "K3", { lease })
-        : defects.has("read-bypasses-gate-testing")
-          ? issueTestFlight(tailCause, tailTarget, "K3", { lease })
-          : admitted.flight({ lease })
-    )
+    // Мутації самотесту: політ підроблено чи взято з тестового входу, шлюз
+    // його не видавав, тож епоху старту йому дає шлях.
+    const extras = { lease, kind: "keys", token } as const
+    const flight = defects.has("read-bypasses-gate")
+      ? forgeFlight(tailCause, tailTarget, "K3", {
+          ...extras,
+          epoch: session.epochs.now(),
+        })
+      : defects.has("read-bypasses-gate-testing")
+        ? issueTestFlight(tailCause, tailTarget, "K3", {
+            ...extras,
+            epoch: session.epochs.now(),
+          })
+        : admitted.flight(extras)
+    const read = tracked(source, flight)
+    // Осідання хвоста: без повтору (§6.3) ключі перечитує вигляд. Відповідь
+    // пишеться лише для ключів, що на мить `commit` мають власника (§8.4);
+    // збій читання області запису не має — прохід лише знімає оренду.
+    const settleTail = (rows: readonly ServerRow[] | undefined) =>
+      settlePass<SettleEntry>(
+        session,
+        [
+          {
+            flight,
+            ...(rows === undefined ? { failure: { error: undefined } } : {}),
+          },
+        ],
+        {
+          token,
+          what: `tail ${o.name}`,
+          refused: () => true,
+          lost: () => (tail.gen === gen ? "closed" : "after-purge"),
+          // Відкинута відповідь не пише нічого; без автоповтору (§6.3) ключі
+          // перечитує вигляд.
+          gate: () =>
+            session.acceptEpochs(
+              read.epochs,
+              required(flight.epoch, "its start epoch")
+            ),
+          apply: (_entry, scope) => {
+            const readEpoch = required(flight.epoch, "its start epoch")
+            const got = new Set<Key>()
+            for (const row of required(rows, "its answer")) {
+              got.add(row.key)
+              // Ключ без запису — і перший запис без колонки скоупу (П11),
+              // недосяжний: проєкція завжди несе scopeColumn (§10).
+              if ((o.rows.get(row.key)?.owners ?? 0) > 0)
+                ops.put(scope, o, row, readEpoch, false)
+            }
+            for (const key of keys) {
+              if (!got.has(key) && (o.rows.get(key)?.owners ?? 0) > 0)
+                ops.remove(scope, o, key, readEpoch)
+            }
+          },
+          applyFailed: (_entry, error) =>
+            log({ kind: "listener-failed", error }),
+        }
+      )
     readKeys(read.source, o.entry, keys, {
       keysPerRequest: limits.keysPerRequest,
     })
       .then(
-        (rows) =>
-          settle(lease, () =>
-            session.commit(
-              (scope) => {
-                // Відкинута відповідь не пише нічого; без автоповтору
-                // (§6.3) ключі перечитує вигляд.
-                if (session.acceptEpochs(read.epochs, readEpoch) === "discard")
-                  return
-                const got = new Set<Key>()
-                for (const row of rows) {
-                  got.add(row.key)
-                  // Ключ без запису — і перший запис без колонки скоупу (П11),
-                  // недосяжний: проєкція завжди несе scopeColumn (§10).
-                  if ((o.rows.get(row.key)?.owners ?? 0) > 0)
-                    ops.put(scope, o, row, readEpoch, false)
-                }
-                for (const key of keys) {
-                  if (!got.has(key) && (o.rows.get(key)?.owners ?? 0) > 0)
-                    ops.remove(scope, o, key, readEpoch)
-                }
-              },
-              token,
-              `tail ${o.name}`
-            )
-          ),
-        // Без автоповтору (§6.3): рядок лишається `stale` до наступного читання.
-        () => settle(lease, () => {})
+        (rows) => settleTail(rows),
+        () => settleTail(undefined)
       )
       .finally(() => {
         tail.flying = undefined

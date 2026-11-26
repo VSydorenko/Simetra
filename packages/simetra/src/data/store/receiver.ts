@@ -15,13 +15,7 @@ import { evaluateFilter, fieldInfoOf } from "./filter"
 import type { ObjectState } from "./forms"
 import { scopeOf, visibleRow, type RowEntry } from "./object-store"
 import { canSubscribe } from "./rights"
-import {
-  ReadLimiterClosed,
-  readKeys,
-  settle,
-  tracked,
-  type WriteLease,
-} from "./source"
+import { ReadLimiterClosed, readKeys, tracked } from "./source"
 import type {
   CoreLogEntry,
   GenerationToken,
@@ -33,10 +27,12 @@ import type {
   ViewSpec,
   Writer,
 } from "./types"
-import type { Subset } from "./subsets"
-import { isPermit } from "./sync/flight"
+import { required, type Subset } from "./subsets"
+import { isPermit, type Flight } from "./sync/flight"
+import { rulesOf, settleAfter, type SettleEntry } from "./sync/settle-pass"
 import {
   activeViews,
+  createWriter,
   revalidate,
   revalidateTargets,
   admitViews,
@@ -233,11 +229,28 @@ interface Job {
   readonly o: ObjectState
   readonly plan: Plan
   readonly signals: ObjectBatch
-  readonly readEpoch: number
+  /**
+   * The flight of the read: its start epoch, its write lease (released when
+   * its answer settles) and its kind are the read state (SK-2).
+   */
+  readonly flight: Flight
   readonly epochs: Set<string | null>
-  readonly rows: Promise<ServerRow[] | undefined>
-  /** The write lease of the read; released when its answer settles. */
-  readonly lease: WriteLease
+  /** The answer rows, or the error the read failed with. */
+  readonly answer: Promise<{ rows: ServerRow[] } | { error: unknown }>
+}
+
+// Читання ключів одного об'єкта, що осідає: відповідь чи збій, повтори
+// мінімальної версії, які шлях ставить після області запису (K2), і
+// осідання ТЧ власника, після якого осідає ця відповідь (Р-SK2-8).
+interface LandEntry extends SettleEntry {
+  readonly job: Job
+  readonly rows?: readonly ServerRow[]
+  readonly again: [
+    object: ObjectName,
+    key: Key,
+    version: number,
+    attempt: number,
+  ][]
 }
 
 // Час власних позначок приймача (`minVersion` і «розрив»): рядок моделі часу
@@ -698,29 +711,35 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     )
     if (!isPermit(admitted)) return undefined
     const lease = writer.source.lease()
-    const read = tracked(writer.source, admitted.flight({ lease }))
+    const flight = admitted.flight({ lease, kind: "keys" })
+    const read = tracked(writer.source, flight)
     const owned = new Set(plan.stored)
     return {
       object,
       o,
       plan,
       signals,
-      lease,
-      readEpoch: session.epochs.now(),
+      flight,
       epochs: read.epochs,
-      rows: readKeys(read.source, o.entry, [...plan.stored, ...plan.fresh], {
+      answer: readKeys(read.source, o.entry, [...plan.stored, ...plan.fresh], {
         keysPerRequest: limits.keysPerRequest,
         known: (keys) => o.rows.knownFor(keys, { owned, form: "list" }),
-      }).catch((error: unknown) => {
-        // Збій читання не губить сигнал мовчки: вигляди об'єкта позначено, а
-        // журнал знає (як `reread` ключа після власного запису). Закриття
-        // обмежувача — не збій: так закривається рантайм.
-        if (!(error instanceof ReadLimiterClosed))
-          writer.log({ kind: "listener-failed", error })
-        return undefined
-      }),
+      }).then(
+        (rows) => ({ rows }),
+        (error: unknown) => {
+          // Збій читання не губить сигнал мовчки: вигляди об'єкта позначено, а
+          // журнал знає (як `reread` ключа після власного запису). Закриття
+          // обмежувача — не збій: так закривається рантайм.
+          if (!(error instanceof ReadLimiterClosed))
+            writer.log({ kind: "listener-failed", error })
+          return { error }
+        }
+      ),
     }
   }
+
+  const readEpochOf = (job: Job) =>
+    required(job.flight.epoch, "its start epoch")
 
   // Крок 5: новий рядок у сховище не пишеться; `hasNewRows` лише тим виглядам
   // `full` і вікна, чий фільтр він проходить (§6.4).
@@ -737,7 +756,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         object,
         row.key,
         scopeOf(o.entry, row.values),
-        job.readEpoch
+        readEpochOf(job)
       )
     )
       return
@@ -808,11 +827,20 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     })
   }
 
+  // Епохи частин і рядків відповіді читання ключів: одна множина для брами
+  // проходу й для `apply` з єдиною прийнятою епохою.
+  const answerEpochs = (job: Job, rows: readonly ServerRow[]) => {
+    const epochs = new Set(job.epochs)
+    for (const row of rows) epochs.add(row.versionEpoch ?? null)
+    return epochs
+  }
+
   // Відповідь читання ключів одного об'єкта: один шлюз епох на всю відповідь
-  // (епохи частин і рядків), далі один `apply` з єдиною прийнятою епохою. Другий
-  // шлюз усередині `Writer.apply` на вже прийнятих епохах нічого не змінює
-  // (`acceptEpoch` — `apply` без побічних ефектів), тож відповідь без рядків
-  // теж проходить шлюз за епохою частин.
+  // (крок 4 проходу: епохи частин і рядків), далі один `apply` з єдиною
+  // прийнятою епохою. Другий шлюз усередині `Writer.apply` на вже прийнятих
+  // епохах нічого не змінює (`acceptEpoch` — `apply` без побічних ефектів),
+  // тож відповідь без рядків теж проходить шлюз за епохою частин. Кількість
+  // перевірок лишається, як на `main`: єдину форму брами дає SK-5.
   const settleJob = (
     w: Writer,
     job: Job,
@@ -820,9 +848,8 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     retry: (object: ObjectName, key: Key, version: number, at: number) => void
   ) => {
     const { object, o, plan, signals } = job
-    const epochs = new Set(job.epochs)
-    for (const row of rows) epochs.add(row.versionEpoch ?? null)
-    if (session.acceptEpochs(epochs, job.readEpoch) === "discard") return
+    const readEpoch = readEpochOf(job)
+    const epochs = answerEpochs(job, rows)
     const versionEpoch = [...epochs].find((epoch) => epoch !== null) ?? null
     const isHeld = (key: Key) => (o.rows.get(key)?.owners ?? 0) > 0
     const returned = new Map(rows.map((row) => [row.key.toLowerCase(), row]))
@@ -830,8 +857,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       (key) => isHeld(key) && !returned.has(key)
     )
     if (
-      w.apply(object, { rows, absent }, job.readEpoch, versionEpoch) ===
-      "discarded"
+      w.apply(object, { rows, absent }, readEpoch, versionEpoch) === "discarded"
     )
       return
     for (const key of plan.stored) {
@@ -848,12 +874,12 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       // вигляди тримають уже з новішого читання, ні дочитування (як
       // `markNewRow`).
       const scope = o.rows.get(key)?.scope ?? null
-      if (buriedSinceRead(object, key, scope, job.readEpoch)) continue
+      if (buriedSinceRead(object, key, scope, readEpoch)) continue
       // Лише горизонт витіснення: надгробок міг бути purge, а міг — хибним
       // збігом кошика. Реакція та сама, що в сховищах (§6.2, правило 1):
       // сховати значення й перечитати ключ без `minVersion` — позначка, яку
       // purge зробив нездійсненною, лишилась би без строку (#374).
-      if (evictedSinceRead(object, key, scope, job.readEpoch)) {
+      if (evictedSinceRead(object, key, scope, readEpoch)) {
         w.hideByHorizon(object, [key])
         continue
       }
@@ -998,27 +1024,54 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     // пачки, лягла б пізніше за новіші читання й розійшлася б із ними (П15).
     // Пачка тримає single-flight, доки не осяде все.
     const land = async (job: Job) => {
-      const [rows] = await Promise.all([job.rows, sectionsOf.get(job)])
-      const again: Parameters<typeof scheduleRetry>[] = []
-      settle(job.lease, () => {
-        if (stopped) return
-        if (rows === undefined) {
-          ctx.commit(
-            (w) =>
-              w.markViews(job.object, {
-                needsRefresh: true,
-                unconfirmedSince: since,
-              }),
-            token
-          )
-          return
-        }
-        ctx.commit(
-          (w) => settleJob(w, job, rows, (...args) => again.push(args)),
-          token
-        )
+      const answered = await job.answer
+      const entry: LandEntry = {
+        flight: job.flight,
+        job,
+        again: [],
+        ...("rows" in answered
+          ? { rows: answered.rows }
+          : { failure: { error: answered.error } }),
+        // Шапка осідає після ТЧ власника (Р-SK2-8): прохід чекає його.
+        ...(sectionsOf.has(job) ? { after: sectionsOf.get(job)! } : {}),
+      }
+      await settleAfter<LandEntry>(writer.session, [entry], {
+        token,
+        what: "writer",
+        // Приймач зупинено: нічого не пишеться й журналу пізньої відповіді
+        // немає (Власного токена приймач не має, див. `token` вище).
+        quiet: () => stopped,
+        // Збій читання не губить сигнал: вигляди об'єкта чекають перечитування
+        // («склад не підтверджено», `needsRefresh`) — клітинка збою ключів, а
+        // для K2 її перевизначає код рядка.
+        readFailed: ({ flight, job: { object } }, scope) => {
+          if (rulesOf(flight).keysFailure === "composition-unconfirmed")
+            createWriter(writer, scope).markViews(object, {
+              needsRefresh: true,
+              unconfirmedSince: since,
+            })
+        },
+        gate: ({ flight, job, rows }) =>
+          session.acceptEpochs(
+            answerEpochs(job, required(rows, "its answer")),
+            required(flight.epoch, "its start epoch")
+          ),
+        apply: ({ job, rows, again }, scope) =>
+          settleJob(
+            createWriter(writer, scope),
+            job,
+            required(rows, "its answer"),
+            (...args) => again.push(args)
+          ),
+        applyFailed: (_entry, error) =>
+          writer.log({ kind: "listener-failed", error }),
+        // Збій застосування лишає рядки без власника так само, як відповідь.
+        sweep: (scope) => writer.ops.sweep(scope),
+        // Дочитування мінімальної версії (K2) — після області запису.
+        settled: ({ again }) => {
+          for (const args of again) scheduleRetry(...args)
+        },
       })
-      for (const args of again) scheduleRetry(...args)
     }
     await Promise.all([...jobs.map(land), ...flights])
   }

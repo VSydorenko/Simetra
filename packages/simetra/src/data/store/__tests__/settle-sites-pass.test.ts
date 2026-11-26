@@ -1,11 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { channelTopic } from "simetra/model"
+import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
+import { QUIET_MS } from "../receiver"
 import type { ViewSpec } from "../types"
-import { TASK, seed, settle, setup } from "./core-support"
+import { createFakeSignalTransport } from "../testing/fake-signal-transport"
+import {
+  S,
+  TASK,
+  key,
+  keysOf,
+  seed,
+  settle,
+  setup,
+  task,
+  type CoreHarness,
+} from "./core-support"
 import type { settlePass as SettlePass } from "../sync/settle-pass"
 
 /*
- * Точки завантаження, сторінки й системного перечитування осідають лише через `settlePass` (план SK-2,
- * задачі 3 і 4): запис ефектів проходу доводить порядок кроків, а підміна гачка
+ * Точки завантаження, сторінки, системного перечитування, підтвердження
+ * запису, хвоста й приймача осідають лише через `settlePass` (план SK-2,
+ * задачі 3–5): запис ефектів проходу доводить порядок кроків, а підміна гачка
  * — що запис стану цілі йде лише через `settleTarget` (крок 7), а запис
  * відповіді — лише через `apply` (крок 5). Очікування `main` — у
  * `settle-sites-main.test.ts`; тут лише шов.
@@ -19,7 +34,10 @@ const seen = vi.hoisted(() => ({
 vi.mock("../sync/settle-pass", async (importOriginal) => {
   const real = await importOriginal<typeof import("../sync/settle-pass")>()
   const wrapped: typeof SettlePass = (session, entries, hooks) => {
-    const kind = entries[0]!.flight.kind
+    const { flight } = entries[0]!
+    // Ключі трьох точок розрізняє код рядка: K1/K2 приймач, K3 хвіст, K4 запис.
+    const kind =
+      flight.kind === "keys" ? `keys ${flight.site}` : (flight.kind ?? "")
     // Підмінений гачок не кличе справжнього; брама без нього пропускає.
     const wrap = <A extends unknown[], R>(
       name: string,
@@ -37,9 +55,23 @@ vi.mock("../sync/settle-pass", async (importOriginal) => {
       apply: wrap("apply", hooks.apply, undefined),
       settleTarget: wrap("settleTarget", hooks.settleTarget, undefined),
       sweep: wrap("sweep", hooks.sweep, undefined),
+      // Наслідок запитувачу `write-confirm` іде лише з `finish`.
+      finish: kind.startsWith("keys")
+        ? wrap("finish", hooks.finish, undefined)
+        : hooks.finish,
     })
   }
-  return { ...real, settlePass: wrapped }
+  // Приймач осідає через `settleAfter`, що кличе справжній прохід: підміняємо
+  // її так, щоб вона кликала обгорнутий.
+  const wrappedAfter: typeof real.settleAfter = (session, entries, hooks) => {
+    const waits = entries.flatMap((e) =>
+      e.after === undefined ? [] : [e.after]
+    )
+    return waits.length === 0
+      ? wrapped(session, entries, hooks)
+      : Promise.all(waits).then(() => wrapped(session, entries, hooks))
+  }
+  return { ...real, settlePass: wrapped, settleAfter: wrappedAfter }
 })
 
 beforeEach(() => {
@@ -56,8 +88,12 @@ afterEach(() => {
 const FULL: ViewSpec = { kind: "full", object: TASK }
 const WINDOW: ViewSpec = { kind: "window", object: TASK }
 
-async function loaded(spec: ViewSpec, rows: number) {
-  const h = setup({ now: () => Date.now() })
+async function loaded(
+  spec: ViewSpec,
+  rows: number,
+  options: Parameters<typeof setup>[0] = {}
+) {
+  const h = setup({ now: () => Date.now(), ...options })
   seed(h.fake, 1, rows)
   const view = h.core.view(spec)
   const unsubscribe = view.subscribe(() => {})
@@ -186,5 +222,194 @@ describe("the system re-read settles through the pass", () => {
     await settle()
     expect(view.getSnapshot().status).not.toBe("error")
     unsubscribe()
+  })
+})
+
+describe("the write-confirm point settles through the pass", () => {
+  const rig = async () => {
+    // Відповідь запису без рядків (понад бюджет, Рд26): ключ перечитується.
+    const { h, view, unsubscribe } = await loaded(FULL, 3, {
+      epoch: "e".repeat(64),
+      server: (fake) => ({
+        ...fake.server,
+        run: async (request) => {
+          const answer = {
+            ...((await fake.server.run(request)) as Record<string, unknown>),
+          }
+          delete answer.rows
+          return answer
+        },
+      }),
+    })
+    await settle()
+    seen.calls.length = 0
+    let resolved = false
+    const update = () =>
+      void h.core
+        .update(TASK, key(1), { title: "x" }, { expectedVersion: 1 })
+        .settled.then(() => (resolved = true))
+    return { h, view, unsubscribe, update, resolved: () => resolved }
+  }
+
+  it("runs the gate, the write and the reply to the requester, in the order of the steps", async () => {
+    const { update, resolved, unsubscribe } = await rig()
+    update()
+    await settle()
+    expect(seen.calls.filter((c) => c.startsWith("keys K4 "))).toEqual([
+      "keys K4 gate",
+      "keys K4 apply",
+      "keys K4 finish",
+    ])
+    expect(resolved()).toBe(true)
+    unsubscribe()
+  })
+
+  it("tells the requester of a failure only in the settlement of the pass", async () => {
+    const settledAfterFailure = async (skipFinish: boolean) => {
+      const { h, update, resolved, unsubscribe } = await rig()
+      if (skipFinish) seen.skip.add("keys K4 finish")
+      // Держимо лише читання за ключем: сам запис проходить.
+      h.fake.hold = (read) => keysOf(read.query).length > 0
+      update()
+      await settle()
+      expect(resolved()).toBe(false)
+      h.fake.hold = undefined
+      h.fake.take().fail("command.unavailable")
+      await settle()
+      unsubscribe()
+      return resolved()
+    }
+    // Запитувач чекає наслідку: його дає лише осідання проходу (тут — збій).
+    expect(await settledAfterFailure(false)).toBe(true)
+    expect(await settledAfterFailure(true)).toBe(false)
+  })
+
+  it("has no step-7 seam: a key read writes no target state", async () => {
+    const { update, unsubscribe } = await rig()
+    update()
+    await settle()
+    expect(seen.calls.some((c) => c.includes("keys K4 settleTarget"))).toBe(
+      false
+    )
+    unsubscribe()
+  })
+})
+
+describe("the tail point settles through the pass", () => {
+  const hide = (h: CoreHarness) =>
+    void h.core.commit((w) => w.hideByHorizon(TASK, [key(1)]), h.core.token())
+
+  it("runs the epoch gate and the write, in the order of the steps", async () => {
+    const { h, unsubscribe } = await loaded(FULL, 3)
+    await settle()
+    seen.calls.length = 0
+    hide(h)
+    await settle()
+    expect(seen.calls.filter((c) => c.startsWith("keys K3 "))).toEqual([
+      "keys K3 gate",
+      "keys K3 apply",
+    ])
+    unsubscribe()
+  })
+
+  it("writes the answer only in the step-5 hook", async () => {
+    const { h, view, unsubscribe } = await loaded(FULL, 3)
+    await settle()
+    const before = view.getSnapshot().rows.length
+    seen.skip.add("keys K3 apply")
+    hide(h)
+    await settle()
+    expect(view.getSnapshot().rows).toHaveLength(before)
+    expect(view.getSnapshot().rows[0]).toMatchObject({ hidden: true })
+    unsubscribe()
+  })
+})
+
+describe("the signal receiver point settles through the pass", () => {
+  const USER = "00000000-0000-4000-8000-0000000000a1"
+  const CHANNEL = channelTopic({
+    kind: "changes",
+    scopeKindId: SCOPE_KIND_ID,
+    scope: S,
+    object: task.id,
+  })
+
+  async function signalCore() {
+    const transport = createFakeSignalTransport()
+    const h = setup({
+      now: () => Date.now(),
+      limits: { revalidateIntervalMs: 10_000_000 },
+      signals: transport,
+      rightsSnapshot: true,
+    })
+    h.fake.rightsSnapshot = {
+      userId: USER,
+      scopeSets: [{ scopeKind: SCOPE_KIND_ID, scope: S }],
+      rights: [
+        {
+          level: "scope",
+          levelId: null,
+          scope: S,
+          container: null,
+          object: "task",
+          action: "read",
+          extent: "any",
+          dimensionId: null,
+        },
+      ],
+      members: [],
+      dimensionValues: [],
+    }
+    h.fake.rightsVersion = "1".repeat(64)
+    seed(h.fake, 1, 3)
+    const view = h.core.view({
+      kind: "keys",
+      object: TASK,
+      keys: [key(1), key(2)],
+    })
+    view.subscribe(() => {})
+    await settle()
+    seen.calls.length = 0
+    const emit = async () => {
+      const version = h.fake.edit(TASK, key(1), { title: "from the signal" })
+      transport.emit(CHANNEL, {
+        id: "1",
+        object: task.id,
+        op: "update",
+        keys: { id: key(1) },
+        row_ver: version,
+      })
+      await vi.advanceTimersByTimeAsync(QUIET_MS)
+      await settle()
+    }
+    return { h, view, emit }
+  }
+
+  it("runs the epoch gate, the write and the sweep, in the order of the steps", async () => {
+    const { emit } = await signalCore()
+    await emit()
+    expect(seen.calls.filter((c) => c.startsWith("keys K1 "))).toEqual([
+      "keys K1 gate",
+      "keys K1 apply",
+      "keys K1 sweep",
+    ])
+  })
+
+  it("writes the answer only in the step-5 hook", async () => {
+    const { view, emit } = await signalCore()
+    seen.skip.add("keys K1 apply")
+    await emit()
+    expect(JSON.stringify(view.getSnapshot().rows)).not.toContain(
+      "from the signal"
+    )
+  })
+
+  it("keeps the epoch gate of the point: a discarded gate writes nothing", async () => {
+    const { view, emit } = await signalCore()
+    seen.skip.add("keys K1 gate")
+    await emit()
+    // Брама проходу відповіла «застосувати»: пише лише власне застосування.
+    expect(seen.calls).toContain("keys K1 apply")
+    expect(JSON.stringify(view.getSnapshot().rows)).toContain("from the signal")
   })
 })
