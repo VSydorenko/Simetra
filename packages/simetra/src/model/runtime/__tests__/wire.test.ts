@@ -81,6 +81,11 @@ const BY_TYPE: Record<LogicalType, Case> = {
     logical: { a: [1, "x", null] },
     wire: { v_col: { a: [1, "x", null] } },
   },
+  RichText: {
+    attribute: attr("RichText"),
+    logical: { type: "doc", content: [] },
+    wire: { v_col: { type: "doc", content: [] } },
+  },
   Ref: {
     attribute: attr("Ref", {
       ref: { object: OBJECT_ID, constraint: "v_col_fkey" },

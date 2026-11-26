@@ -5,6 +5,8 @@ import {
   PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   PROVIDER_IDENTITY_SOURCES,
+  RICH_TEXT_PROFILE,
+  RICH_TEXT_WHITESPACE,
   SESSION_CLAIMS_SETTING,
   SIGNAL_OUTBOX,
   type IdentitySource,
@@ -82,6 +84,23 @@ const PROVISION = "function:simetra.provision_user(text,text,uuid,text)"
 const ON_CREATED = "function:simetra.on_auth_user_created()"
 const ON_REMOVED = "function:simetra.on_auth_user_removed()"
 const FUNCTIONS = [CURRENT_USER, PROVISION, ON_CREATED, ON_REMOVED]
+const RICH_TEXT_IS_EMPTY = "function:simetra.rich_text_is_empty(jsonb)"
+
+/**
+ * Одиниці функції порожності `RichText` на `supabase` (Р-B7-8): вона є в
+ * кожному проєкті, з «Користувачами» й без них.
+ */
+const RICH_TEXT_UNITS = [
+  RICH_TEXT_IS_EMPTY,
+  "grant:grant:function:simetra.rich_text_is_empty(jsonb):anon:execute",
+  "grant:grant:function:simetra.rich_text_is_empty(jsonb):authenticated:execute",
+  "grant:grant:function:simetra.rich_text_is_empty(jsonb):service_role:execute",
+  `grant:grant:function:simetra.rich_text_is_empty(jsonb):${PLATFORM_ROLES.command}:execute`,
+  "grant:revoke:function:simetra.rich_text_is_empty(jsonb):public:execute",
+].sort()
+
+const identities = (units: readonly SqlUnit[]) =>
+  units.map((u) => u.identity).sort()
 
 describe("platform layer", () => {
   it("no users catalog — no platform layer", async () => {
@@ -97,6 +116,8 @@ describe("platform layer", () => {
     ).toEqual([SIGNAL_OUTBOX.name])
     // Механіка рядка лежить у `simetra` і без «Користувачів» — це не шар.
     // Шукаємо кваліфіковане ім'я: роль команд `simetra_command` — не схема.
+    // Функцію порожності `RichText`, що є в кожному проєкті, звіряє
+    // describe «rich_text_is_empty» нижче.
     expect(
       withoutMechanics(model.sqlUnits).filter(
         (u) =>
@@ -530,8 +551,11 @@ describe("platform layer without users", () => {
 
   const subjectFunction = (): SqlUnit => {
     const functions = layer(model).filter((u) => u.class === "function")
-    expect(functions.map((u) => u.identity)).toEqual([CURRENT_USER])
-    return functions[0]!
+    expect(functions.map((u) => u.identity).sort()).toEqual([
+      CURRENT_USER,
+      RICH_TEXT_IS_EMPTY,
+    ])
+    return functions.find((u) => u.identity === CURRENT_USER)!
   }
 
   /** Оператори гілки `IF` з умовою `condition`; без такого `IF` — помилка. */
@@ -599,7 +623,12 @@ describe("platform layer without users", () => {
       "GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO authenticated;",
       "GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO service_role;",
       `GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO ${PLATFORM_ROLES.command};`,
+      "GRANT EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) TO anon;",
+      "GRANT EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) TO authenticated;",
+      "GRANT EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) TO service_role;",
+      `GRANT EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) TO ${PLATFORM_ROLES.command};`,
       "REVOKE EXECUTE ON FUNCTION simetra.current_user_id() FROM PUBLIC;",
+      "REVOKE EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) FROM PUBLIC;",
     ])
   })
 
@@ -645,17 +674,21 @@ describe("platform layer without users", () => {
       parse,
       PROVIDER_IDENTITY_SOURCES.supabase
     )
-    // Лишається лише outbox сигналів — він не залежить від сесії.
+    // Лишаються outbox сигналів і функція порожності `RichText` — вони не
+    // залежать від сесії.
     expect(withoutMechanics(units)).toEqual([])
-    // Проєкт без «Користувачів» і без джерела членства: ні шару, ні прав.
+    // Проєкт без «Користувачів» і без джерела членства: ні функції сесії, ні
+    // прав.
     const plain = await compileOk({
       "catalogs/Currency/Currency.meta.json": catalog("Currency"),
     })
     expect(
-      plain.sqlUnits.filter(
-        (u) => u.generator === "platformLayer" || u.generator === "rights"
+      identities(
+        plain.sqlUnits.filter(
+          (u) => u.generator === "platformLayer" || u.generator === "rights"
+        )
       )
-    ).toEqual([])
+    ).toEqual(RICH_TEXT_UNITS)
   })
 })
 
@@ -669,3 +702,145 @@ function fnArgs(sql: string): string {
     .map((a) => a.split(/\s+/).at(-1))
     .join(", ")
 }
+
+/**
+ * Функція порожності `RichText` (Р-B7-7, Р-B7-8): одиниця проєкту шару
+ * платформи без власника-об'єкта, з `EXECUTE` кожній ролі сесії. Відповідь
+ * на спільних випадках перевіряє DB-тест; тут — форма тексту.
+ */
+describe("platform layer: rich_text_is_empty", () => {
+  beforeAll(loadShapeParsers)
+
+  const plain = () =>
+    compileOk({ "catalogs/Currency/Currency.meta.json": catalog("Currency") })
+
+  it("is a project unit of the layer with and without users", async () => {
+    for (const model of [await plain(), await withUsers()]) {
+      const units = model.sqlUnits.filter((u) =>
+        RICH_TEXT_UNITS.includes(u.identity)
+      )
+      expect(identities(units)).toEqual(RICH_TEXT_UNITS)
+      expect(unit(model, RICH_TEXT_IS_EMPTY).schema).toBe(PLATFORM_SCHEMA)
+      for (const u of units) {
+        expect(u).toMatchObject({
+          generator: "platformLayer",
+          module: model.project.name,
+        })
+        expect(u.ownerObjectId).toBeUndefined()
+        expect(u.file).toBeUndefined()
+      }
+    }
+  })
+
+  it("EXECUTE goes to every session role of the provider and to nobody else", async () => {
+    const grants = (model: CompiledModel) =>
+      model.sqlUnits
+        .filter(
+          (u) =>
+            u.class === "grant" && u.sql.includes("simetra.rich_text_is_empty")
+        )
+        .map((u) => u.sql)
+        .sort()
+    expect(grants(await plain())).toEqual([
+      "GRANT EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) TO anon;",
+      "GRANT EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) TO authenticated;",
+      "GRANT EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) TO service_role;",
+      `GRANT EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) TO ${PLATFORM_ROLES.command};`,
+      "REVOKE EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) FROM PUBLIC;",
+    ])
+    const postgres = await compile(
+      metaFiles({
+        "project.meta.json": project({
+          defaultSchema: "app",
+          database: { provider: "postgres" },
+        }),
+        "catalogs/Currency/Currency.meta.json": catalog("Currency"),
+      })
+    )
+    expect(postgres.diagnostics.filter((d) => d.severity === "error")).toEqual(
+      []
+    )
+    // Сервісної ролі профіль `postgres` не має: її гранту немає.
+    expect(grants(postgres.model!)).toEqual([
+      "GRANT EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) TO simetra_anon;",
+      `GRANT EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) TO ${PLATFORM_ROLES.command};`,
+      "GRANT EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) TO simetra_user;",
+      "REVOKE EXECUTE ON FUNCTION simetra.rich_text_is_empty(jsonb) FROM PUBLIC;",
+    ])
+  })
+
+  type Option = {
+    defname: string
+    arg?: unknown
+  }
+  const options = async () => {
+    const fn = unit(await plain(), RICH_TEXT_IS_EMPTY)
+    const create = (fn.tree as { CreateFunctionStmt: { options: unknown[] } })
+      .CreateFunctionStmt
+    return {
+      fn,
+      list: create.options.map((o) => (o as { DefElem: Option }).DefElem),
+    }
+  }
+  /** jsonpath тіла: рядок `A_Const` під приведенням до `pg_catalog.jsonpath`. */
+  const jsonpathOf = async () => {
+    const { list } = await options()
+    const as = list.find((o) => o.defname === "as")!.arg as {
+      List: { items: { String: { sval: string } }[] }
+    }
+    const body = tree(as.List.items[0]!.String.sval)
+    const calls = nodes(body, "FuncCall") as { funcname: unknown }[]
+    expect(calls.map((c) => c.funcname)).toEqual([
+      [
+        { String: { sval: "pg_catalog" } },
+        { String: { sval: "jsonb_path_exists" } },
+      ],
+    ])
+    const casts = nodes(body, "TypeCast") as {
+      arg: { A_Const: { sval: { sval: string } } }
+      typeName: { names: unknown }
+    }[]
+    expect(casts.map((c) => c.typeName.names)).toEqual([
+      [{ String: { sval: "pg_catalog" } }, { String: { sval: "jsonpath" } }],
+    ])
+    // Відповідь — заперечення існування непорожнього вузла.
+    expect(nodes(body, "BoolExpr")).toMatchObject([{ boolop: "NOT_EXPR" }])
+    return casts[0]!.arg.A_Const.sval.sval
+  }
+
+  it("is sql IMMUTABLE STRICT PARALLEL SAFE with an empty search_path", async () => {
+    const { fn, list } = await options()
+    expect(routineLanguage(fn.tree as never)).toBe("sql")
+    expect(hasEmptySearchPath(fn.tree as never)).toBe(true)
+    const byName = Object.fromEntries(list.map((o) => [o.defname, o.arg]))
+    expect(byName).toMatchObject({
+      volatility: { String: { sval: "immutable" } },
+      strict: { Boolean: { boolval: true } },
+      parallel: { String: { sval: "safe" } },
+    })
+    expect(byName).not.toHaveProperty("security")
+    expect(fnArgs(fn.sql)).toBe("jsonb")
+    expect(fn.sql).toContain("RETURNS boolean")
+  })
+
+  it("strict jsonpath over a whitespace class decoded from RICH_TEXT_WHITESPACE", async () => {
+    const path = await jsonpathOf()
+    // Літерал класу — рядок jsonpath; JSON-розбір знімає його escape, тож
+    // порівнюються символи, які побачить регулярний вираз.
+    const literal = /like_regex ("(?:[^"\\]|\\.)*")/.exec(path)?.[1]
+    expect(literal, path).toBeDefined()
+    // Без невидимих символів у SQL: кожен символ класу — escape `\uXXXX`.
+    expect(literal).toMatch(/^"\[\^(\\u[0-9A-F]{4})+\]"$/)
+    const regex = JSON.parse(literal!) as string
+    expect(regex.startsWith("[^") && regex.endsWith("]")).toBe(true)
+    expect([...regex.slice(2, -1)].map((char) => char.codePointAt(0))).toEqual(
+      RICH_TEXT_WHITESPACE
+    )
+    // Режим `strict`: `lax` розгорнув би `type: ["text"]`. Вкладень у
+    // профілі немає, тож фільтр — лише текстовий вузол.
+    expect(RICH_TEXT_PROFILE.attachments).toEqual([])
+    expect(path.replace(literal!, "<class>")).toBe(
+      'strict $.** ? ((@.type == "text" && @.text like_regex <class>))'
+    )
+  })
+})

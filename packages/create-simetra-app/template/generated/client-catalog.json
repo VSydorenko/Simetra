@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "snapshotHash": "caadd15a5cb6f8b3d85a6f4f862faa352bf0cb7f64b25dcfd3decc9a6fb749cb",
+  "snapshotHash": "90b99f3a46917e4935dd0b8ecf7a4acc069909d1e7449ecf865204c4bdf4b5de",
   "provider": "postgres",
   "rightsSnapshot": true,
   "objects": [

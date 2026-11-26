@@ -15,6 +15,7 @@ export const LOGICAL_TYPES = [
   "DateTime",
   "Bytes",
   "Json",
+  "RichText",
   "Ref",
 ] as const
 
@@ -401,9 +402,35 @@ function refineObjectDefault(
  * знає виду об'єкта.
  */
 export function refineUnique(
-  value: ValueType & { unique?: boolean | "ignoreCase" },
+  value: ValueType & {
+    unique?: boolean | "ignoreCase"
+    indexed?: boolean
+    uniqueWithin?: "owner" | "parent"
+  },
   ctx: z.RefinementCtx
 ): void {
+  // Документ RichText не має порядку й рівності, на яких стоїть індекс.
+  if (
+    value.type === "RichText" &&
+    (value.unique === true ||
+      value.unique === "ignoreCase" ||
+      value.uniqueWithin !== undefined)
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message: "A RichText value cannot be unique",
+      path: ["unique"],
+      params: { rule: "type.rich-text-unique" satisfies SchemaRule },
+    })
+  }
+  if (value.type === "RichText" && value.indexed === true) {
+    ctx.addIssue({
+      code: "custom",
+      message: "A RichText value cannot be indexed",
+      path: ["indexed"],
+      params: { rule: "type.rich-text-indexed" satisfies SchemaRule },
+    })
+  }
   if (
     value.unique === "ignoreCase" &&
     (value.array === true || (value.type !== "String" && value.type !== "Text"))
@@ -467,6 +494,11 @@ export function refineValueType(
       "length",
     ])
   }
+  if (value.type === "RichText" && value.array === true) {
+    issue("type.rich-text-array", "A RichText value cannot be an array", [
+      "array",
+    ])
+  }
   if (value.type !== "Numeric" && value.precision !== undefined) {
     issue("type.precision-not-allowed", "Only Numeric type accepts precision", [
       "precision",
@@ -523,11 +555,12 @@ export function refineValueType(
     value.array === true ||
     hasAllowed ||
     value.type === "Bytes" ||
-    value.type === "Json"
+    value.type === "Json" ||
+    value.type === "RichText"
   ) {
     issue(
       "type.default-not-allowed",
-      "defaultValue is not allowed for an array, allowedTypes, Bytes or Json value",
+      "defaultValue is not allowed for an array, allowedTypes, Bytes, Json or RichText value",
       ["defaultValue"]
     )
   } else if (!fitsType(value.type, defaultValue)) {
@@ -762,4 +795,24 @@ export function defaultViolatesValueChecks(
       return true
   }
   return false
+}
+
+/**
+ * `RichText` дозволено лише реквізиту шапки й ТЧ видів 1С: поле регістра,
+ * константа й колонка `CustomTable` не мають ядра команди з перевіркою профілю
+ * (Р-B7-9), тож документ у них ліг би в базу без перевірки.
+ */
+export function refuseRichText(
+  value: { type: string },
+  ctx: z.RefinementCtx,
+  path: (string | number)[] = ["type"]
+): void {
+  if (value.type !== "RichText") return
+  ctx.addIssue({
+    code: "custom",
+    message:
+      "RichText is allowed only for an attribute of a header or a tabular section",
+    path,
+    params: { rule: "type.rich-text-place" satisfies SchemaRule },
+  })
 }

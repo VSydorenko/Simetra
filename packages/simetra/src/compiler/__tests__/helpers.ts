@@ -10,6 +10,7 @@ import { readFiles, sqlStage } from "../pipeline"
 import { debtUnits } from "../sql/debt"
 import { kindTables } from "../sql/kind-tables"
 import { loadSqlParser } from "../sql/parse"
+import { RICH_TEXT_IS_EMPTY_FUNCTION } from "../platform/names"
 import { loadPlpgsqlParser } from "../sql/plpgsql"
 import type { SqlUnit } from "../sql/units"
 import { pinnedSettingsClause } from "../sql/head-settings"
@@ -25,22 +26,36 @@ export function withoutAccess<T extends Pick<SqlUnit, "generator">>(
 }
 
 /**
- * Одиниці без механіки рядка, незмінності ключа й outbox сигналів: функції
- * `simetra.touch()` і `simetra.key_immutable()`, їхні гранти й тригери дає
- * кожна таблиця з колонками механіки чи ключем `ref` (Catalog, Document,
- * рядки ТЧ), а об'єкти outbox — кожен проєкт, тож тест іншого генератора
- * звіряє свої одиниці без них; їх звіряють mechanics-units.test.ts,
- * key-units.test.ts і signal-outbox.test.ts.
+ * Одиниця функції порожності `RichText` — сама функція чи її грант: їх дає
+ * кожен проєкт (Р-B7-8). Генератор — шар платформи, тож відрізняє їх ім'я
+ * функції, а не генератор.
  */
-export function withoutMechanics<T extends Pick<SqlUnit, "generator">>(
-  units: readonly T[]
-): T[] {
+export function isRichTextEmptinessUnit(
+  unit: Pick<SqlUnit, "identity">
+): boolean {
+  const { schema, name } = RICH_TEXT_IS_EMPTY_FUNCTION
+  return unit.identity.includes(`:${schema}.${name}(`)
+}
+
+/**
+ * Одиниці без механіки рядка, незмінності ключа, outbox сигналів і функції
+ * порожності `RichText`: функції `simetra.touch()` і
+ * `simetra.key_immutable()`, їхні гранти й тригери дає кожна таблиця з
+ * колонками механіки чи ключем `ref` (Catalog, Document, рядки ТЧ), а
+ * об'єкти outbox і функцію порожності — кожен проєкт, тож тест іншого
+ * генератора звіряє свої одиниці без них; їх звіряють mechanics-units.test.ts,
+ * key-units.test.ts, signal-outbox.test.ts і platform-layer.test.ts.
+ */
+export function withoutMechanics<
+  T extends Pick<SqlUnit, "generator" | "identity">,
+>(units: readonly T[]): T[] {
   return units.filter(
     (u) =>
       u.generator !== "mechanics" &&
       u.generator !== "key" &&
       u.generator !== "signalOutbox" &&
-      u.generator !== "storage"
+      u.generator !== "storage" &&
+      !isRichTextEmptinessUnit(u)
   )
 }
 

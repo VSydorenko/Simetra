@@ -1067,9 +1067,60 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: 'Приберіть load: "lazy": поліморфна пара читається цілком, а масив ТЧ без лінивого поля стер би його значення.',
     },
   },
+  "type.rich-text-array": {
+    en: () => "A RichText value cannot be an array",
+    uk: () => "Значення RichText не може бути масивом",
+    hint: {
+      en: "Remove array: a RichText attribute holds one document.",
+      uk: "Приберіть array: реквізит RichText містить один документ.",
+    },
+  },
+  "type.rich-text-unique": {
+    en: () => "A RichText value cannot be unique",
+    uk: () => "Значення RichText не може бути унікальним",
+    hint: {
+      en: "Remove unique and uniqueWithin: a document has no equality an index could use.",
+      uk: "Приберіть unique і uniqueWithin: документ не має рівності, яку міг би використати індекс.",
+    },
+  },
+  "type.rich-text-indexed": {
+    en: () => "A RichText value cannot be indexed",
+    uk: () => "Значення RichText не може бути індексованим",
+    hint: {
+      en: "Remove indexed: a document has no order an index could use.",
+      uk: "Приберіть indexed: документ не має порядку, який міг би використати індекс.",
+    },
+  },
+  "type.rich-text-place": {
+    en: () =>
+      "RichText is allowed only for an attribute of a header or a tabular section",
+    uk: () => "RichText дозволено лише реквізиту шапки чи табличної частини",
+    hint: {
+      en: "A register field, a constant and a custom table column have no command core that checks the RichText profile; use Json or move the value to an attribute.",
+      uk: "Поле регістра, константа й колонка CustomTable не мають ядра команди, що перевіряє профіль RichText; використайте Json або перенесіть значення в реквізит.",
+    },
+  },
+  "index.attribute-rich-text": {
+    en: (p) => `Attribute "${p.name}" is RichText and cannot be in an index`,
+    uk: (p) => `Реквізит "${p.name}" має тип RichText і не може бути в індексі`,
+    hint: {
+      en: "A document has no order or equality an index could use; remove the attribute from the index.",
+      uk: "Документ не має порядку чи рівності, які міг би використати індекс; приберіть реквізит з індексу.",
+    },
+  },
+  "search.field-rich-text": {
+    en: (p) => `Search field "${p.name}" is RichText`,
+    uk: (p) => `Поле пошуку "${p.name}" має тип RichText`,
+    hint: {
+      en: "Only String and Text attributes can be searched.",
+      uk: "Шукати можна лише за реквізитами String і Text.",
+    },
+  },
   "type.max-bytes-type": {
-    en: () => "maxBytes applies only to Text, Json, Bytes or an array",
-    uk: () => "maxBytes застосовується лише до Text, Json, Bytes чи масиву",
+    en: () =>
+      "maxBytes applies only to Text, Json, RichText, Bytes or an array",
+    uk: () =>
+      "maxBytes застосовується лише до Text, Json, RichText, Bytes чи масиву",
     hint: {
       en: "Remove maxBytes: a String is limited by length, other types have a fixed size.",
       uk: "Приберіть maxBytes: String обмежує length, решта типів має сталий розмір.",
@@ -1202,9 +1253,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "type.default-not-allowed": {
     en: () =>
-      "defaultValue is not allowed for an array, allowedTypes, Bytes or Json value",
+      "defaultValue is not allowed for an array, allowedTypes, Bytes, Json or RichText value",
     uk: () =>
-      "defaultValue не допускається для масиву, allowedTypes, Bytes чи Json",
+      "defaultValue не допускається для масиву, allowedTypes, Bytes, Json чи RichText",
     hint: {
       en: "Such a value has no scalar literal that would make a valid column DEFAULT.",
       uk: "Таке значення не має скалярного літерала, з якого вийшов би коректний DEFAULT колонки.",

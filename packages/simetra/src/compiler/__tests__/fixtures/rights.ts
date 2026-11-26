@@ -1700,6 +1700,49 @@ export function gaugeLoadLayer(loads: Record<string, "eager" | "lazy">): Layer {
 }
 
 /**
+ * {@link gaugeLoadLayer} з `RichText` у шапці `Gauge` (`article`) і в ТЧ
+ * (`remark`): типова лінивість `RichText` (Р-B7-10). Окремий шар, щоб знімки
+ * на `gaugeLoadLayer` не змінювались.
+ */
+export function gaugeRichTextLayer(
+  loads: Record<string, "eager" | "lazy">
+): Layer {
+  const layer = gaugeLoadLayer(loads)
+  const gauge = layer[GAUGE_FILE] as {
+    attributes: unknown[]
+    tabularSections: { attributes: unknown[] }[]
+  }
+  const article = {
+    id: uuid(7595),
+    name: "article",
+    physicalName: "article",
+    type: "RichText",
+  }
+  return {
+    ...layer,
+    [GAUGE_FILE]: {
+      ...gauge,
+      attributes: [
+        ...gauge.attributes,
+        "article" in loads ? { ...article, load: loads.article } : article,
+      ],
+      tabularSections: gauge.tabularSections.map((section) => ({
+        ...section,
+        attributes: [
+          ...section.attributes,
+          {
+            id: uuid(7596),
+            name: "remark",
+            physicalName: "remark",
+            type: "RichText",
+          },
+        ],
+      })),
+    },
+  }
+}
+
+/**
  * `runtimeValuesLayer()` з реквізитами шапки `Gauge` для рівності CAS за
  * полями (спека П4 §6.6): `ratio` (`Integer`) і `raw` (`Json`) тест переводить
  * у `double precision` і `json` — типи прийнятої таблиці, яких логічні типи не

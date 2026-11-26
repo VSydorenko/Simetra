@@ -268,6 +268,17 @@ describe("search fields: diagnostics of declared fields", () => {
     ])
   })
 
+  it("a RichText attribute", async () => {
+    expect(
+      await codesOf({
+        [PARTY]: catalog("Party", {
+          attributes: [attribute("body", { type: "RichText" })],
+          search: { fields: ["body"] },
+        }),
+      })
+    ).toEqual(["search.field-rich-text /search/fields/0"])
+  })
+
   it("a standard reference is a ref", async () => {
     expect(
       await codesOf({

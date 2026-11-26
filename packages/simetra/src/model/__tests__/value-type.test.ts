@@ -84,7 +84,10 @@ describe("value type rules", () => {
       const input: Record<string, unknown> = { type, array: true }
       if (type === "String") input.length = 10
       if (type === "Ref") input.ref = target
-      expect(rules(input), type).toEqual([])
+      // RichText масивом не буває (Р-B7-9).
+      expect(rules(input), type).toEqual(
+        type === "RichText" ? ["type.rich-text-array"] : []
+      )
     }
   })
 
