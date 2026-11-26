@@ -2540,6 +2540,82 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     },
   },
 
+  "languages.catalog-duplicate": {
+    en: (p) =>
+      `Catalog "${p.name}" is a second languages catalog: "${p.firstFile}" already has role languages`,
+    uk: (p) =>
+      `Довідник "${p.name}" — другий довідник мов: "${p.firstFile}" уже має роль languages`,
+    hint: {
+      en: "A project has one languages catalog: remove role from the other one.",
+      uk: "У проєкті один довідник мов: приберіть role з іншого.",
+    },
+  },
+  "languages.scope-not-none": {
+    en: (p) => `Languages catalog "${p.name}" must have scope "none"`,
+    uk: (p) => `Довідник мов "${p.name}" мусить мати scope "none"`,
+    hint: {
+      en: "Data languages are a property of the project, not of a tenant.",
+      uk: "Мови даних — властивість проєкту, а не тенанта.",
+    },
+  },
+  "languages.code-form": {
+    en: (p) =>
+      `Languages catalog "${p.name}" must have ${p.field} ${p.expected}`,
+    uk: (p) => `Довідник мов "${p.name}" мусить мати ${p.field} ${p.expected}`,
+    hint: {
+      en: "The role fixes the form of the code (a BCP 47 language tag): the platform does not override it silently.",
+      uk: "Роль задає форму коду (мовний тег BCP 47): платформа не перевизначає її мовчки.",
+    },
+  },
+  "languages.description-required": {
+    en: (p) => `Languages catalog "${p.name}" must have a description`,
+    uk: (p) => `Довідник мов "${p.name}" мусить мати найменування`,
+    hint: {
+      en: "The description is part of the guest grant on published languages: set descriptionLength above 0.",
+      uk: "Найменування входить у грант гостя на опубліковані мови: задайте descriptionLength більше 0.",
+    },
+  },
+  "languages.public-read": {
+    en: (p) =>
+      `Languages catalog "${p.name}" must not have publicRead: the role already lets a guest read published rows`,
+    uk: (p) =>
+      `Довідник мов "${p.name}" не може мати publicRead: роль уже дає гостю читання опублікованих рядків`,
+    hint: {
+      en: "publicRead would open rows in the draft state to a guest: remove it.",
+      uk: "publicRead відкрив би гостю рядки в стані draft: приберіть його.",
+    },
+  },
+  "languages.predefined-items": {
+    en: (p) =>
+      `Languages catalog "${p.name}" must not declare predefinedItems: the role derives the primary language row`,
+    uk: (p) =>
+      `Довідник мов "${p.name}" не може оголошувати predefinedItems: рядок основної мови виводить роль`,
+    hint: {
+      en: "Add other languages as data, not as predefined items.",
+      uk: "Додавайте інші мови даними, а не передвизначеними елементами.",
+    },
+  },
+  "languages.primary-missing": {
+    en: (p) =>
+      `Languages catalog "${p.name}" has no primary language: the project declares no primaryDataLanguage`,
+    uk: (p) =>
+      `Довідник мов "${p.name}" не має основної мови: у проєкті немає primaryDataLanguage`,
+    hint: {
+      en: "Set primaryDataLanguage in project.meta.json to a language code.",
+      uk: "Задайте primaryDataLanguage у project.meta.json кодом мови.",
+    },
+  },
+  "languages.primary-without-catalog": {
+    en: (p) =>
+      `The project declares primaryDataLanguage "${p.language}", but no catalog has role languages`,
+    uk: (p) =>
+      `Проєкт оголошує primaryDataLanguage "${p.language}", але жоден довідник не має ролі languages`,
+    hint: {
+      en: "Add a catalog with role languages, or remove primaryDataLanguage.",
+      uk: "Додайте довідник із роллю languages або приберіть primaryDataLanguage.",
+    },
+  },
+
   "membership.not-scoped": {
     en: (p) =>
       `Catalog "${p.name}" has membership but no scope column of its own: it is unscoped or the root of its scope kind`,

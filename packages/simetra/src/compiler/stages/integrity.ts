@@ -239,6 +239,7 @@ export function checkIntegrity(
   diagnostics.push(...checkPosting(objects, references, byKey))
   diagnostics.push(...checkSubscriptions(objects, model, provider, style))
   diagnostics.push(...checkUsersCatalogs(objects, model))
+  diagnostics.push(...checkLanguagesCatalogs(objects, project))
   diagnostics.push(...checkAuthorTracking(objects))
   diagnostics.push(...checkMembership(objects, scopeKinds))
   diagnostics.push(...checkStorageRoot(objects, scopeKinds))
@@ -333,6 +334,102 @@ function checkUsersCatalogs(
         )
       }
     }
+  }
+  return found
+}
+
+/**
+ * Роль «мови» (Р-B2-2): невідповідність фактам ролі — відмова, а не тихе
+ * перевизначення. Довідник ролі знаходить факт реєстру, не ім'я ролі.
+ */
+function checkLanguagesCatalogs(
+  objects: readonly ParsedObject[],
+  project: Project
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  const catalogs = objects
+    .filter((o) => KIND_REGISTRY[o.kind].languagesCatalog?.(o.data) === true)
+    .sort((a, b) => compareStrings(a.file, b.file))
+  const first = catalogs[0]
+  const primary = project.primaryDataLanguage
+  for (const object of catalogs) {
+    const { name, file } = object
+    const def = KIND_REGISTRY[object.kind]
+    const data = object.data as Catalog
+    if (object !== first) {
+      found.push(
+        diagnostic("languages.catalog-duplicate", file, "/role", {
+          name,
+          firstFile: first!.file,
+        })
+      )
+    }
+    if (
+      def.requiredScope?.(object.data) === "none" &&
+      data.scope !== undefined &&
+      data.scope !== NO_SCOPE
+    ) {
+      found.push(
+        diagnostic("languages.scope-not-none", file, "/scope", { name })
+      )
+    }
+    const form = def.codeForm?.(object.data)
+    if (form !== undefined) {
+      for (const field of [
+        "codeType",
+        "codeLength",
+        "autonumber",
+        "codeUnique",
+      ] as const) {
+        if (data[field] === form[field]) continue
+        found.push(
+          diagnostic("languages.code-form", file, `/${field}`, {
+            name,
+            field,
+            expected: String(form[field]),
+          })
+        )
+      }
+    }
+    if (data.descriptionLength === 0) {
+      found.push(
+        diagnostic(
+          "languages.description-required",
+          file,
+          "/descriptionLength",
+          { name }
+        )
+      )
+    }
+    if (def.publishedRead?.(object.data) !== undefined && data.publicRead) {
+      found.push(
+        diagnostic("languages.public-read", file, "/publicRead", { name })
+      )
+    }
+    if (data.predefinedItems.length > 0) {
+      found.push(
+        diagnostic("languages.predefined-items", file, "/predefinedItems", {
+          name,
+        })
+      )
+    }
+  }
+  if (first !== undefined && primary === undefined) {
+    found.push(
+      diagnostic("languages.primary-missing", first.file, "/role", {
+        name: first.name,
+      })
+    )
+  }
+  if (first === undefined && primary !== undefined) {
+    found.push(
+      diagnostic(
+        "languages.primary-without-catalog",
+        PROJECT_FILE,
+        "/primaryDataLanguage",
+        { language: primary }
+      )
+    )
   }
   return found
 }
