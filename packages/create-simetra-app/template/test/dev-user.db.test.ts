@@ -67,6 +67,31 @@ const credentialHash = (email: string) =>
       ).rows[0]?.password as string | undefined
   )
 
+const emailVerified = (email: string) =>
+  superuser(
+    async (client) =>
+      (
+        await client.query(
+          'SELECT "emailVerified" AS v FROM better_auth."user" WHERE email = $1',
+          [email]
+        )
+      ).rows[0]?.v as boolean | undefined
+  )
+
+const sessionCount = (email: string) =>
+  superuser(async (client) =>
+    Number(
+      (
+        await client.query(
+          `SELECT count(*) AS n FROM better_auth.session s
+             JOIN better_auth."user" u ON u.id = s."userId"
+            WHERE u.email = $1`,
+          [email]
+        )
+      ).rows[0].n
+    )
+  )
+
 const run = (dsn: string, email = "dev@example.test", password?: string) =>
   createDevUser({
     dsn,
@@ -205,6 +230,28 @@ describe("dev-user", () => {
     expect(result.password.length).toBeGreaterThanOrEqual(20)
     expect(await userCount()).toBe(1)
     expect(await signsIn("dev@example.test", result.password)).toBe(true)
+    expect(await emailVerified("dev@example.test")).toBe(true)
+  }, 60_000)
+
+  it("marks an existing user verified and revokes their sessions on a password change", async () => {
+    await superuser(async (client) => {
+      await client.query(
+        'UPDATE better_auth."user" SET "emailVerified" = false WHERE email = $1',
+        ["dev@example.test"]
+      )
+      await client.query(
+        `INSERT INTO better_auth.session (id, token, "userId", "expiresAt", "createdAt", "updatedAt")
+         SELECT 'devusr-session', 'devusr-token', id, now() + interval '1 day', now(), now()
+           FROM better_auth."user" WHERE email = $1`,
+        ["dev@example.test"]
+      )
+    })
+    expect(await emailVerified("dev@example.test")).toBe(false)
+    expect(await sessionCount("dev@example.test")).toBeGreaterThan(0)
+    const result = await run(authUrl)
+    expect(result.created).toBe(false)
+    expect(await emailVerified("dev@example.test")).toBe(true)
+    expect(await sessionCount("dev@example.test")).toBe(0)
   }, 60_000)
 
   it("changes the password of an existing user on a repeat run", async () => {
