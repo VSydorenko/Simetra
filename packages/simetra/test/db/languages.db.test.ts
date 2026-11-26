@@ -37,14 +37,19 @@ import {
 const T = `public.${LANGUAGES_TABLE}`
 const COMMAND = PLATFORM_ROLES.command
 
-/** Домен політик з «Мовами» і глобальною `Support`, що читає їх `read@any`. */
+/**
+ * Домен політик з «Мовами» і глобальною `Support`, що читає їх `read@any` і
+ * створює (`create`): створення пускає вставку ролі команд крізь RLS до CHECK.
+ */
 async function languagesModel() {
   const result = await compileRights(
     policyDomain(
       languagesLayer(),
       {
         [ROLE_FILE("Support")]: {
-          grants: [grant(objects(["Catalog", "Languages"]), ["read"], "any")],
+          grants: [
+            grant(objects(["Catalog", "Languages"]), ["read", "create"], "any"),
+          ],
         },
       },
       profileLayer()
@@ -330,6 +335,45 @@ describe("languages catalog invariants on a live database", () => {
           [COMMAND, T]
         )
       expect(del[0]!.v).toBe(false)
+    })
+  })
+
+  describe("the code is required", () => {
+    // CHECK ролі, а не NOT NULL колонки: код без значення дав би мову, якій
+    // код уже не задати (тригер) і яку не видалити (Р-B2-1)
+    it.each<[string, string, object]>([
+      [
+        "without code",
+        `INSERT INTO ${T} (id, description) VALUES ($1, 'xx') RETURNING code`,
+        {
+          code: "23514",
+          message: `new row for relation "${LANGUAGES_TABLE}" violates check constraint "${LANGUAGES_TABLE}_code_check"`,
+        },
+      ],
+      [
+        "with an explicit NULL code",
+        `INSERT INTO ${T} (id, code, description) VALUES ($1, NULL, 'xx') RETURNING code`,
+        {
+          code: "23514",
+          message: `new row for relation "${LANGUAGES_TABLE}" violates check constraint "${LANGUAGES_TABLE}_code_check"`,
+        },
+      ],
+      [
+        "with a valid code",
+        `INSERT INTO ${T} (id, code, description) VALUES ($1, 'pl', 'pl') RETURNING code`,
+        { rows: [{ code: "pl" }] },
+      ],
+    ])("an insert %s by a user with create", async (_, sql, outcome) => {
+      const fresh = randomUUID()
+      expect(
+        await commandAs(
+          tx.client(),
+          claimsFor("user", id("s1")),
+          { action: "create", object: LANGUAGES_TABLE, root: fresh },
+          sql,
+          { params: [fresh] }
+        )
+      ).toMatchObject(outcome)
     })
   })
 

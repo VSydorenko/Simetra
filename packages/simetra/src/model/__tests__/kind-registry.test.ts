@@ -1139,9 +1139,9 @@ describe("catalog role languages", () => {
     expect(column(columns, "deletionMark")!.check).toBe("NOT deletion_mark")
   })
 
-  it("puts the BCP 47 subset CHECK on the code column", () => {
+  it("puts the NOT NULL and BCP 47 subset CHECK on the code column", () => {
     expect(column(columns, "code")!.check).toBe(
-      "code ~ '^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$'"
+      "code IS NOT NULL AND code ~ '^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$'"
     )
     const re = codeRe()
     for (const ok of [

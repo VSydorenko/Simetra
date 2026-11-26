@@ -503,7 +503,9 @@ const CATALOG_ROLES: Record<
       autonumber: false,
       codeUnique: true,
       // Підмножина BCP 47 (спека багатомовності §5.2); регекс — спільний з проєктом.
-      check: `code ~ '${LANGUAGE_CODE_PATTERN}'`,
+      // NULL регекс пропустив би, а мові без коду код уже не задати й її не
+      // видалити; NOT NULL — у CHECK ролі, бо колонку `code` ділять усі довідники.
+      check: `code IS NOT NULL AND code ~ '${LANGUAGE_CODE_PATTERN}'`,
     },
     actions: "noDelete",
     notMarked: true,
