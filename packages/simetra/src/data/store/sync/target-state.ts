@@ -202,12 +202,17 @@ export interface FlightStart {
   readonly tail?: Promise<void>
   /** Той, хто чекає осідання системного перечитування. */
   readonly waiter?: () => void
+  /**
+   * Повтор спроби польоту, що стоїть (M7, M8): нова епоха старту й ревізія
+   * шапки, пауза знята; покоління, причина й черга лишаються.
+   */
+  readonly retry?: true
 }
 
 /**
  * Політ стартував. Завантаження, службове читання й хвіст ключів мають одне
  * місце польоту: коли воно зайняте, запит зливається в чергу (`trailing`,
- * причина першого запиту), а не стартує другий політ. Системні перечитування
+ * причина першого запиту), а не стартує другий політ. Повтор спроби — `retry`. Системні перечитування
  * летять разом; сторінка стану цілі не міняє (її позначки — власні).
  */
 export function startFlight(
@@ -237,6 +242,13 @@ export function startFlight(
     case "load":
     case "service":
     case "keys": {
+      if (start.retry === true && state.flight !== undefined)
+        return {
+          ...withWaiters,
+          flightEpoch: start.epoch,
+          flightRevision: start.headerRevision,
+          retryAt: undefined,
+        }
       if (state.flight !== undefined)
         return {
           ...withWaiters,
@@ -272,13 +284,17 @@ export interface SettleInput {
   readonly gen?: number
   /** Епоха старту польоту: вона ж ключ системного перечитування. */
   readonly epoch: number
-  /** Монотонний годинник на старті й на осіданні (строк, пауза збоїв). */
+  /** Монотонний годинник на старті польоту (строк, пауза збоїв). */
   readonly startedAt: number
-  readonly now: number
   /** Ціль уже читалась успішно: збій завантаження рахує паузу лише тоді. */
   readonly loaded: boolean
-  /** Пробудження паузи відкинутих, пораховане шляхом (сесійний лічильник відкинутих). */
+  /**
+   * Пробудження паузи відкинутого завантаження, пораховане шляхом (сесійний
+   * лічильник відкинутих); без нього відкинуте завантаження пауз не має.
+   */
   readonly retryAt?: number
+  /** Збій став у застосуванні відповіді, а не в читанні: паузи збоїв не рахує. */
+  readonly applyFailed?: boolean
   /** Ревізія шапки на старті: є в завантаження картки чи ТЧ. */
   readonly headerRevision?: number
   /** Завантаження ТЧ (пише `sectionRead`). */
@@ -315,10 +331,10 @@ function lifts(requirement: Requirement, input: SettleInput): boolean {
         FLIGHT_KIND_RULES[input.flight].confirms !== "own-page"
       )
     case "target-behind-header": {
+      // Зміну шапки й `hide` читає завантаження цілі, бар'єр — лише системне
+      // перечитування (§5.2, Р-SK3-11).
       const own =
-        input.own &&
-        (input.flight === "load" ||
-          (requirement.barrier && input.flight === "reread"))
+        input.own && input.flight === (requirement.barrier ? "reread" : "load")
       // Читання іншого польоту, що покриває ключ шапки, знімає вимогу лише
       // коли після нього ціль повна (так `main` не шле зайвого читання).
       const other =
@@ -346,17 +362,20 @@ export function settleFlight(
   const rules = FLIGHT_KIND_RULES[input.flight]
   const applied = input.outcome === "applied"
   const start = startOf(input.evidence)
-  const discardedWithPause =
-    input.outcome === "discarded-by-epoch" &&
-    (rules.discarded === "pause-then-retry" ||
-      rules.discarded === "pause-then-deadline")
 
   let next: TargetState = {
     ...state,
     requirements: state.requirements.filter((r) => !lifts(r, input)),
   }
 
-  // Місце польоту.
+  // Чужий політ лише може зняти вимогу шапки (`lifts`): місця польоту, паузи,
+  // доказу й строку цілі він не чіпає.
+  if (!input.own) return withRevision(state, next)
+
+  // Місце польоту. Паузу (`retryAt`) веде лише завантаження: відкинуте
+  // завантаження з паузою тримає політ, без паузи (відповідь за межею
+  // відкинутих) звільняє, як і будь-яке інше осідання. Сторінка й
+  // перечитування паузи завантаження не чіпають.
   if (input.flight === "reread") {
     const at = next.rereadEpochs.indexOf(input.epoch)
     if (at !== -1)
@@ -365,25 +384,25 @@ export function settleFlight(
         rereadEpochs: next.rereadEpochs.filter((_, i) => i !== at),
       }
   } else if (input.flight !== "page") {
-    const keepsFlight =
-      discardedWithPause && rules.discarded === "pause-then-retry"
-    if (!keepsFlight && input.gen === next.flight)
-      next = {
-        ...next,
-        flight: undefined,
-        flightEpoch: undefined,
-        flightCause: undefined,
-        flightRevision: undefined,
-      }
+    const pauses =
+      input.flight === "load" &&
+      input.outcome === "discarded-by-epoch" &&
+      input.retryAt !== undefined
+    if (input.gen === next.flight) {
+      next = pauses
+        ? { ...next, retryAt: input.retryAt }
+        : {
+            ...next,
+            flight: undefined,
+            flightEpoch: undefined,
+            flightCause: undefined,
+            flightRevision: undefined,
+            retryAt: undefined,
+          }
+    }
   }
 
-  // Пауза відкинутих; будь-яке інше осідання її скасовує.
-  next = {
-    ...next,
-    retryAt: discardedWithPause ? input.retryAt : undefined,
-  }
-
-  if (applied && input.own && start !== undefined) {
+  if (applied && start !== undefined) {
     // Доказ ціли: лише вперед, пізніше застосоване раніше стартоване не
     // зсуває його назад.
     if (
@@ -412,8 +431,10 @@ export function settleFlight(
       }
   }
 
-  // Строк: успіх рухає його, збій рахує паузу збоїв за правилом виду.
-  if (applied && input.own && rules.successMovesDeadline)
+  // Строк: успіх рухає його; збій читання рахує паузу збоїв за правилом виду
+  // з часом старту (`main`: `failedAt = startedAt`). Збій застосування
+  // відповіді паузи не рахує.
+  if (applied && rules.successMovesDeadline)
     next = {
       ...next,
       refreshedAt: input.startedAt,
@@ -422,10 +443,11 @@ export function settleFlight(
     }
   if (
     input.outcome === "failed" &&
+    input.applyFailed !== true &&
     (rules.failureCounts === "always" ||
       (rules.failureCounts === "if-loaded" && input.loaded))
   )
-    next = { ...next, failures: next.failures + 1, failedAt: input.now }
+    next = { ...next, failures: next.failures + 1, failedAt: input.startedAt }
 
   return withRevision(state, next)
 }
@@ -579,12 +601,12 @@ export function derivedNeedsRefresh(
   )
 }
 
-/** У польоті щось летить: пауза відкинутого завантаження — не політ. */
+/**
+ * Місце польоту зайняте чи летить перечитування. Пауза відкинутого
+ * завантаження (`retryAt`) місця не звільняє: її відрізняє `sync()`.
+ */
 export function inFlight(state: TargetState): boolean {
-  return (
-    (state.flight !== undefined && state.retryAt === undefined) ||
-    state.rereadEpochs.length > 0
-  )
+  return state.flight !== undefined || state.rereadEpochs.length > 0
 }
 
 /**

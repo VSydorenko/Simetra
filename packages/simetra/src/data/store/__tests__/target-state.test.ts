@@ -49,7 +49,6 @@ const settle = (over: Partial<SettleInput> = {}): SettleInput => ({
   gen: 1,
   epoch: 10,
   startedAt: 100,
-  now: 150,
   loaded: true,
   ...over,
 })
@@ -68,7 +67,7 @@ describe("TargetState: політ осів — вимоги", () => {
         settle({
           outcome,
           carriedHeader: true,
-          evidence: outcome === "applied" ? started(10) : undefined,
+          evidence: started(10),
         })
       )
       expect(kinds(next).length, outcome).toBe(outcome === "applied" ? 0 : 3)
@@ -138,9 +137,12 @@ describe("TargetState: політ осів — вимоги", () => {
     ])
   })
 
-  it("шапка від бар'єра: знімає системне перечитування", () => {
+  it("шапка від бар'єра: знімає перечитування, завантаження — ні", () => {
     const state = withReqs(behind(5, true))
     expect(kinds(settleFlight(state, settle({ flight: "reread" })))).toEqual([])
+    expect(kinds(settleFlight(state, settle({ flight: "load" })))).toEqual([
+      "target-behind-header",
+    ])
   })
 
   it("шапка: чужий політ знімає, лише коли покриває ключ шапки й ціль повна", () => {
@@ -279,7 +281,7 @@ describe("TargetState: політ осів — доказ, строк, місц�
     expect(failed(base, { loaded: false }).failures).toBe(0)
     expect(failed(base, { loaded: true })).toMatchObject({
       failures: 1,
-      failedAt: 150,
+      failedAt: 100,
     })
     expect(failed(base, { flight: "page" }).failures).toBe(0)
     expect(failed(base, { flight: "reread", loaded: false }).failures).toBe(1)
@@ -287,43 +289,125 @@ describe("TargetState: політ осів — доказ, строк, місц�
     expect(reset).toMatchObject({ failures: 0, failedAt: undefined })
   })
 
-  it("відкинуте завантаження лишає політ під паузою; відкинуте перечитування звільняє", () => {
-    const flying = startFlight(createTargetState(), {
-      kind: "load",
-      epoch: 10,
-      cause: { reason: "mount" },
-    })
-    const discarded = settleFlight(
-      flying,
-      settle({
-        outcome: "discarded-by-epoch",
-        evidence: undefined,
-        retryAt: 400,
-      })
-    )
-    expect(discarded.flight).toBe(1)
-    expect(discarded.retryAt).toBe(400)
-    expect(inFlight(discarded)).toBe(false)
-    const retried = settleFlight(discarded, settle())
-    expect(retried.flight).toBeUndefined()
-    expect(retried.retryAt).toBeUndefined()
+  const cause = { reason: "mount" } as const
+  const loading = () =>
+    startFlight(createTargetState(), { kind: "load", epoch: 10, cause })
+  const discardedInput = (over: Partial<SettleInput> = {}) =>
+    settle({ outcome: "discarded-by-epoch", evidence: undefined, ...over })
 
-    const reread = startFlight(createTargetState(), {
-      kind: "reread",
-      epoch: 10,
-      cause: { reason: "interval" },
+  it("відкинуте завантаження з паузою тримає політ, повтор і кінець ланцюга знімають", () => {
+    const paused = settleFlight(loading(), discardedInput({ retryAt: 400 }))
+    expect(paused).toMatchObject({ flight: 1, retryAt: 400 })
+    expect(inFlight(paused)).toBe(true)
+    const retried = startFlight(paused, {
+      kind: "load",
+      epoch: 20,
+      cause: { reason: "retry" },
+      headerRevision: 9,
+      retry: true,
     })
-    const d2 = settleFlight(
-      reread,
-      settle({
-        flight: "reread",
-        outcome: "discarded-by-epoch",
-        evidence: undefined,
-        retryAt: 300,
+    expect(retried).toMatchObject({
+      gen: 1,
+      flight: 1,
+      flightEpoch: 20,
+      flightRevision: 9,
+      flightCause: cause,
+      retryAt: undefined,
+      trailing: undefined,
+    })
+    const queued = startFlight(paused, {
+      kind: "load",
+      epoch: 21,
+      cause: { reason: "user" },
+    })
+    expect(
+      startFlight(queued, { kind: "load", epoch: 22, cause, retry: true })
+        .trailing
+    ).toEqual({ reason: "user" })
+    const end = settleFlight(retried, settle())
+    expect(end).toMatchObject({ flight: undefined, retryAt: undefined })
+  })
+
+  it("відкинуте завантаження без паузи (поза межею) звільняє місце польоту", () => {
+    const next = settleFlight(loading(), discardedInput())
+    expect(next).toMatchObject({ flight: undefined, retryAt: undefined })
+    expect(inFlight(next)).toBe(false)
+  })
+
+  it("збій і наслідки завантаження без паузи звільняють місце й знімають паузу", () => {
+    for (const outcome of [
+      "failed",
+      "evicted",
+      "after-purge",
+      "closed",
+    ] as const) {
+      const paused = settleFlight(loading(), discardedInput({ retryAt: 400 }))
+      const next = settleFlight(
+        paused,
+        settle({ outcome, evidence: undefined })
+      )
+      expect(next, outcome).toMatchObject({
+        flight: undefined,
+        retryAt: undefined,
       })
-    )
-    expect(d2.rereadEpochs).toEqual([])
-    expect(d2.retryAt).toBe(300)
+    }
+  })
+
+  it("пауза завантаження — лише його: сторінка й перечитування її не чіпають", () => {
+    const paused = settleFlight(loading(), discardedInput({ retryAt: 400 }))
+    for (const flight of ["page", "reread"] as const)
+      for (const outcome of SETTLE_OUTCOMES) {
+        const next = settleFlight(
+          paused,
+          settle({
+            flight,
+            outcome,
+            evidence: started(10),
+            retryAt: outcome === "discarded-by-epoch" ? 999 : undefined,
+          })
+        )
+        expect(next.retryAt, `${flight} ${outcome}`).toBe(400)
+        expect(next.flight, `${flight} ${outcome}`).toBe(1)
+      }
+  })
+
+  it("відкинуте перечитування не гасить польоту завантаження", () => {
+    let s = loading()
+    s = startFlight(s, { kind: "reread", epoch: 10, cause })
+    s = settleFlight(s, discardedInput({ flight: "reread", retryAt: 300 }))
+    expect(s.rereadEpochs).toEqual([])
+    expect(s.retryAt).toBeUndefined()
+    expect(inFlight(s)).toBe(true)
+  })
+
+  it("чужий політ не чіпає місця польоту, паузи, доказу й строку", () => {
+    const base = settleFlight(loading(), discardedInput({ retryAt: 400 }))
+    for (const outcome of SETTLE_OUTCOMES) {
+      for (const flight of ["load", "keys", "reread"] as const) {
+        const next = settleFlight(
+          base,
+          settle({ own: false, flight, outcome, gen: 1, retryAt: 7 })
+        )
+        expect(next, `${flight} ${outcome}`).toEqual(base)
+      }
+    }
+  })
+
+  it("збій застосування відповіді паузи збоїв не рахує, збій читання — рахує з часом старту", () => {
+    const base = createTargetState()
+    const failed = (over: Partial<SettleInput>) =>
+      settleFlight(
+        base,
+        settle({
+          outcome: "failed",
+          evidence: undefined,
+          startedAt: 77,
+          ...over,
+        })
+      )
+    expect(failed({ applyFailed: true }).failures).toBe(0)
+    expect(failed({ applyFailed: true, flight: "reread" }).failures).toBe(0)
+    expect(failed({})).toMatchObject({ failures: 1, failedAt: 77 })
   })
 
   it("чужого покоління польоту осідання не знімає", () => {
@@ -532,13 +616,80 @@ describe("TargetState: похідні", () => {
     )
   })
 
-  it("«у польоті»: пауза відкинутого завантаження — не політ", () => {
+  it("«у польоті» залежить від місця польоту, не від паузи", () => {
     const flying = startFlight(createTargetState(), {
       kind: "load",
       epoch: 1,
       cause: { reason: "mount" },
     })
     expect(inFlight(flying)).toBe(true)
-    expect(inFlight({ ...flying, retryAt: 5 })).toBe(false)
+    expect(inFlight({ ...flying, retryAt: 5 })).toBe(true)
+    expect(inFlight(createTargetState())).toBe(false)
+  })
+})
+
+describe("TargetState: дрібні гарантії переходів", () => {
+  const cause = { reason: "mount" } as const
+  const why = { reason: "retry", site: "R18" } as const
+
+  it("ціль відпущено чистить хвіст, перевірку, паузу, чекачів", () => {
+    let s = startFlight(createTargetState(), {
+      kind: "load",
+      epoch: 1,
+      cause,
+      recheck: why,
+      tail: Promise.resolve(),
+      waiter: () => undefined,
+    })
+    s = { ...s, retryAt: 5 }
+    const r = releaseTarget(s)
+    expect(r).toMatchObject({
+      rereadTail: undefined,
+      recheck: undefined,
+      retryAt: undefined,
+      rereadWaiters: [],
+    })
+  })
+
+  it("старт завантаження знімає паузу", () => {
+    const s = { ...createTargetState(), retryAt: 5 }
+    expect(
+      startFlight(s, { kind: "load", epoch: 1, cause }).retryAt
+    ).toBeUndefined()
+  })
+
+  it("перечитування споживає перевірку, перша відкладена зберігається", () => {
+    let s = startFlight(createTargetState(), {
+      kind: "load",
+      epoch: 1,
+      cause,
+      recheck: why,
+    })
+    s = startFlight(s, {
+      kind: "load",
+      epoch: 2,
+      cause,
+      recheck: { reason: "retry", site: "R16" },
+    })
+    expect(s.recheck).toEqual(why)
+    expect(
+      startFlight(s, { kind: "reread", epoch: 3, cause }).recheck
+    ).toBeUndefined()
+    expect(
+      startFlight(s, { kind: "reread", epoch: 3, cause, recheck: why }).recheck
+    ).toEqual(why)
+  })
+
+  it("ownerHeaderRead і sectionRead йдуть уперед; sectionRead лише для ТЧ", () => {
+    let s = settleFlight(
+      createTargetState(),
+      settle({ evidence: started(20), carriedHeader: true, headerRevision: 1 })
+    )
+    s = settleFlight(
+      s,
+      settle({ evidence: started(15), carriedHeader: true, headerRevision: 1 })
+    )
+    expect(s.ownerHeaderRead).toBe(20)
+    expect(s.sectionRead).toBeUndefined()
   })
 })
