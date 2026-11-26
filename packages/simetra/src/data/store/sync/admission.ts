@@ -138,7 +138,8 @@ export const HIDDEN_TAB: Readonly<Record<RequirementKind, Answer>> = {
   "version-epoch-switched": "defer",
   // §5.2 ділить ці два види за постановником (приєднання й `resume()` —
   // відкладено, решта — допущено). Постановника вимога SK-1 не несе:
-  // клітинка — допуск більшості постановників, як на `main`.
+  // клітинка — допуск більшості постановників, як на `main`. Різниця з §5.2
+  // (приєднання й `resume()` — відкладено): рядок 23 §5.14, його прибирає SK-4.
   "rights-unconfirmed": "admit",
   "version-unconfirmed": "admit",
 }
