@@ -147,7 +147,11 @@ describe("RichText on a live database", () => {
                     limit: 10,
                   })
                 )
-              ).toMatchObject({ code: "command.invalid" })
+              ).toMatchObject({
+                code: "command.invalid",
+                path: "where.attribute",
+                reason: "lazy",
+              })
             } finally {
               await pool.end()
             }
@@ -179,6 +183,77 @@ describe("RichText on a live database", () => {
             }
           },
           "rich_text"
+        )
+      } finally {
+        await owner.end()
+      }
+    })
+  }, 120_000)
+
+  // Заголовковий RichText типово лінивий і відмовляється раніше за лінивістю;
+  // з `load: "eager"` лишається відмова за самим типом.
+  it("refuses a filter by an eager RichText attribute as a type", async () => {
+    const result = await compile(
+      policyDomain(gaugeRichTextLayer({ article: "eager" }), profileLayer())
+    )
+    expect(result.diagnostics).toEqual([])
+    const model = result.model!
+    await withModelTarget(model, async (url) => {
+      const owner = new pg.Client({ connectionString: url })
+      await owner.connect()
+      try {
+        await seedMarker(owner, model.hash)
+        const actor = await seedRuntimeActor(owner)
+        const session = sessionOf(actor.user)
+        await withRuntimeLogin(
+          url,
+          [PLATFORM_ROLES.command, REQUEST_ROLE, USER_ROLE],
+          async (login) => {
+            const pool = new pg.Pool({ connectionString: login })
+            try {
+              const rt = await createCommandRuntime({
+                database: fromPgPool(pool),
+                catalog: buildRuntimeCatalog(model),
+              })
+              const id = randomUUID()
+              await rt.run(session, {
+                action: "create",
+                object: GAUGE,
+                id,
+                values: {
+                  org: actor.org,
+                  counter: 1n,
+                  article: STARTER_KIT_SAMPLE,
+                },
+              })
+              // Ледачий реквізит списком не віддається, охочий — віддається
+              const list = await rt.read(session, {
+                object: GAUGE,
+                where: { attribute: "ref", op: "in", value: [id] },
+                limit: 10,
+              })
+              expect(list.rows[0]!.article).toEqual(STARTER_KIT_SAMPLE)
+              expect(
+                await commandRefusal(
+                  rt.read(session, {
+                    object: GAUGE,
+                    where: {
+                      attribute: "article",
+                      op: "eq",
+                      value: STARTER_KIT_SAMPLE,
+                    },
+                    limit: 10,
+                  })
+                )
+              ).toMatchObject({
+                code: "command.invalid",
+                path: "where.op",
+              })
+            } finally {
+              await pool.end()
+            }
+          },
+          "rich_text_eager"
         )
       } finally {
         await owner.end()
