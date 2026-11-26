@@ -135,6 +135,12 @@ export interface Gate {
   admit(cause: ReadCause, target: ReadTarget, site: SiteCode): Admission
   issued(flight: Flight): boolean
   /**
+   * Запит умови `closed` поза `admit` (Р-SK1-9): таймери, що не ставлять
+   * строку закритій сесії (хвиля приєднання, `freshness.requestReread`).
+   * Той самий предикат, що судить `admit`: токен сесії недійсний (Р-SK1-5).
+   */
+  closed(): boolean
+  /**
    * Запит умови `stale-object` поза `admit` (Р-SK1-9): пізня відмова частин
    * уже допущеного польоту (`dispatch`, збирач, джерело, Р-SK1-6) і таймери,
    * що не ставлять строку несумісному об'єкту. Той самий предикат, що судить
@@ -162,6 +168,21 @@ export interface Gate {
    * `admit`.
    */
   tabHidden(): boolean
+  /**
+   * Діагностика `sync()` (Р-SK1-9, Р-SK1-12): умова-відмова цілі в порядку
+   * переліку §5.3 — `closed`, далі `stale-object` і `discard-bound` лише для
+   * об'єкта (службова ціль межі відкинутих не має). Ті самі предикати, що
+   * судять `admit`.
+   */
+  refusal(
+    object?: ObjectName
+  ): "closed" | "stale-object" | "discard-bound" | undefined
+  /**
+   * Діагностика й таймери `main` (Р-SK1-9, Р-SK1-12): чи читають таймери
+   * об'єкт — вкладка видима, об'єкт сумісний, сесія не за межею відкинутих
+   * (мутація `scheduler-reads-unavailable` її відкриває).
+   */
+  timersRead(object: ObjectName): boolean
 }
 
 function issue(
@@ -236,10 +257,24 @@ export function createGate(state: GateState): Gate {
       } as Permit
     },
     issued: (flight) => registry.get(flight)?.gate === gate,
+    closed: () => !state.token().valid,
     staleObject: (object) => state.staleObject?.(object) === true,
     discardBound: () => state.discardBound?.() === true,
     settledPastBound: () => state.discardBound?.() === true,
     tabHidden: () => state.tabHidden?.() === true,
+    refusal: (object) =>
+      gate.closed()
+        ? "closed"
+        : object !== undefined && gate.staleObject(object)
+          ? "stale-object"
+          : object !== undefined && gate.discardBound()
+            ? "discard-bound"
+            : undefined,
+    timersRead: (object) =>
+      !gate.tabHidden() &&
+      !gate.staleObject(object) &&
+      (!gate.discardBound() ||
+        state.defects?.has("scheduler-reads-unavailable") === true),
   }
   return gate
 }

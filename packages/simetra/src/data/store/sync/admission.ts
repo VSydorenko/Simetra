@@ -144,6 +144,18 @@ export const HIDDEN_TAB: Readonly<Record<RequirementKind, Answer>> = {
   "version-unconfirmed": "admit",
 }
 
+/**
+ * На чому стоять клітинки {@link HIDDEN_TAB}, що відходять від колонки
+ * «Прихована й невидима» §5.2: рядок §5.14, що прибирає різницю (SK-4). Дані,
+ * а не коментар, щоб різниця не жила без підстави.
+ */
+export const HIDDEN_TAB_BASIS: Readonly<
+  Partial<Record<RequirementKind, Basis>>
+> = {
+  "rights-unconfirmed": { row: 23 },
+  "version-unconfirmed": { row: 23 },
+}
+
 // Коди, у яких колонка «Умови» Додатка Б не називає `stale-object`: їх
 // відмовляє пізня відмова (Р-SK1-6). R10 перевіряє схований об'єкт, а не
 // ціль (тримача): несумісного тримача, як на `main`, відмовляє пізня відмова
