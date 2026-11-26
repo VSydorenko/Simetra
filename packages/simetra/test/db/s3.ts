@@ -5,7 +5,12 @@
 import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { S3 } from "@aws-sdk/client-s3"
-import { devSecret, type TestProvider, type TestStack } from "./profile"
+import {
+  devSecret,
+  profileStack,
+  type TestProvider,
+  type TestStack,
+} from "./profile"
 
 /**
  * The slice of the aggregate `S3` client that tests and the run-bucket
@@ -32,7 +37,6 @@ export interface S3Config {
   secretAccessKey: string
 }
 
-const GARAGE_S3_ENDPOINT = "http://127.0.0.1:3900"
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
 
 /** Access key id of the Garage dev key (the bucket gets it via `AllowBucketKey`). */
@@ -101,11 +105,15 @@ function supabaseS3(): S3Config {
     : (JSON.parse(raw) as S3Config)
 }
 
-/** The S3 config of the stack of profile `p`. */
-export function s3ConfigOf(p: TestProvider): S3Config {
-  return p === "postgres"
+/**
+ * The S3 config of a stack (or of the stack of profile `p`, computed now).
+ * The Garage address comes from the stack, never from a constant.
+ */
+export function s3ConfigOf(target: TestStack | TestProvider): S3Config {
+  const stack = typeof target === "string" ? profileStack(target) : target
+  return stack.garageS3Url !== null
     ? {
-        endpoint: GARAGE_S3_ENDPOINT,
+        endpoint: stack.garageS3Url,
         region: "garage",
         accessKeyId: garageDevKeyId(),
         secretAccessKey: devSecret("GARAGE_DEV_KEY_SECRET"),
@@ -114,18 +122,12 @@ export function s3ConfigOf(p: TestProvider): S3Config {
 }
 
 /**
- * S3 client of a test stack: Garage (`127.0.0.1:3900`, region `garage`, the
- * dev key) or Supabase Storage (values of the guard's `supabase status`).
+ * S3 client of a test stack: Garage (the S3 port of the stack index, region
+ * `garage`, the dev key) or Supabase Storage (values of the guard's `supabase status`).
  * Path-style: neither stack resolves bucket subdomains.
  */
 export function s3Of(stack: TestStack | TestProvider): S3ClientLike {
-  const p: TestProvider =
-    typeof stack === "string"
-      ? stack
-      : stack.garageAdminUrl === null
-        ? "supabase"
-        : "postgres"
-  const c = s3ConfigOf(p)
+  const c = s3ConfigOf(stack)
   return new S3({
     endpoint: c.endpoint,
     region: c.region,

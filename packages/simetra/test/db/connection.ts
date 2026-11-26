@@ -21,6 +21,27 @@ import {
   testStack,
 } from "./profile"
 
+/** Змінні, якими адресу стека задає людина, а не індекс (Р-POOL-7). */
+const URL_OVERRIDES = [
+  "SIMETRA_TEST_DATABASE_URL",
+  "SIMETRA_TEST_POOLER_URL",
+  "SIMETRA_TEST_SUPERUSER_URL",
+] as const
+
+/**
+ * Чи задано будь-яку адресу `SIMETRA_TEST_*_URL`. Така адреса вимикає пул
+ * стеків: індекс тоді — `SIMETRA_STACK` або 1, бо вибрати стек за адресою,
+ * яку задано вручну, сторож не може.
+ */
+export function testUrlOverrideSet(
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  return URL_OVERRIDES.some((name) => {
+    const value = env[name]
+    return value !== undefined && value !== ""
+  })
+}
+
 /** Адреса бази стеку для тестів, яким потрібне власне з'єднання (порт `SchemaEngine`). */
 export function testDatabaseUrl(): string {
   return process.env.SIMETRA_TEST_DATABASE_URL ?? testStack().databaseUrl

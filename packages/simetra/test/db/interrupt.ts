@@ -21,11 +21,13 @@ const SWEEP_TIMEOUT_MS = 40_000
 export function installInterruptCleanup(o: {
   tag: string
   release: () => void
+  /** Сценарій прибиральника; лише юніт-тест підставляє порожній, щоб не торкатися стека. */
+  sweep?: string
 }): () => void {
   // Шлях до tsx — одразу: без нього обробник не запустить прибиральника, і
   // краще впасти на старті прогону, ніж мовчки на сигналі
   const tsx = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href
-  const sweep = fileURLToPath(new URL("./sweep.ts", import.meta.url))
+  const sweep = o.sweep ?? fileURLToPath(new URL("./sweep.ts", import.meta.url))
   const handler = (signal: NodeJS.Signals): void => {
     // Слухачі `once` (і наш, і vitest) уже зняті: без заглушок другий Ctrl-C
     // убив би процес посеред прибирання — без `release` і з теговими

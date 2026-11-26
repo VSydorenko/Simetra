@@ -1,6 +1,7 @@
 // Типи для імпорту з TS-тестів: скрипт лишається .mjs без збірки, бо команди
 // стека кличуть його до `pnpm install`.
 import type { ChildProcess, SpawnOptions } from "node:child_process"
+import type { PostgresStack } from "./db-stack-index.mjs"
 
 type SpawnFn = (
   command: string,
@@ -22,11 +23,14 @@ export function withStackLock(
 /** Lock file of the Supabase stack: the same file the DB-run guard takes. */
 export const SUPABASE_LOCK_PATH: string
 
-/** Lock file name of the postgres stack. */
-export const POSTGRES_LOCK_FILE: string
+/** Identity of the stack of the command: `SIMETRA_STACK` read at call time, 1 when unset; throws on an invalid value. */
+export function currentStack(): PostgresStack
+
+/** Lock file name of the postgres stack (default: the one of `SIMETRA_STACK`). */
+export function postgresLockFile(stack?: PostgresStack): string
 
 /** Lock file of the postgres stack: in `/tmp` whatever `TMPDIR` is. */
-export const POSTGRES_LOCK_PATH: string
+export function postgresLockPath(stack?: PostgresStack): string
 
 /** Env variable that names the held stack lock to the children of the script. */
 export const STACK_LOCK_ENV: string
@@ -40,7 +44,7 @@ export function betterAuthCommand(secrets: Record<string, string>): {
   env: Record<string, string>
 }
 
-/** Address of the postgres stack for `user`; `database` defaults to `simetra`. */
+/** Address of the postgres stack of `SIMETRA_STACK` for `user`; `database` defaults to `simetra`. */
 export function stackUrl(
   user: string,
   password: string,

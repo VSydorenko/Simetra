@@ -1,5 +1,6 @@
 // Старт і зупинка локального стека профілю `postgres` (compose-проєкт
-// `simetra-pg`). Compose і ініціалізація йдуть під тим самим замком, що й
+// `simetra-pg` для стека 1, `simetra-pg-N` для стека N з `SIMETRA_STACK=N`;
+// ідентичність стека — `scripts/db-stack-index.mjs`). Compose і ініціалізація йдуть під тим самим замком, що й
 // DB-прогін (`packages/simetra/test/db/stack-guard.ts`): інакше `stop` міг би
 // зупинити стек посеред прогону, а прогін — стартувати на напівготовому стеку.
 // Без залежностей, крім `start postgres`: він кличе `simetra roles` і міграцію
@@ -9,6 +10,8 @@
 //   node scripts/db-stack.mjs stop postgres [--volumes]
 //   node scripts/db-stack.mjs files-hash postgres
 //   node scripts/db-stack.mjs roles supabase
+//
+// Стек команди — `SIMETRA_STACK` (типово 1), один раз на команду.
 import { spawn } from "node:child_process"
 import { EventEmitter } from "node:events"
 import {
@@ -27,15 +30,26 @@ import {
   writeSync,
 } from "node:fs"
 import { constants } from "node:os"
-import { dirname, join, relative } from "node:path"
+import { basename, dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
+import {
+  assertSupabaseUnindexed,
+  postgresStack,
+  stackIndex,
+} from "./db-stack-index.mjs"
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
-/** Lock file name of the postgres stack; equals `TEST_STACKS.postgres.lockFile` (asserted by a unit test). */
-export const POSTGRES_LOCK_FILE = "simetra-db-stack-postgres.lock"
+/**
+ * Стек команди: `SIMETRA_STACK` читається при кожному виклику, а не при
+ * імпорті, бо адреса, обчислена до вибору стека, — це прогін на чужому стеку.
+ */
+export const currentStack = () => postgresStack(stackIndex(process.env))
+/** Lock file name of the postgres stack `stack` (default: the one of `SIMETRA_STACK`). */
+export const postgresLockFile = (stack = currentStack()) =>
+  basename(stack.lockPath)
 // Фіксований `/tmp`, не `tmpdir()`: сесії з різним TMPDIR інакше брали б різні
 // файли замка одного спільного стека; guard бере той самий шлях
-export const POSTGRES_LOCK_PATH = join("/tmp", POSTGRES_LOCK_FILE)
+export const postgresLockPath = (stack = currentStack()) => stack.lockPath
 // Замок стека `supabase` — той самий файл, що бере DB-прогін guard-а
 export const SUPABASE_LOCK_PATH = join("/tmp", "simetra-db-stack.lock")
 /** Контейнер БД локального стека Supabase (`project_id` у `supabase/config.toml`). */
@@ -43,13 +57,12 @@ export const SUPABASE_DB_CONTAINER = "supabase_db_simetra"
 /** Env variable that names the held stack lock to the children of the script. */
 export const STACK_LOCK_ENV = "SIMETRA_DB_STACK_LOCK"
 
-// Профіль скрипта як дані. `lock` — замок, той самий, що бере DB-прогін.
-const PROFILES = {
-  postgres: {
-    dir: join(ROOT, "docker/postgres-stack"),
-    project: "simetra-pg",
-    lock: POSTGRES_LOCK_PATH,
-  },
+const POSTGRES_DIR = join(ROOT, "docker/postgres-stack")
+// Профіль скрипта як дані для стека команди. `lock` — замок, той самий, що
+// бере DB-прогін
+const postgresProfile = () => {
+  const stack = currentStack()
+  return { dir: POSTGRES_DIR, project: stack.project, lock: stack.lockPath }
 }
 const BUCKET = "simetra-dev"
 // Бекенди кроків старту мають це ім'я, тож їх можна знайти й завершити до
@@ -354,10 +367,32 @@ const composeArgv = (profile, args) => [
 
 // Хеш файлів стека — у середовищі кожного виклику compose: він підставляє його
 // в аргумент збірки, і `config` бачить той самий файл, що й `up`
-const composeEnv = () => ({
-  ...process.env,
-  SIMETRA_STACK_FILES_HASH: stackFilesHash(),
-})
+// Порти й індекс стека — там само: compose.yaml бере їх з інтерполяції, а без
+// змінних лишається стек 1
+const composeEnv = () => {
+  const stack = currentStack()
+  return {
+    ...process.env,
+    SIMETRA_STACK_FILES_HASH: stackFilesHash(),
+    SIMETRA_STACK: String(stack.index),
+    SIMETRA_PG_PORT: String(stack.pgPort),
+    SIMETRA_GARAGE_S3_PORT: String(stack.garageS3Port),
+    SIMETRA_GARAGE_ADMIN_PORT: String(stack.garageAdminPort),
+  }
+}
+
+const stackPnpm = () => {
+  const stack = currentStack()
+  return stack.index === 1 ? "pnpm" : `SIMETRA_STACK=${stack.index} pnpm`
+}
+
+/** Префікс команди для підказок: стек N ≠ 1 називає свій індекс. */
+const stackCommand = () => {
+  const stack = currentStack()
+  return stack.index === 1
+    ? "node scripts/db-stack.mjs"
+    : `SIMETRA_STACK=${stack.index} node scripts/db-stack.mjs`
+}
 
 /**
  * @param {Ctx} ctx
@@ -389,7 +424,7 @@ async function compose(ctx, profile, args, options = {}) {
  * @param {string} [dir] the stack directory; a test passes a copy
  * @returns {string}
  */
-export function stackFilesHash(dir = PROFILES.postgres.dir) {
+export function stackFilesHash(dir = POSTGRES_DIR) {
   /** @param {string} at @returns {string[]} */
   const walk = (at) =>
     readdirSync(at, { withFileTypes: true }).flatMap((entry) =>
@@ -425,10 +460,7 @@ export const STACK_REFUSAL = {
  * @returns {string}
  */
 export function imageTagVersion() {
-  const compose = readFileSync(
-    join(PROFILES.postgres.dir, "compose.yaml"),
-    "utf8"
-  )
+  const compose = readFileSync(join(POSTGRES_DIR, "compose.yaml"), "utf8")
   const tag = /^\s*image:\s*simetra-pg\/postgres:(\S+)\s*$/m.exec(compose)
   if (tag === null)
     throw new Error("compose.yaml names no simetra-pg/postgres image tag")
@@ -447,7 +479,7 @@ export function assertServerVersion(reported, expected) {
   if (actual !== expected)
     throw refusal(
       STACK_REFUSAL.serverVersion,
-      `server_version is ${actual === "" ? "empty" : actual}, but the image tag says ${expected}; rebuild the stack from the files of this branch (the owner's call: node scripts/db-stack.mjs stop postgres, then pnpm db:pg:start)`
+      `server_version is ${actual === "" ? "empty" : actual}, but the image tag says ${expected}; rebuild the stack from the files of this branch (the owner's call: ${stackCommand()} stop postgres, then ${stackPnpm()} db:pg:start)`
     )
 }
 
@@ -463,7 +495,7 @@ const SERVICE_LABEL = "com.docker.compose.service"
  */
 async function stackContainers(ctx) {
   const ids = (
-    await compose(ctx, PROFILES.postgres, ["ps", "--all", "--quiet"], {
+    await compose(ctx, postgresProfile(), ["ps", "--all", "--quiet"], {
       capture: true,
     })
   )
@@ -489,7 +521,7 @@ async function stackContainers(ctx) {
 /**
  * Запущений стек лишається, лише якщо зібраний з тих самих файлів: `up`
  * інакше перестворив би контейнери спільного стека під чужими прогонами.
- * Хеш конфігу compose не годиться: він містить абсолютний шлях bind-монтувань,
+ * Хеш конфігу compose не годиться: він містить абсолютний шлях checkout-а (`build.context`),
  * тож ті самі файли з іншого checkout-а дали б інший хеш.
  *
  * @param {Ctx} ctx
@@ -497,7 +529,7 @@ async function stackContainers(ctx) {
  */
 async function assertSameStack(ctx, containers) {
   const services = (
-    await compose(ctx, PROFILES.postgres, ["config", "--services"], {
+    await compose(ctx, postgresProfile(), ["config", "--services"], {
       capture: true,
     })
   )
@@ -524,12 +556,12 @@ async function assertSameStack(ctx, containers) {
   if (unlabelled.length > 0)
     throw refusal(
       STACK_REFUSAL.unlabelled,
-      `the stack was built before the ${STACK_FILES_LABEL} label (${unlabelled.join(", ")}); rebuild it: node scripts/db-stack.mjs stop postgres --volumes, then pnpm db:pg:start (this deletes the stack's data)`
+      `the stack was built before the ${STACK_FILES_LABEL} label (${unlabelled.join(", ")}); rebuild it: ${stackCommand()} stop postgres --volumes, then ${stackPnpm()} db:pg:start (this deletes the stack's data)`
     )
   if (differences.length > 0)
     throw refusal(
       STACK_REFUSAL.differs,
-      `stack config differs from this branch (${differences.join(", ")}); stopping the stack is the owner's call: node scripts/db-stack.mjs stop postgres, then pnpm db:pg:start`
+      `stack config differs from this branch (${differences.join(", ")}); stopping the stack is the owner's call: ${stackCommand()} stop postgres, then ${stackPnpm()} db:pg:start`
     )
 }
 
@@ -541,7 +573,7 @@ async function assertSameStack(ctx, containers) {
 function readEnvFile(file, required) {
   /** @type {Record<string, string>} */
   const secrets = {}
-  const text = readFileSync(join(PROFILES.postgres.dir, file), "utf8")
+  const text = readFileSync(join(POSTGRES_DIR, file), "utf8")
   for (const line of text.split(/\r?\n/)) {
     const m = /^([A-Z0-9_]+)=(.*)$/.exec(line)
     if (m !== null) secrets[m[1]] = m[2].trim()
@@ -563,7 +595,7 @@ const garage = (ctx, args) =>
   // Журнал з'єднань CLI на кожен виклик лише засмічує вивід старту
   compose(
     ctx,
-    PROFILES.postgres,
+    postgresProfile(),
     ["exec", "-T", "-e", "RUST_LOG=garage=warn", "garage", "/garage", ...args],
     { capture: true }
   )
@@ -640,9 +672,8 @@ async function initGarage(ctx) {
     ])
 }
 
-// Адреса стека для кроків після `compose up`: порт і пароль суперкористувача
-// — з compose.yaml; база `simetra` — база застосунку стека (спека профілю §3.1)
-const STACK_HOST = "127.0.0.1:54422"
+// Адреса стека для кроків після `compose up`: порт — зі стека команди, пароль
+// суперкористувача — з compose.yaml; база `simetra` — база застосунку стека (спека профілю §3.1)
 const STACK_DATABASE = "simetra"
 
 /**
@@ -652,7 +683,7 @@ const STACK_DATABASE = "simetra"
  * @param {string} user @param {string} password @param {string} [database]
  */
 export const stackUrl = (user, password, database = STACK_DATABASE) =>
-  `postgresql://${user}:${password}@${STACK_HOST}/${database}`
+  `postgresql://${user}:${password}@127.0.0.1:${currentStack().pgPort}/${database}`
 
 // Ролі входу Simetra й змінні їхніх dev-паролів. Імена — ті самі, що дають
 // `PROVIDER_OWNER_ROLES`, `PROVIDER_LOGIN_ROLES` і `PLATFORM_LOGIN_ROLES`;
@@ -803,7 +834,7 @@ export async function startPostgres(options = {}) {
 
 /** @param {Ctx} ctx @param {boolean} noBuild */
 async function startPostgresSteps(ctx, noBuild) {
-  const profile = PROFILES.postgres
+  const profile = postgresProfile()
   const containers = await stackContainers(ctx)
   // На наявному стеку без `--build`: збірка перезаписала б спільний тег
   // образу з файлів цієї гілки, навіть коли контейнер лишається
@@ -911,7 +942,7 @@ async function stopStartBackends(ctx) {
   )
   const code = await runChild(
     "docker",
-    composeArgv(PROFILES.postgres, psqlArgs("-q")),
+    composeArgv(postgresProfile(), psqlArgs("-q")),
     {
       env: composeEnv(),
       input: `SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE application_name = '${START_APP_NAME}' AND pid <> pg_catalog.pg_backend_pid();\n`,
@@ -936,7 +967,7 @@ async function stopStartBackends(ctx) {
 async function stop(ctx, volumes) {
   await compose(
     ctx,
-    PROFILES.postgres,
+    postgresProfile(),
     volumes
       ? ["down", "--volumes", "--remove-orphans"]
       : ["down", "--remove-orphans"]
@@ -1027,6 +1058,7 @@ async function main(argv) {
   const usage =
     "usage: node scripts/db-stack.mjs start postgres [--no-build] | stop postgres [--volumes] | files-hash postgres | roles supabase"
   if (command === "roles" && profile === "supabase" && flags.length === 0) {
+    assertSupabaseUnindexed(process.env)
     const { ctx, release } = commandContext(spawn, process)
     try {
       await withStackLock(
@@ -1063,7 +1095,7 @@ async function main(argv) {
       ? stop(ctx, flags.includes("--volumes"))
       : startPostgres({ noBuild: flags.includes("--no-build") })
   try {
-    await withStackLock(PROFILES.postgres.lock, run)
+    await withStackLock(postgresProfile().lock, run)
   } finally {
     release()
   }

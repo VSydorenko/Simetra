@@ -200,8 +200,9 @@ These hold for T0 and for every tier that reads metadata:
 ## Commands and gates
 
 With agent-kit, use its scripts; they read `.agents/kit.profile.json`: tests —
-`run-tests` (`unit` by default; the `db` level runs on the postgres stack; `db-supabase`
-on the Supabase stack is frozen — see below; each waits for its stack's lock), PR — `pr-gate`, a spec or plan section —
+`run-tests` (`unit` by default; the `db` and `e2e` levels run on a free stack of the
+postgres pool — the DB-run guard picks it and queues the run; `db-supabase` on the
+Supabase stack is frozen — see below and waits for its stack's lock), PR — `pr-gate`, a spec or plan section —
 `doc <file> §N`, Codex — `codex-audit`. The commands below are what
 they run, and the way to work without the kit.
 
@@ -219,10 +220,10 @@ doc anchors && doc lint                   # dead paths, § pointers, corpus form
 pnpm metadata:check                       # simetra compile --all via packages/designer/bin; pre-commit runs it with --staged
 pnpm build:packages && pnpm test:packaging # build the npm packages, then test the packed tarballs in a scratch consumer project
 
-pnpm db:pg:start                          # local postgres-profile stack: Postgres 17, Garage (needs Docker; Centrifugo is started by the stands of demo, e2e and DB tests, image pin in docker/centrifugo-image.txt)
+pnpm db:pg:start                          # local postgres-profile stack 1: Postgres 17, Garage (needs Docker; SIMETRA_STACK=N for stack N of the pool; Centrifugo is started by the stands of demo, e2e and DB tests, image pin in docker/centrifugo-image.txt)
 pnpm test:db:pg                           # the default DB suite: base-state pgTAP and DB tests of simetra and @simetrajs/designer on the postgres stack
 pnpm demo                                 # the app template on the postgres stack at http://localhost:3000; prints two logins; pnpm demo:drop removes its database
-pnpm db:pg:stop
+pnpm db:pg:stop                           # the same SIMETRA_STACK=N picks the stack
 
 pnpm db:start                             # local Supabase stack (needs Docker) — frozen profile, manual runs only (ADR-0117)
 pnpm test:db                              # provider base-state pgTAP + *.supabase.db.test.ts against the Supabase stack
@@ -241,21 +242,26 @@ pnpm db:stop
   proves nothing.
 - Each local stack is started only through its `pnpm db:*` commands (pinned
   images and CLI), never through a global `supabase` or `docker compose`
-  without the project name. Start the `postgres` stack from the main checkout:
-  its bind mounts point into the checkout that started it, so removing a
-  worktree that started the stack breaks it.
+  without the project name.
 - An existing local Supabase stack needs `pnpm db:roles` once after pulling
   changes to `supabase/roles.sql`; without it the runtime refuses to start
   (`command.read-role-missing`).
-- Each local stack (`postgres`, `supabase`) is one per profile per machine and
-  shared by every session and agent on it. The `globalSetup` of each DB project
-  (`stack-guard.<provider>.ts` over the guard module
-  `packages/simetra/test/db/stack-guard.ts`) runs one DB run at a time per
-  stack (a second run waits), refuses to start on a nearly full disk, and fails the run
-  when the stack differs afterwards. A DB test leaves nothing behind, failure
+- The `postgres` profile is a pool of local stacks (`SIMETRA_STACK=N`, 1…9;
+  without the variable — stack 1, today's names and ports); `supabase` is one
+  stack per machine. Every stack is shared by every session and agent on the
+  machine. The `globalSetup` of each DB project (`stack-guard.<provider>.ts`
+  over the guard module `packages/simetra/test/db/stack-guard.ts`) runs one DB
+  run at a time per stack: a run without `SIMETRA_STACK` takes the first free
+  live stack of the pool (`SIMETRA_STACK_POOL` narrows it) and, when all are
+  busy, waits for any of them; an explicit `SIMETRA_STACK` waits for that
+  stack. It refuses to start on a nearly full disk and fails the run when the
+  stack differs afterwards. Start an extra stack with
+  `SIMETRA_STACK=N pnpm db:pg:start` and stop it with
+  `SIMETRA_STACK=N pnpm db:pg:stop --volumes` when you no longer need it; never
+  stop a stack you did not start. A DB test leaves nothing behind, failure
   paths included. Never drop stack objects your run did not create; report an
-  orphan instead. The guard is per stack: runs on the Supabase and the postgres
-  stacks do not wait for each other. One vitest process runs one DB project.
+  orphan instead. The guard is per stack: runs on different stacks do not
+  wait for each other. One vitest process runs one DB project.
   Tests bound to Supabase live in `*.supabase.db.test.ts` (project
   `db-supabase`).
 - Every object a DB test creates on the stack (database, role, engine shadow)
@@ -270,7 +276,8 @@ pnpm db:stop
   names them. pnpm does not forward a signal sent to
   its own pid: stop a DB run by signalling its process group (Ctrl-C, GNU
   `timeout` without `--foreground`) or the vitest pid. A container of a run
-  carries the `simetra-run=<tag>` and `simetra-stack=<provider>` labels
+  carries the `simetra-run=<tag>` and `simetra-stack=<stack key>` labels
+  (`postgres` for stack 1, `postgres-N` for stack N, `supabase`)
   (`runContainerLabels` in `packages/simetra/test/db/external.ts`) and a Garage
   bucket of a run is named `run-<tag>`; the guard reports both, removes its own
   containers and its empty buckets, and reports a non-empty bucket instead of

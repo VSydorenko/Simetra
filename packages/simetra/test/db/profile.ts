@@ -1,6 +1,13 @@
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
+import { basename } from "node:path"
 import { PROVIDER_OWNER_ROLES } from "simetra/model"
+import {
+  assertSupabaseUnindexed,
+  postgresStack,
+  STACK_ENV,
+  stackIndex,
+} from "../../../../scripts/db-stack-index.mjs"
 
 /** Профіль локального стека, на який націлений DB-прогін. */
 export type TestProvider = "postgres" | "supabase"
@@ -10,6 +17,10 @@ export const PROVIDER_ENV = "SIMETRA_TEST_PROVIDER"
 
 /** Адреси й замок стека одного профілю. */
 export interface TestStack {
+  /** Індекс стека `postgres`; у `supabase` індексу немає — 1. */
+  index: number
+  /** Значення мітки `simetra-stack`: `postgres`, `postgres-N` або `supabase`. */
+  key: string
   databaseUrl: string
   superuserUrl: string
   /** `null` — у стека немає пулера. */
@@ -19,9 +30,9 @@ export interface TestStack {
   lockFile: string
   /** `null` — у стека немає Garage. */
   garageAdminUrl: string | null
+  /** S3-адреса Garage; `null` — у стека немає Garage. */
+  garageS3Url: string | null
 }
-
-const POSTGRES_SERVER = "postgresql://postgres:postgres@127.0.0.1:54422"
 
 // Усе лише на 127.0.0.1: значення секретів і паролів годяться тільки для
 // локального стека. Замок Supabase зберігає наявне ім'я, щоб сесії на старому
@@ -30,25 +41,59 @@ const POSTGRES_SERVER = "postgresql://postgres:postgres@127.0.0.1:54422"
 // з'єднанню з адреси тестів — і тест-хелпера, і рушія — роль власника: так
 // тести бачать ті самі права, що й продовий власник, а `SET LOCAL ROLE`
 // перевіряється за суперкористувачем сесії (спека профілю §10.3).
-export const TEST_STACKS: Record<TestProvider, TestStack> = {
-  supabase: {
-    databaseUrl: "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
-    superuserUrl:
-      "postgresql://supabase_admin:postgres@127.0.0.1:54322/postgres",
-    poolerUrl:
-      "postgresql://postgres.pooler-dev:postgres@127.0.0.1:54329/postgres",
-    superuserName: "supabase_admin",
-    lockFile: "simetra-db-stack.lock",
-    garageAdminUrl: null,
-  },
-  postgres: {
-    databaseUrl: `${POSTGRES_SERVER}/simetra?options=${encodeURIComponent(`-c role=${PROVIDER_OWNER_ROLES.postgres}`)}`,
-    superuserUrl: `${POSTGRES_SERVER}/simetra`,
+const SUPABASE_STACK: TestStack = {
+  index: 1,
+  key: "supabase",
+  databaseUrl: "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+  superuserUrl: "postgresql://supabase_admin:postgres@127.0.0.1:54322/postgres",
+  poolerUrl:
+    "postgresql://postgres.pooler-dev:postgres@127.0.0.1:54329/postgres",
+  superuserName: "supabase_admin",
+  lockFile: "simetra-db-stack.lock",
+  garageAdminUrl: null,
+  garageS3Url: null,
+}
+
+/**
+ * Стек профілю `p`, обчислений на виклик: індекс `postgres` береться з
+ * `SIMETRA_STACK` у цю мить, а не при імпорті, бо адреса, обчислена до вибору
+ * стека, веде прогін на чужий стек.
+ */
+export function profileStack(p: TestProvider): TestStack {
+  if (p === "supabase") {
+    assertSupabaseUnindexed(process.env)
+    return SUPABASE_STACK
+  }
+  return postgresStackAt(stackIndex(process.env))
+}
+
+/**
+ * Стек `postgres` з індексом `index` — для сторожа, що перебирає кандидатів
+ * пулу до того, як індекс потрапив у середовище.
+ */
+export function postgresStackAt(index: number): TestStack {
+  const s = postgresStack(index)
+  const server = `postgresql://postgres:postgres@127.0.0.1:${s.pgPort}`
+  return {
+    index: s.index,
+    key: s.key,
+    databaseUrl: `${server}/simetra?options=${encodeURIComponent(`-c role=${PROVIDER_OWNER_ROLES.postgres}`)}`,
+    superuserUrl: `${server}/simetra`,
     poolerUrl: null,
     superuserName: "postgres",
-    lockFile: "simetra-db-stack-postgres.lock",
-    garageAdminUrl: "http://127.0.0.1:3903",
-  },
+    lockFile: basename(s.lockPath),
+    garageAdminUrl: `http://127.0.0.1:${s.garageAdminPort}`,
+    garageS3Url: `http://127.0.0.1:${s.garageS3Port}`,
+  }
+}
+
+/**
+ * Префікс `SIMETRA_STACK=<N> ` для надрукованих команд прибирання: для стека
+ * з індексом N ≠ 1 без нього команда пішла б на стек 1. Для стека 1 і для
+ * `supabase` порожній, тож вивід не змінюється.
+ */
+export function stackEnvPrefix(stack: TestStack): string {
+  return stack.index === 1 ? "" : `${STACK_ENV}=${stack.index} `
 }
 
 /** Dev-секрети стека `postgres`, які читає не лише скрипт старту (Garage). */
@@ -133,5 +178,5 @@ export function enterProvider(p: TestProvider): void {
 }
 
 export function testStack(): TestStack {
-  return TEST_STACKS[testProvider()]
+  return profileStack(testProvider())
 }
