@@ -45,6 +45,7 @@ import {
   GLOBAL_ROLES_FILE,
   GRANT_FILE,
   HOURS_TABLES,
+  LANGUAGES_TABLE,
   ORG_KIND_ID,
   PROJECT_FILE,
   RATE_TABLE,
@@ -60,6 +61,7 @@ import {
   grant,
   grantTable,
   grantsSource,
+  languagesLayer,
   membersSource,
   objects,
   policyDomain,
@@ -82,6 +84,7 @@ import {
   catalog,
   customTable,
   document,
+  languagesCatalog,
   metaFiles,
   organization,
   project,
@@ -1473,6 +1476,7 @@ describe("simetra_command table grants", () => {
       attributeCase: "snake_case",
       main: true,
       users: false,
+      fixed: undefined,
     })
     expect(base.map((c) => c.name)).toEqual([
       "id",
@@ -1554,6 +1558,124 @@ describe("tenant boundary with an actor snapshot", () => {
     )
     expect(tenantBoundary(task.scope!, "v_new")).toBe(
       `v_new.org_id = ANY (ARRAY(SELECT ${set}))`
+    )
+  })
+})
+
+describe("languages role: command grants and published read (Р-B2-3, Р-B2-5)", () => {
+  const COMMAND = PLATFORM_ROLES.command
+  const T = `public.${LANGUAGES_TABLE}`
+  /** Домен політик (supabase, camelCase) з функціями прав. */
+  let camel: CompiledModel
+  /** Профіль `postgres`, `snake_case`, без ролей — отже без функцій прав. */
+  let snake: CompiledModel
+  beforeAll(async () => {
+    const domain = await compile(policyDomain(languagesLayer()))
+    expectClean(domain)
+    camel = domain.model!
+    snake = await compiled({
+      "project.meta.json": project({
+        database: { provider: "postgres" },
+        naming: { attributeCase: "snake_case" },
+        primaryDataLanguage: "uk",
+      }),
+      "catalogs/Languages/Languages.meta.json": languagesCatalog({
+        scope: "none",
+      }),
+    })
+  })
+
+  const grantsOf = (model: CompiledModel) =>
+    model.sqlUnits
+      .filter(
+        (u) => u.generator === "access" && u.class === "grant" && u.name === T
+      )
+      .map((u) => u.sql)
+      .sort()
+
+  it.each<[string, () => CompiledModel, string, string, string]>([
+    ["supabase", () => camel, "anon", "authenticated", "service_role"],
+    ["postgres snake_case", () => snake, "simetra_anon", "simetra_user", ""],
+  ])(
+    "%s: command role writes only outside the role's fixed columns, the guest reads four columns",
+    (_, model, guest, user, service) => {
+      const on = `ON TABLE ${T}`
+      expect(grantsOf(model())).toEqual(
+        [
+          `REVOKE ALL ${on} FROM PUBLIC;`,
+          `REVOKE ALL ${on} FROM ${guest};`,
+          `REVOKE ALL ${on} FROM ${user};`,
+          ...(service === "" ? [] : [`REVOKE ALL ${on} FROM ${service};`]),
+          `GRANT SELECT ${on} TO ${user};`,
+          `GRANT SELECT (id, state, code, description) ${on} TO ${guest};`,
+          `GRANT SELECT ${on} TO ${COMMAND};`,
+          // INSERT без `is_primary`, `state`, `deletion_mark`; UPDATE без
+          // `is_primary`, `code`, `deletion_mark`; DELETE немає.
+          `GRANT INSERT (id, code, description) ${on} TO ${COMMAND};`,
+          `GRANT UPDATE (description, state) ${on} TO ${COMMAND};`,
+        ].sort()
+      )
+    }
+  )
+
+  it("the access contract carries the physical published read facts of the main table", () => {
+    for (const model of [camel, snake]) {
+      expect(accessOf(model, LANGUAGES_TABLE)).toMatchObject([
+        {
+          publicRead: [],
+          publishedRead: {
+            stateColumn: "state",
+            guestColumns: ["id", "state", "code", "description"],
+          },
+        },
+      ])
+      // Довідник без ролі факту не має: його вивід не змінюється.
+      expect(
+        model.contracts.access
+          .filter((a) => a.publishedRead !== undefined)
+          .map((a) => a.table.name)
+      ).toEqual([LANGUAGES_TABLE])
+    }
+  })
+
+  it("published rows are open to the guest, the user and the command role, with or without rights functions", () => {
+    const published = (guest: string, user: string) =>
+      `CREATE POLICY ${LANGUAGES_TABLE}_published_read ON ${T} AS PERMISSIVE FOR SELECT TO ${[guest, user, COMMAND].sort().join(", ")} USING (state = 'published');`
+    expect(
+      policiesOf(camel, LANGUAGES_TABLE).get(
+        `${LANGUAGES_TABLE}_published_read`
+      )
+    ).toBe(published("anon", "authenticated"))
+    // Без функцій прав — лише читання опублікованих: решту рядків не відкриває ніщо.
+    expect([...policiesOf(snake, LANGUAGES_TABLE)]).toEqual([
+      [
+        `${LANGUAGES_TABLE}_published_read`,
+        published("simetra_anon", "simetra_user"),
+      ],
+    ])
+  })
+
+  it("rights read policies stay, there is no public read and no delete of the rest rows", () => {
+    const policies = policiesOf(camel, LANGUAGES_TABLE)
+    expect(policies.get(`${LANGUAGES_TABLE}_read_any`)).toBe(
+      `CREATE POLICY ${LANGUAGES_TABLE}_read_any ON ${T} AS PERMISSIVE FOR SELECT ${BOUNDED} USING ((SELECT simetra.has_right('read', '${LANGUAGES_TABLE}', 'any', NULL)));`
+    )
+    // Повний перелік: ні `public_read`, ні «решти рядків» на DELETE — природних
+    // дій `delete`/`markDeletion` роль не має. Коренева родина DELETE — за дією
+    // контексту, як у кожного довідника; гранту DELETE немає (тест вище).
+    expect([...policies.keys()].sort()).toEqual(
+      [
+        "command_delete",
+        "command_insert",
+        "command_update",
+        "delete_root_any",
+        "insert_rest_any",
+        "insert_root_any",
+        "published_read",
+        "read_any",
+        "update_rest_any",
+        "update_root_any",
+      ].map((label) => `${LANGUAGES_TABLE}_${label}`)
     )
   })
 })

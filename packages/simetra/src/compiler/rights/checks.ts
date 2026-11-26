@@ -55,7 +55,7 @@ import {
   sourceLiteralFits,
   sourceLiteralType,
 } from "./facts"
-import { commandWriteColumns } from "./command-columns"
+import { commandWriteColumns, roleFixedColumns } from "./command-columns"
 import { must, projectTarget } from "./references"
 
 /** Вхід правил прав стадії 4: усе, що вже знає цілісність. */
@@ -1331,6 +1331,7 @@ function outsideCommandUpdate(
     attributeCase,
     main: true,
     users: usersCatalogOf(ctx.objects)?.id === objectId,
+    fixed: roleFixedColumns(object),
   })
   const updatable = new Set(update.map(idOf))
   return new Set(
