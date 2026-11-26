@@ -1572,6 +1572,7 @@ describe("buildRuntimeCatalog: storage", () => {
 
 // Р-D1-12, інваріант 14: умовний `publicRead` не відкриває об'єкта жодному
 // каталогу; роль умови — лише в `publicReadPublished` каталогу рантайму.
+const OLD_OPERATIONS = new Set(["create", "update", "markDeletion", "delete"])
 describe("buildRuntimeCatalog: conditional publicRead", () => {
   let sinkModel: CompiledModel
   let sink: RuntimeCatalog
@@ -1596,6 +1597,42 @@ describe("buildRuntimeCatalog: conditional publicRead", () => {
       expect(entry(name)).not.toHaveProperty("publicRead")
     }
   )
+
+  // Р-D1-11: цілі публікації — лише в умовного об'єкта, з дією-іменем операції.
+  it("publish and unpublish targets exist on conditional objects only", () => {
+    for (const name of ["Partner", "Item"]) {
+      const ops = entry(name).operations
+      expect(ops?.publish?.context, name).toBe("publish")
+      expect(ops?.unpublish?.context, name).toBe("unpublish")
+      expect(ops?.publish?.function.name, name).toMatch(/_publish$/)
+      expect(ops?.unpublish?.function.name, name).toMatch(/_unpublish$/)
+    }
+    for (const o of sink.objects.filter(
+      (o) => o.publicReadPublished === undefined
+    )) {
+      expect(o.operations ?? {}, o.name).not.toHaveProperty("publish")
+      expect(o.operations ?? {}, o.name).not.toHaveProperty("unpublish")
+    }
+  })
+
+  // Інваріант §2 плану: об'єкт без умови не змінює ядра — хеш рахується з тих
+  // самих чотирьох операцій, нових ключів у нього немає.
+  it("keeps the kernel of an unconditional object: no new keys in its hash input", () => {
+    for (const o of sink.objects.filter(
+      (o) => o.publicReadPublished === undefined
+    )) {
+      expect(
+        Object.keys(o.operations ?? {}).filter((k) => !OLD_OPERATIONS.has(k)),
+        o.name
+      ).toEqual([])
+      expect(o.kernelHash, o.name).toBe(kernelHashOf(o.operations))
+    }
+    // Умовний хешує й операції публікації: ядро справді інше.
+    const { publish, unpublish, ...rest } = entry("Item").operations!
+    expect(publish).toBeDefined()
+    expect(unpublish).toBeDefined()
+    expect(entry("Item").kernelHash).not.toBe(kernelHashOf(rest))
+  })
 
   it("an unconditional publicRead has no publicReadPublished", () => {
     for (const o of sink.objects.filter((o) => o.publicRead !== undefined))

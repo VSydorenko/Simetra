@@ -471,6 +471,12 @@ function operationsOf(
     ...(functions.delete === undefined || actions.delete === undefined
       ? {}
       : { delete: target(functions.delete, actions.delete) }),
+    ...(functions.publish === undefined || actions.publish === undefined
+      ? {}
+      : { publish: target(functions.publish, actions.publish) }),
+    ...(functions.unpublish === undefined || actions.unpublish === undefined
+      ? {}
+      : { unpublish: target(functions.unpublish, actions.unpublish) }),
   }
 }
 

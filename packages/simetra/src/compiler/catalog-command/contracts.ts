@@ -51,6 +51,8 @@ export const CATALOG_COMMAND_LABELS = {
   markDeletion: "mark_deletion",
   delete: "delete",
   createRoot: "create_root",
+  publish: "publish",
+  unpublish: "unpublish",
 } as const
 
 /**
@@ -82,6 +84,9 @@ export interface CatalogCommandContract {
     save: QualifiedName
     markDeletion?: QualifiedName
     delete?: QualifiedName
+    /** Ядра публікації — лише умовного об'єкта (Р-D1-11). */
+    publish?: QualifiedName
+    unpublish?: QualifiedName
     /** Ядро `create` кореня виду скоупу (спека П4 §6.13) — лише на корені. */
     createRoot?: QualifiedName
   }
@@ -91,6 +96,8 @@ export interface CatalogCommandContract {
     update: string
     markDeletion?: string
     delete?: string
+    publish?: string
+    unpublish?: string
     createRoot?: string
   }
   /** Ключі `p_item` створення й зміни (спека П4 §6.6) — з гранту ролі команд. */
@@ -263,6 +270,14 @@ export function catalogCommandContracts(input: {
             ...(actions.delete === undefined
               ? {}
               : { delete: derived(table, CATALOG_COMMAND_LABELS.delete) }),
+            ...(actions.publish === undefined
+              ? {}
+              : { publish: derived(table, CATALOG_COMMAND_LABELS.publish) }),
+            ...(actions.unpublish === undefined
+              ? {}
+              : {
+                  unpublish: derived(table, CATALOG_COMMAND_LABELS.unpublish),
+                }),
             ...(actions.createRoot === undefined
               ? {}
               : {
@@ -350,6 +365,10 @@ function actionsOf(
   const create = facts.users || facts.root ? undefined : pick("create")
   const markDeletion = facts.users ? undefined : pick("markDeletion")
   const remove = facts.roleAssignments ? pick("delete") : undefined
+  // Дії публікації є лише в умовного об'єкта (Р-D1-8), без запасної
+  // `administerRights`: системні довідники прав умовними не бувають.
+  const publish = present.has("publish") ? "publish" : undefined
+  const unpublish = present.has("unpublish") ? "unpublish" : undefined
   // «Користувачі» бувають коренем виду скоупу, але рядок створює
   // провізія, а не команда.
   const createRoot = facts.root && !facts.users ? pick("create") : undefined
@@ -358,6 +377,8 @@ function actionsOf(
     update,
     ...(markDeletion === undefined ? {} : { markDeletion }),
     ...(remove === undefined ? {} : { delete: remove }),
+    ...(publish === undefined ? {} : { publish }),
+    ...(unpublish === undefined ? {} : { unpublish }),
     ...(createRoot === undefined ? {} : { createRoot }),
   }
 }

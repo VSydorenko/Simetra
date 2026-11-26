@@ -234,7 +234,13 @@ export function buildCatalogCommandUnits(
     // Функція є рівно для тих дій, що їх дав контракт (спека П4 §6.6): позначки
     // немає в «Користувачів», видалення — лише в «Призначень», ядро
     // створення — лише в кореня виду скоупу (спека П4 §6.13).
-    const { markDeletion, delete: remove, createRoot } = contract.functions
+    const {
+      markDeletion,
+      delete: remove,
+      createRoot,
+      publish,
+      unpublish,
+    } = contract.functions
     const functions: { fn: QualifiedName; args: string; sql: string }[] = [
       {
         fn: contract.functions.save,
@@ -252,6 +258,36 @@ export function buildCatalogCommandUnits(
                 contract,
                 markDeletion,
                 contract.actions.markDeletion,
+                parts
+              ),
+            },
+          ]),
+      ...(publish === undefined || contract.actions.publish === undefined
+        ? []
+        : [
+            {
+              fn: publish,
+              args: "uuid, bigint",
+              sql: publicationFunction(
+                contract,
+                publish,
+                contract.actions.publish,
+                true,
+                parts
+              ),
+            },
+          ]),
+      ...(unpublish === undefined || contract.actions.unpublish === undefined
+        ? []
+        : [
+            {
+              fn: unpublish,
+              args: "uuid, bigint",
+              sql: publicationFunction(
+                contract,
+                unpublish,
+                contract.actions.unpublish,
+                false,
                 parts
               ),
             },
@@ -1714,6 +1750,90 @@ function markDeletionFunction(
   return coreFunction(
     fn,
     "p_id uuid, p_expected_version bigint, p_mark boolean",
+    [
+      "v_old record;",
+      "v_new record;",
+      "v_row record;",
+      "v_count bigint;",
+      "v_result jsonb;",
+    ],
+    statements
+  )
+}
+
+/**
+ * `<t>_publish` і `<t>_unpublish` (Р-D1-11): перехід колонки `published` на
+ * скелеті `mark_deletion`. Колонки — факти контракту дії (`transition`,
+ * `coupled`), а не друге джерело: перехід називає `published`, пов'язана
+ * колонка `publish` — позначку. Позначений рядок не публікується (Р-D1-10):
+ * відмова `marked` — до запису й після права, щоб без права стан позначки не
+ * розкривався (Рт4). Сигнал переходу — `update`: перелік `op` приймача T4 не
+ * змінюється, а `publish`/`unpublish` бачить `Change.operation` T3.
+ */
+function publicationFunction(
+  contract: CatalogCommandContract,
+  fn: QualifiedName,
+  action: string,
+  publish: boolean,
+  parts: CoreParts
+): string {
+  const { table, key } = contract
+  const root = "p_id"
+  const rights = must(
+    parts.facts.rights.actions.find((a) => a.action === action)
+  )
+  const published = q(must(rights.transition).column)
+  const marked =
+    rights.coupled === undefined
+      ? undefined
+      : {
+          column: q(rights.coupled.column),
+          // Те саме порівняння, що в тригера ефектів (Р-D1-10): дозволене
+          // лише значення пов'язаної колонки після дії.
+          allowed: sqlLiteral(rights.coupled.value),
+        }
+  const value = sqlLiteral(publish)
+  const changed = new Set([
+    published,
+    ...(parts.updatedBy === undefined ? [] : [q(parts.updatedBy)]),
+  ])
+  const statements = [
+    ...ifThen("p_expected_version IS NULL", [
+      invalid(sqlLiteral(E.invalid.expectedVersion)),
+    ]),
+    ...parts.context(action, root),
+    ...(contract.hierarchy?.lockAlways === true ? [parts.lock] : []),
+    ...parts.lockedOld(root, "NO KEY UPDATE"),
+    ...parts.rightsIf(action, "update", "v_old", E.forbidden.noRight),
+    ...(marked === undefined
+      ? []
+      : ifThen(`v_old.${marked.column} IS DISTINCT FROM ${marked.allowed}`, [
+          invalid(sqlLiteral(E.invalid.marked)),
+        ])),
+    "v_new := v_old;",
+    `v_new.${published} := ${value};`,
+    ...(parts.updatedBy === undefined
+      ? []
+      : [`v_new.${q(parts.updatedBy)} := ${CURRENT_USER};`]),
+    ...parts.relink(
+      contract.carrierLinks.filter((link) =>
+        link.pairs.some((p) => changed.has(q(p.local)))
+      )
+    ),
+    ...parts.rightsIf(action, "update", "v_new", E.forbidden.newCarrier),
+    `UPDATE ${relation(table)} SET ${published} = ${value} WHERE ${q(key)} = ${root} RETURNING * INTO v_row;`,
+    "GET DIAGNOSTICS v_count = ROW_COUNT;",
+    ...ifThen("v_count = 0", [noRight]),
+    ...parts.signal(
+      "v_row",
+      signalOp("update"),
+      `v_row.${q(contract.versionColumn)}`
+    ),
+    ...resultLines(contract, root, false),
+  ]
+  return coreFunction(
+    fn,
+    "p_id uuid, p_expected_version bigint",
     [
       "v_old record;",
       "v_new record;",
