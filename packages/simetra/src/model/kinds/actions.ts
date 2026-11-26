@@ -45,11 +45,17 @@ export interface KindAction {
    */
   natural?: true
   /**
-   * A transition action: the one header column it changes and the direction.
+   * A transition action: the transition column it changes and the direction.
    * Without `from`/`to` there is no direction (`markDeletion` goes both
    * ways). Neither `"all"` nor a custom action touches a transition column.
    */
   transition?: { column: string; from?: boolean; to?: boolean }
+  /**
+   * A coupled column: after the action the row holds `value` in `column`,
+   * whatever it held before. The column is in `effects.header` when the
+   * action writes it, otherwise the action leaves it unchanged.
+   */
+  coupled?: { column: string; value: boolean }
 }
 
 /** The extent forms a kind can restrict an action to (rights contract). */
@@ -99,8 +105,25 @@ export const markDeletionAction: KindAction = {
   transition: { column: "deletionMark" },
 }
 
+/**
+ * `markDeletion` of an object with a conditional `publicRead`: the mark in
+ * either direction also unpublishes the row.
+ */
+// Позначений рядок не публікується (Р-D1-10): зняття позначки дає чернетку, а
+// не повертає публікацію, тож `published = false` в обидва боки позначки.
+export const unpublishingMarkDeletionAction: KindAction = {
+  ...markDeletionAction,
+  effects: {
+    ...markDeletionAction.effects,
+    header: ["deletionMark", "published"],
+  },
+  coupled: { column: "published", value: false },
+}
+
 // Лише умовний `publicRead` (Р-D1-8): перехід однієї колонки, без `requires`
-// — дія вимагає лише `read` через загальне ребро `actionRequires`.
+// — дія вимагає лише `read` через загальне ребро `actionRequires`. Позначений
+// рядок не публікується (Р-D1-10): позначку дія не змінює, тож вона мусить
+// бути знятою.
 export const publishAction: KindAction = {
   name: "publish",
   requires: [],
@@ -110,6 +133,7 @@ export const publishAction: KindAction = {
     tabularSections: false,
   },
   transition: { column: "published", from: false, to: true },
+  coupled: { column: "deletionMark", value: false },
 }
 
 export const unpublishAction: KindAction = {

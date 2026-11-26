@@ -1652,10 +1652,22 @@ function markDeletionFunction(
   const mark = q(
     standardColumn(table, deletionMarkColumn(), parts.facts.attributeCase).name
   )
-  // Позначка змінює лише себе й автора зміни: перевиводяться лише зв'язки
-  // через ці колонки (зв'язок через автора — з функції джерел, спека П4 §6.7).
+  // Пов'язана колонка дії — той самий факт контракту, що й у тригера ефектів
+  // (Р-D1-10): умовний об'єкт знімає публікацію в обидва боки позначки, тож
+  // зняття позначки дає чернетку.
+  const coupled = must(
+    parts.facts.rights.actions.find((a) => a.action === action)
+  ).coupled
+  const couple =
+    coupled === undefined
+      ? undefined
+      : { column: q(coupled.column), value: sqlLiteral(coupled.value) }
+  // Позначка змінює лише себе, пов'язану колонку й автора зміни:
+  // перевиводяться лише зв'язки через ці колонки (зв'язок через автора — з
+  // функції джерел, спека П4 §6.7).
   const changed = new Set([
     mark,
+    ...(couple === undefined ? [] : [couple.column]),
     ...(parts.updatedBy === undefined ? [] : [q(parts.updatedBy)]),
   ])
   const statements = [
@@ -1671,6 +1683,9 @@ function markDeletionFunction(
     ...parts.rightsIf(action, "update", "v_old", E.forbidden.noRight),
     "v_new := v_old;",
     `v_new.${mark} := p_mark;`,
+    ...(couple === undefined
+      ? []
+      : [`v_new.${couple.column} := ${couple.value};`]),
     ...(parts.updatedBy === undefined
       ? []
       : [`v_new.${q(parts.updatedBy)} := ${CURRENT_USER};`]),
@@ -1685,7 +1700,7 @@ function markDeletionFunction(
       : ifThen(`v_old.${q(contract.predefinedColumn)} IS NOT NULL`, [
           invalid(sqlLiteral(E.invalid.predefined)),
         ])),
-    `UPDATE ${relation(table)} SET ${mark} = p_mark WHERE ${q(key)} = ${root} RETURNING * INTO v_row;`,
+    `UPDATE ${relation(table)} SET ${mark} = p_mark${couple === undefined ? "" : `, ${couple.column} = ${couple.value}`} WHERE ${q(key)} = ${root} RETURNING * INTO v_row;`,
     // Відкликання права між замком і `UPDATE` — нуль рядків, відмова.
     "GET DIAGNOSTICS v_count = ROW_COUNT;",
     ...ifThen("v_count = 0", [noRight]),

@@ -224,8 +224,9 @@ function notRoot(label: string, key: string): string {
 
 /**
  * Перевірки оновлення під дією: жодна змістова колонка поза шапкою дії не
- * змінилася (ключ тримають тригери ключа), а колонка переходу змінюється лише у
- * своєму напрямку (спека прав §5.3).
+ * змінилася (ключ тримають тригери ключа), колонка переходу змінюється лише у
+ * своєму напрямку (спека прав §5.3), а пов'язана колонка після дії має своє
+ * значення (Р-D1-10).
  */
 function updateChecks(
   action: RightsAction,
@@ -258,6 +259,17 @@ function updateChecks(
         "END IF;"
       )
     }
+  }
+  // Без умови на зміну колонки: інакше пройшли б позначка, що лишила
+  // `published = true` як було, і `publish`, який позначки не змінює, — обидві
+  // з опублікованим позначеним рядком.
+  const coupled = action.coupled
+  if (coupled !== undefined) {
+    lines.push(
+      `IF NEW.${q(coupled.column)} IS DISTINCT FROM ${sqlLiteral(coupled.value)} THEN`,
+      `  ${refuse(table, coupled.column)}`,
+      "END IF;"
+    )
   }
   return ["IF TG_OP = 'UPDATE' THEN", ...indent(lines), "END IF;"]
 }

@@ -88,6 +88,19 @@ describe("conditional publicRead in the compiled model (Р-D1-8)", () => {
       requires: ["read"],
       transition: { column: "published", from: false, to: true },
     })
+    // Позначка знімає публікацію, а позначений рядок не публікується
+    // (Р-D1-10): пов'язані колонки — фізичні, як і колонка переходу.
+    expect(publish.coupled).toEqual({ column: "deletion_mark", value: false })
+    expect(rights.actions.find((a) => a.name === "markDeletion")).toMatchObject(
+      {
+        effects: { header: ["deletion_mark", "published"] },
+        transition: { column: "deletion_mark" },
+        coupled: { column: "published", value: false },
+      }
+    )
+    expect(
+      rights.actions.find((a) => a.name === "unpublish")!.coupled
+    ).toBeUndefined()
     // «all» не розгортається в колонку переходу: її змінює лише дія.
     for (const name of ["create", "update"]) {
       expect(
@@ -114,6 +127,12 @@ describe("conditional publicRead in the compiled model (Р-D1-8)", () => {
       (a) => a.table.name === "region"
     )!
     expect(access.published).toBeUndefined()
+    // Без умови позначка не має пов'язаної колонки (Р-D1-10).
+    const markDeletion = result
+      .model!.contracts.rights.find((c) => c.table.name === "region")!
+      .actions.find((a) => a.name === "markDeletion")!
+    expect(markDeletion.effects.header).toEqual(["deletion_mark"])
+    expect(markDeletion.coupled).toBeUndefined()
   })
 
   it("refuses a custom action named publish or unpublish as a taken word", async () => {

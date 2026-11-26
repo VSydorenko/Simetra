@@ -1,9 +1,11 @@
 import {
   administerRightsAction,
+  markDeletionAction,
   publishAction,
   readAction,
   recordActions,
   unpublishAction,
+  unpublishingMarkDeletionAction,
 } from "./actions"
 import { catalogSchema, type Catalog } from "../schemas/catalog"
 import { parsePublicRead } from "../schemas/public-read"
@@ -471,7 +473,13 @@ export const catalogKind: KindDefinition = {
       catalogKind.tabularSectionColumns !== undefined
     )
     return parsePublicRead((obj as Catalog).publicRead)?.conditional === true
-      ? [...record, publishAction, unpublishAction]
+      ? [
+          ...record.map((a) =>
+            a === markDeletionAction ? unpublishingMarkDeletionAction : a
+          ),
+          publishAction,
+          unpublishAction,
+        ]
       : record
   },
   rightsExtents: ["any", "own", "dimension"],

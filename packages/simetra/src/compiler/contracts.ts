@@ -343,6 +343,8 @@ export interface RightsAction {
   natural: Dml[]
   /** Дія-перехід: фізична колонка й напрям (факт реєстру). */
   transition?: { column: string; from?: boolean; to?: boolean }
+  /** Пов'язана колонка: фізична колонка й її значення після дії (факт реєстру). */
+  coupled?: { column: string; value: boolean }
   extents: RightsExtent[]
 }
 

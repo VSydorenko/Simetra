@@ -7,6 +7,7 @@ import { executeGrants } from "../sql/execute-grants"
 import { hasEmptySearchPath, pinnedSettingProblem } from "../sql/closed-forms"
 import {
   ORG_KIND_ID,
+  REGION_FILE,
   adminRoles,
   commandCoreLayer,
   compileRights,
@@ -484,5 +485,53 @@ describe("обидва стилі: колонка позначки за origin",
           same(s.expressions[0]?.tree, tree("SELECT p_mark"))
       )
     ).toBeDefined()
+  })
+})
+
+// Позначка умовного об'єкта знімає публікацію (Р-D1-10): той самий факт
+// контракту, що й у тригера ефектів, тож стан «після» для права й рядок
+// `UPDATE` однакові.
+describe("умовний publicRead: позначка знімає публікацію в обидва боки", () => {
+  const conditionalRegion = {
+    [REGION_FILE]: { publicRead: { role: "anon", published: true } },
+  }
+  let conditional: CompiledModel
+  beforeAll(async () => {
+    conditional = await compiled(
+      compileRights(
+        policyDomain(writeRoles(), commandCoreLayer(), conditionalRegion)
+      )
+    )
+  })
+  const assignOf = (shape: Shape, column: string, value: string) =>
+    shape.findIndex(
+      (s) =>
+        s.type === "assign" &&
+        same(s.target, { variable: `v_new.${column}` }) &&
+        same(s.expressions[0]?.tree, tree(`SELECT ${value}`))
+    )
+
+  it("v_new і UPDATE ставлять published = false незалежно від p_mark", () => {
+    const shape = bodyShape(markSql(conditional, "region"))
+    const mark = assignOf(shape, "deletion_mark", "p_mark")
+    const published = assignOf(shape, "published", "false")
+    const after = ifAt(
+      shape,
+      rightsIf(conditional, "region", "markDeletion", "v_new", "update")
+    )
+    const update = at(
+      shape,
+      "execsql",
+      "UPDATE public.region SET deletion_mark = p_mark, published = false WHERE id = p_id RETURNING *"
+    )
+    // Право «після» судить стан без публікації — той, що запише `UPDATE`.
+    expectOrder([mark, published, after, update])
+  })
+
+  it("без умови тіло позначки не торкається published", () => {
+    for (const table of ["ticket", "region"]) {
+      const sql = markSql(domain, table)
+      expect(sql, table).not.toContain("published")
+    }
   })
 })
