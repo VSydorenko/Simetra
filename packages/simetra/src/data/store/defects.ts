@@ -126,6 +126,8 @@ export type DefectFlag =
   | "read-bypasses-gate"
   /** As `read-bypasses-gate`, but K3 sends a flight of the test entry, which no gate of a session issued. */
   | "read-bypasses-gate-testing"
+  /** The tail re-read (K3) writes its answer with its own `commit`, without the epoch gate of the settle pass. */
+  | "settle-bypasses-pass"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

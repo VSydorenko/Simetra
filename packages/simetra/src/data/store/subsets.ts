@@ -36,7 +36,7 @@ import {
   type RowViews,
 } from "./snapshot"
 import { ReadLimiterClosed, type StoreSource } from "./source"
-import { isPermit, type Permit } from "./sync/flight"
+import { isPermit, type Flight, type Permit } from "./sync/flight"
 import {
   rulesOf,
   settlePass,
@@ -48,6 +48,7 @@ import type {
   ReadCause,
   ReadTarget,
   ReadWhy,
+  SettleOutcome,
 } from "./sync/vocabulary"
 import type {
   CoreLimits,
@@ -383,9 +384,89 @@ export function requirementHold(
  * the snapshot derives `needsRefresh` from the requirement, and `resume()`
  * reads it.
  */
-export function settleRequirement(s: Subset, readEpoch: number): boolean {
+function settleRequirement(s: Subset, readEpoch: number): boolean {
   liftRequirement(s, readEpoch)
   return requirementPending(s)
+}
+
+/**
+ * Крок 7 проходу осідання (§5.5, Р-SK2-6) — єдиний шов стану цілі-вигляду для
+ * завантаження, сторінки й системного перечитування. Другого тіла немає: лічильник
+ * збоїв і відновлення `status` колись уже розійшлись у двох копіях. Правила —
+ * клітинки виду польоту (`rulesOf`), а не гілки за точкою. Повертає, чи треба
+ * повторити читання (вимога лишилась чи сторінка відхилена); яким повтором —
+ * вирішує шлях. Усі присвоєння `refreshedAt`, `okReadEpoch`, `failures`,
+ * `failedAt` і зняття вимоги — лише тут.
+ *
+ * Завантаження підтверджує весь вигляд: знімає вимогу, а коли вона лишилась,
+ * бо читання стартувало раніше за e, і її ніхто інший не прочитає, — той самий
+ * політ читає ще раз (П15; на прихованій вкладці — `needsRefresh` і читання на
+ * `resume()`). Сторінка підтверджує лише себе: повторюється тільки на власне
+ * відхилення, а чужу вимогу читає механізм, що її поставив (`revalidate`).
+ * Збій читання тут не повторює: його повторює пауза збоїв.
+ */
+export function settleTarget(
+  s: Subset,
+  flight: Flight,
+  outcome: SettleOutcome,
+  failure: { readonly error: unknown } | undefined,
+  context: {
+    /** Збій самого читання, а не дефект застосування: лише він рахує паузу. */
+    readonly readFailed: boolean
+    /** Потрібна лише сторінці: системне перечитування вкладку не судить. */
+    readonly tabHidden?: () => boolean
+  }
+): boolean {
+  const rules = rulesOf(flight)
+  if (outcome === "applied") {
+    const epoch = required(flight.epoch, "its start epoch")
+    if (rules.successMovesDeadline) {
+      // `loaded` ставить лише завантаження: системне перечитування його не
+      // чіпає (R12 перечитує й ТЧ, що не завантажилась).
+      if (rules.confirms === "view-with-composition") s.loaded = true
+      s.refreshedAt = required(flight.startedAt, "its start time")
+      s.okReadEpoch = epoch
+      s.failures = 0
+      s.failedAt = undefined
+    }
+    // Підтверджене завантаженням — весь вигляд готовий; сторінка й системне
+    // читання лише виправляють помилку, яку лишила попередниця.
+    if (rules.confirms === "view-with-composition" || s.status === "error") {
+      s.status = "ready"
+      s.error = undefined
+    }
+    if (rules.liftsBanners) {
+      s.needsRefresh = false
+      s.hasNewRows = false
+    }
+    if (rules.confirms !== "own-page") return settleRequirement(s, epoch)
+    if (
+      s.unconfirmedSince === undefined ||
+      !s.answerRejected ||
+      !(s.visible ?? s.listeners.size > 0)
+    )
+      return false
+    // Прихована вкладка й тут — гілка невидимого (§12, Р8): без запиту;
+    // `needsRefresh` знімок виводить із вимоги, а `resume()` читає вигляд.
+    // Іменована перевірка, наслідок осідання (рішення архітекторки 25.11): вона
+    // судить не читання, а мить зняття позначки сторінки — у цьому `commit`.
+    return !required(context.tabHidden, "its tab check")()
+  }
+  if (outcome === "failed" && failure !== undefined) {
+    // Паузу збоїв рахує лише збій самого читання (для завантаження — вже
+    // завантаженого вигляду): дефект застосування її не веде.
+    if (
+      context.readFailed &&
+      (rules.failureCounts === "always" ||
+        (rules.failureCounts === "if-loaded" && s.loaded))
+    ) {
+      s.failures++
+      s.failedAt = required(flight.startedAt, "its start time")
+    }
+    s.status = "error"
+    s.error = errorOf(failure.error)
+  }
+  return false
 }
 
 /**
@@ -480,39 +561,6 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       s.form.object.sections.get(s.form.spec.owner, s.form.spec.section) !==
         undefined)
 
-  // Склад, не підтверджений з епохи e (§8.4, п. 7). Дві умови повтору — дві
-  // межі підтвердження. Завантаження (`lifts`) підтверджує весь вигляд: воно
-  // знімає вимогу, а коли вимога лишилась, бо читання стартувало раніше
-  // за e, і її ніхто інший не прочитає, той самий політ читає ще раз — хоч
-  // вимогу поставила його власна відповідь (П15), хоч хвиля чи приймач, поки
-  // воно летіло (`settleRequirement`; на прихованій вкладці — `needsRefresh`
-  // і читання на `resume()`). Сторінка `loadAfter` / `loadBefore` підтверджує лише себе: вона
-  // повторюється тільки на власне відхилення (П15), а чужу вимогу
-  // завантаженого вигляду читає механізм, що її поставив (`revalidate`).
-  // Покоління й політ ті самі, тож повтор і далі дія, що його почала (окреме
-  // покоління-хвіст правило стабільності судило б як системне читання, що
-  // змінює склад); невидимого вимога чекає видимості. Межа повторів — умова,
-  // не лічильник: кожна спроба стартує не раніше e, а нову вимогу з
-  // відповіді ставить лише надгробок, новіший за її старт, — їх скінченно.
-  // Збій читання сюди не доходить: його повторює пауза збоїв.
-  function confirm(s: Subset, readEpoch: number, lifts: boolean): boolean {
-    if (!lifts) {
-      if (
-        s.unconfirmedSince === undefined ||
-        !s.answerRejected ||
-        !(s.visible ?? s.listeners.size > 0)
-      )
-        return false
-      // Прихована вкладка й тут — гілка невидимого (§12, Р8): без запиту;
-      // `needsRefresh` знімок виводить із вимоги, а `resume()` читає вигляд.
-      // Іменована перевірка, наслідок осідання (рішення архітекторки 25.11):
-      // вона судить не читання (P3 відкладає шлюз), а мить зняття позначки
-      // сторінки — у цьому `commit`, до сповіщення.
-      return !ctx.tabHidden()
-    }
-    return settleRequirement(s, readEpoch)
-  }
-
   /**
    * Осідання відповіді вигляду чи сторінки одним проходом (§5.5). Спільне для
    * обох точок — тут; відмінності — клітинки виду (`rulesOf`) і гачки `extra`.
@@ -566,47 +614,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       // `sweep`; відмова не стає необробленою.
       applyFailed: (_e, error) => ctx.log({ kind: "listener-failed", error }),
       settleTarget: (f, outcome, _evidence, failure) => {
-        const rules = rulesOf(f)
-        if (outcome === "applied") {
-          if (rules.successMovesDeadline) {
-            s.loaded = true
-            s.refreshedAt = required(f.startedAt, "its start time")
-            s.okReadEpoch = epoch
-            s.failures = 0
-            s.failedAt = undefined
-          }
-          // Підтверджене завантаженням — весь вигляд готовий; сторінка
-          // лише виправляє помилку, яку лишила її попередниця.
-          if (
-            rules.confirms === "view-with-composition" ||
-            s.status === "error"
-          ) {
-            s.status = "ready"
-            s.error = undefined
-          }
-          if (rules.liftsBanners) {
-            s.needsRefresh = false
-            s.hasNewRows = false
-          }
-          verdict.again = confirm(
-            s,
-            epoch,
-            rules.confirms === "view-with-composition"
-          )
-        } else if (outcome === "failed" && failure !== undefined) {
-          // Паузу збоїв рахує лише збій самого читання вже завантаженого
-          // вигляду: дефект застосування її не веде (як на `main`).
-          if (
-            entry.failure !== undefined &&
-            (rules.failureCounts === "always" ||
-              (rules.failureCounts === "if-loaded" && s.loaded))
-          ) {
-            s.failures++
-            s.failedAt = required(f.startedAt, "its start time")
-          }
-          s.status = "error"
-          s.error = errorOf(failure.error)
-        }
+        const again = settleTarget(s, f, outcome, failure, {
+          readFailed: entry.failure !== undefined,
+          tabHidden: ctx.tabHidden,
+        })
+        if (outcome === "applied") verdict.again = again
       },
       sweep: ops.sweep,
       finish: (_e, _outcome, scope) => extra.finish(scope),

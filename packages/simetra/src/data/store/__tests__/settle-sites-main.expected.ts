@@ -453,6 +453,16 @@ export const EXPECTED: Readonly<Record<string, readonly string[]>> = {
     "attempt.settled reread failed (command.unavailable)",
     "lease.release",
   ],
+  "reread applied on a never-loaded section (R12): loaded stays false": [
+    "~ section.rereadEpochs=0",
+    "ops.putSection",
+    "~ section.error=- section.okReadEpoch=set section.refreshedAt=set section.status=ready",
+    "ops.sweep",
+    "flush",
+    "notify lines",
+    "attempt.settled reread applied",
+    "lease.release",
+  ],
   "reread failed: apply throws": [
     "~ full.rereadEpochs=1",
     "attempt.start reread R7",

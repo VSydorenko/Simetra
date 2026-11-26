@@ -45,10 +45,9 @@ import {
 } from "./source"
 import {
   EPOCH_UNAVAILABLE,
-  errorOf,
   queueTrailing,
   required,
-  settleRequirement,
+  settleTarget,
   viewDueAt,
   type Subset,
   type SubsetRegistry,
@@ -1515,41 +1514,13 @@ export async function revalidateViews(
     },
     settleTarget: (flight, outcome, _evidence, failure) => {
       const entry = entryOf.get(flight)!
-      const { s, verdict } = entry
-      const rules = rulesOf(flight)
-      if (outcome === "applied") {
-        if (rules.successMovesDeadline) {
-          s.refreshedAt = required(flight.startedAt, "its start time")
-          s.okReadEpoch = required(flight.epoch, "its start epoch")
-          s.failures = 0
-          s.failedAt = undefined
-        }
-        if (s.status === "error") {
-          s.status = "ready"
-          s.error = undefined
-        }
-        // Успішне системне читання, що стартувало з епохи вимоги, підтверджує
-        // склад: нового рядка воно не ставить у склад, а дає банер (§6.5).
-        // Правило зняття й повтору — те саме, що в завантаження (§8.4, п. 7):
-        // вимога, що лишилась, бо прохід стартував раніше за e, і яку ніхто
-        // інший не прочитає, — ще один прохід тим самим системним шляхом.
-        // Повтор на прихованій вкладці відкладає шлюз (R18, Р-SK1-8).
-        if (settleRequirement(s, required(flight.epoch, "its start epoch")))
-          verdict.again = repeatOf(flight, "R18")
-      } else if (outcome === "failed" && failure !== undefined) {
-        // Паузу збоїв рахує лише збій самого читання: дефект застосування
-        // її не веде (як на `main`).
-        if (
-          entry.failure !== undefined &&
-          (rules.failureCounts === "always" ||
-            (rules.failureCounts === "if-loaded" && s.loaded))
-        ) {
-          s.failures++
-          s.failedAt = required(flight.startedAt, "its start time")
-        }
-        s.status = "error"
-        s.error = errorOf(failure.error)
-      }
+      // Повтор R18: вимога, що лишилась, бо прохід стартував раніше за e, і яку
+      // ніхто інший не прочитає; на прихованій вкладці його відкладає шлюз.
+      const again = settleTarget(entry.s, flight, outcome, failure, {
+        readFailed: entry.failure !== undefined,
+      })
+      if (outcome === "applied" && again)
+        entry.verdict.again = repeatOf(flight, "R18")
     },
     sweep: (scope) => ctx.ops.sweep(scope),
     // Вигляд, що дійшов до відповіді, перемальовується: `dirty` ставить

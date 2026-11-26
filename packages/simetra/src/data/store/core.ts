@@ -1461,11 +1461,31 @@ export function createCore(options: {
             log({ kind: "listener-failed", error }),
         }
       )
+    // Мутація «осідання повз прохід» (самотест, Р-SK2-11): хвіст пише відповідь
+    // власним `commit` без брами епох проходу. Окрема функція, щоб виняток
+    // стража (`settle-guard.test.ts`) стосувався лише цієї гілки.
+    function settleBypassingPass(rows: readonly ServerRow[]) {
+      const readEpoch = required(flight.epoch, "its start epoch")
+      session.commit(
+        (scope) => {
+          for (const row of rows) {
+            if ((o.rows.get(row.key)?.owners ?? 0) > 0)
+              ops.put(scope, o, row, readEpoch, false)
+          }
+        },
+        token,
+        `tail ${o.name}`
+      )
+      flight.lease?.release()
+    }
     readKeys(read.source, o.entry, keys, {
       keysPerRequest: limits.keysPerRequest,
     })
       .then(
-        (rows) => settleTail(rows),
+        (rows) =>
+          defects.has("settle-bypasses-pass")
+            ? settleBypassingPass(rows)
+            : settleTail(rows),
         () => settleTail(undefined)
       )
       .finally(() => {
