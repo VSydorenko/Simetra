@@ -6,13 +6,23 @@ import { REREAD_TIMEOUT_MS } from "../writer"
 import type { ViewHandle, ViewSpec } from "../types"
 import type { FakeRead } from "../testing/fake-source"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
-import { channelTopic } from "simetra/model"
-import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
+import {
+  channelTopic,
+  type CatalogEntry,
+  type RightsSnapshot,
+} from "simetra/model"
+import {
+  SCOPE_KIND_ID,
+  catalogEntrySection,
+  catalogRights,
+} from "../../../model/runtime/__tests__/entries"
 import {
   S,
   TASK,
   key,
   keysOf,
+  org,
+  ORG,
   seed,
   settle,
   setup,
@@ -524,6 +534,40 @@ const BANNERS: Record<string, Scenario> = {
   },
 }
 
+/** Каталог із другою ТЧ власника й знімок прав на два скоупи (бар'єр R12). */
+const WITH_NOTES: CatalogEntry = {
+  ...task,
+  rights: catalogRights(),
+  tabularSections: [
+    ...task.tabularSections,
+    catalogEntrySection({
+      id: "notes",
+      name: "notes",
+      table: { schema: "public", name: "task_notes" },
+    }),
+  ],
+}
+const OTHER_SCOPE = "00000000-0000-4000-8000-0000000000b2"
+const BOTH_SCOPES: RightsSnapshot = {
+  userId: "00000000-0000-4000-8000-0000000000a1",
+  scopeSets: [S, OTHER_SCOPE].map((scope) => ({
+    scopeKind: SCOPE_KIND_ID,
+    scope,
+  })),
+  rights: [S, OTHER_SCOPE].map((scope) => ({
+    level: "scope" as const,
+    levelId: null,
+    scope,
+    container: null,
+    object: "task",
+    action: "read" as const,
+    extent: "any" as const,
+    dimensionId: null,
+  })),
+  members: [],
+  dimensionValues: [],
+}
+
 /** Системне перечитування (`writer.ts::revalidateViews`, R3/R16/R17/R18). */
 const REREAD: Record<string, Scenario> = {
   "reread applied": async () => {
@@ -603,6 +647,55 @@ const REREAD: Record<string, Scenario> = {
       await settle()
       h.fake.hold = undefined
       h.fake.take().fail("command.unavailable")
+      await settle()
+      return log(rec)
+    },
+  "reread failed: read refused on a section that never loaded (R12)":
+    async () => {
+      // Системне перечитування бачить вигляд, що жодного разу не завантажився:
+      // ТЧ, чий власний перший політ відмовив, а бар'єр знімка прав сусідньої
+      // ТЧ того самого власника перечитує обох (R12). Збій такого читання
+      // рахує паузу збоїв — клітинка reread «завжди», а не «якщо завантажено».
+      const h = setup({
+        now: () => Date.now(),
+        rightsSnapshot: true,
+        objects: [WITH_NOTES, org],
+        mode: "manual",
+        limits: { revalidateIntervalMs: 10_000_000 },
+      })
+      h.fake.rightsSnapshot = BOTH_SCOPES
+      h.fake.rightsVersion = "1".padStart(64, "0")
+      h.core.requestRights()
+      await settle()
+      seed(h.fake, 1, 1)
+      const lines = [{ ref: key(901), qty: 1, lineNumber: 1 }]
+      h.fake.setLines(TASK, key(1), "lines", lines)
+      h.fake.setLines(TASK, key(1), "notes", lines)
+      const rec = record(h)
+      const section = (name: string): ViewSpec => ({
+        kind: "section",
+        object: TASK,
+        owner: key(1),
+        section: name,
+      })
+      const named = (name: string) => (read: FakeRead) =>
+        (read.query as { tabularSection?: string } | undefined)
+          ?.tabularSection === name
+      rec.watch(h.core.view(section("lines")), "lines")
+      await settle()
+      h.fake.take(named("lines")).fail("command.unavailable")
+      await settle()
+      rec.watch(h.core.view(section("notes")), "notes")
+      await settle()
+      h.fake.rightsVersion = "2".padStart(64, "0")
+      h.core.requestRights()
+      await settle()
+      // Читання `notes` стартувало до нового знімка й осідає після нього:
+      // бар'єр відкидає відповідь і перечитує `lines`, яке не летить.
+      h.fake.take(named("notes")).answer()
+      await settle()
+      rec.mark()
+      h.fake.take(named("lines")).fail("command.unavailable")
       await settle()
       return log(rec)
     },
@@ -750,6 +843,33 @@ const WRITE_CONFIRM: Record<string, Scenario> = {
     await settle()
     return log(rec)
   },
+  "write-confirm apply throws": async () => {
+    // Запис відповідає без рядків: ключ перечитується, запитувач чекає наслідку.
+    const { h, rec } = await loadedRig(FULL, 3, {
+      epoch: "e".repeat(64),
+      server: (fake) => ({
+        ...fake.server,
+        run: async (request) => {
+          const answer = {
+            ...((await fake.server.run(request)) as Record<string, unknown>),
+          }
+          delete answer.rows
+          return answer
+        },
+      }),
+    })
+    h.fake.hold = (read) => isKeysRead(read)
+    let settled = false
+    void h.core
+      .update(TASK, key(1), { title: "x" }, { expectedVersion: 1 })
+      .settled.then(() => (settled = true))
+    await settle()
+    throwOnPut(h)
+    h.fake.hold = undefined
+    h.fake.take().answer()
+    await settle()
+    return [...log(rec), `requester ${settled ? "told" : "waiting"}`]
+  },
   "write-confirm closed: the answer arrives after close": async () => {
     const { h, rec } = await loadedRig()
     h.fake.hold = () => true
@@ -791,6 +911,17 @@ const TAIL: Record<string, Scenario> = {
     await settle()
     h.fake.hold = undefined
     h.fake.take().fail("command.unavailable")
+    await settle()
+    return log(rec)
+  },
+  "tail apply throws": async () => {
+    const { h, rec } = await loadedRig()
+    h.fake.hold = () => true
+    hide(h)
+    await settle()
+    throwOnPut(h)
+    h.fake.hold = undefined
+    h.fake.take().answer()
     await settle()
     return log(rec)
   },
@@ -909,6 +1040,78 @@ const RECEIVER: Record<string, Scenario> = {
       await settle()
       return log(rec)
     },
+  "signal read apply throws": async () => {
+    const { h, rec, transport } = await signalCore(KEYS12, 3)
+    const version = h.fake.edit(TASK, key(1), { title: "new" })
+    throwOnPut(h)
+    transport.emit(CHANNEL, change(key(1), version))
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    return log(rec)
+  },
+  "signal batch of two objects: apply throws": async () => {
+    // Пачка з двох об'єктів (задачі й організації); застосування кидає, а
+    // друга пачка сигналів приходить, поки перша ще тримає single-flight.
+    const transport = createFakeSignalTransport()
+    const h = setup({
+      now: () => Date.now(),
+      limits: { revalidateIntervalMs: 10_000_000 },
+      signals: transport,
+      rightsSnapshot: true,
+    })
+    grantRead(h)
+    h.fake.rightsSnapshot = {
+      ...h.fake.rightsSnapshot!,
+      rights: [
+        ...h.fake.rightsSnapshot!.rights,
+        ...h.fake.rightsSnapshot!.rights.map((r) => ({
+          ...r,
+          object: "organization",
+        })),
+      ],
+    }
+    seed(h.fake, 1, 3)
+    h.fake.insert(ORG, { ref: S })
+    const orgChannel = channelTopic({
+      kind: "changes",
+      scopeKindId: SCOPE_KIND_ID,
+      scope: S,
+      object: org.id,
+    })
+    const tasks = h.core.view(KEYS12)
+    tasks.subscribe(() => {})
+    h.core.view({ kind: "keys", object: ORG, keys: [S] }).subscribe(() => {})
+    await settle()
+    const rec = record(h)
+    rec.watch(tasks, "keys")
+    rec.mark()
+    const heldOrg = (read: FakeRead) =>
+      read.query?.object.name === "Organization"
+    const taskVersion = h.fake.edit(TASK, key(1), { title: "new" })
+    const orgVersion = h.fake.edit(ORG, S, { name: "renamed" })
+    h.fake.hold = heldOrg
+    throwOnPut(h)
+    transport.emit(CHANNEL, change(key(1), taskVersion))
+    transport.emit(orgChannel, {
+      id: "org-1",
+      object: org.id,
+      op: "update",
+      keys: { ref: S },
+      row_ver: orgVersion,
+    })
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    rec.note("second signal")
+    const second = h.fake.edit(TASK, key(2), { title: "second" })
+    transport.emit(CHANNEL, change(key(2), second))
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    rec.note("org read released")
+    h.fake.hold = undefined
+    h.fake.deliverAll()
+    await settle()
+    return log(rec)
+  },
   "signal read discarded by epoch": async () => {
     const { h, rec, transport } = await signalCore(KEYS12, 3)
     h.fake.epoch = EA
@@ -1100,6 +1303,179 @@ const MATRIX: Record<string, Record<SettleOutcome, string>> = {
   },
 }
 
+/*
+ * Збій застосування відповіді ключів (виняток у `put`): що було на `main` і що
+ * стало (рішення архітекторки: виняток осідає як звичайна відповідь). Записи
+ * «було» зняті з `main` (scratch-дерево, до міграції точок); тест стверджує
+ * «стає» (`EXPECTED`) і те, що воно відрізняється від «було» саме так.
+ */
+const MAIN_APPLY_THROWS: Record<string, readonly string[]> = {
+  // Запитувач чекав строку: виняток вилітав з області запису.
+  "write-confirm apply throws": [
+    "ops.sweep",
+    "flush",
+    "notify full",
+    "read keys K4/write-confirm",
+    "flush",
+    "lease.release",
+    "log listener-failed",
+    "requester waiting",
+  ],
+  // Виняток відхиляв проміс хвоста без запису в журнал.
+  "tail apply throws": [
+    "~ row1=hidden",
+    "ops.sweep",
+    "log horizon-hidden",
+    "flush",
+    "notify full",
+    "read keys K3/row-unfinished",
+    "flush",
+    "lease.release",
+  ],
+  // Виняток відхиляв `land`: журнал після зняття оренди.
+  // Пачка з двох об'єктів: читання ключів і перечитання організації йдуть
+  // одним запитом джерела, тож сусіда не втримати окремо від відповіді, що
+  // кидає; різниця з `main` — місце запису `listener-failed` (там — після
+  // зняття оренди, коли відхилення проміса дійшло до `catch` пачки).
+  "signal batch of two objects: apply throws": [
+    "~ keys2.rereadEpochs=1",
+    "attempt.start reread R8",
+    "~ keys2.unconfirmedSince=set",
+    "log revalidate-burst",
+    "ops.sweep",
+    "flush",
+    "read keys K1/signal",
+    "read view R8/signal",
+    "second signal",
+    "org read released",
+    "ops.sweep",
+    "flush",
+    "lease.release",
+    "~ keys2.rereadEpochs=0",
+    "ops.put",
+    "~ keys2.unconfirmedSince=-",
+    "ops.sweep",
+    "flush",
+    "attempt.settled reread applied",
+    "lease.release",
+    "log listener-failed",
+    "log revalidate-burst",
+    "read keys K1/signal",
+    "ops.put",
+    "ops.sweep",
+    "flush",
+    "notify keys",
+    "lease.release",
+  ],
+  "signal read apply throws": [
+    "log revalidate-burst",
+    "read keys K1/signal",
+    "ops.sweep",
+    "flush",
+    "lease.release",
+    "log listener-failed",
+  ],
+}
+
+describe("keys apply throws: main versus the accepted exception path", () => {
+  const was = (name: string) => MAIN_APPLY_THROWS[name]!
+  const now = (name: string) => EXPECTED[name]!
+  const count = (lines: readonly string[], line: string) =>
+    lines.filter((l) => l === line).length
+
+  it("K4: the requester is told at once, not left to the deadline", () => {
+    const name = "write-confirm apply throws"
+    expect(was(name).at(-1)).toBe("requester waiting")
+    expect(now(name).at(-1)).toBe("requester told")
+  })
+
+  it("K3: the exception is logged, main logged nothing", () => {
+    const name = "tail apply throws"
+    expect(count(was(name), "log listener-failed")).toBe(0)
+    expect(count(now(name), "log listener-failed")).toBe(1)
+  })
+
+  it("receiver: the log is in the write region, main logged it after the lease release", () => {
+    const name = "signal read apply throws"
+    const position = (lines: readonly string[]) => ({
+      log: lines.indexOf("log listener-failed"),
+      release: lines.indexOf("lease.release"),
+    })
+    expect(position(was(name)).log).toBeGreaterThan(position(was(name)).release)
+    expect(position(now(name)).log).toBeLessThan(position(now(name)).release)
+  })
+
+  it("receiver batch of two objects: the log moved the same way", () => {
+    const name = "signal batch of two objects: apply throws"
+    const first = (lines: readonly string[]) =>
+      lines.indexOf("log listener-failed") - lines.indexOf("lease.release")
+    expect(first(was(name))).toBeGreaterThan(0)
+    expect(first(now(name))).toBeLessThan(0)
+  })
+})
+
+/*
+ * Таблиця як у §5.5. Виведені перевірки нижче згортають значення, яких жоден
+ * код не розрізняє (`confirms` view-stable проти rows, `failureCounts` never
+ * проти by-reason), тож таблицю прикріплено до тексту спеки літералом тут.
+ */
+describe("the kind table as in §5.5", () => {
+  it("is pinned literally", () => {
+    expect(FLIGHT_KIND_RULES).toEqual({
+      load: {
+        reasons: ["mount", "user", "retry", "requirement"],
+        confirms: "view-with-composition",
+        successMovesDeadline: true,
+        failureCounts: "if-loaded",
+        liftsBanners: true,
+        setsBanners: false,
+        discarded: "pause-then-retry",
+      },
+      page: {
+        reasons: ["user", "retry"],
+        confirms: "own-page",
+        successMovesDeadline: false,
+        failureCounts: "never",
+        liftsBanners: false,
+        setsBanners: false,
+        discarded: "pause-then-retry",
+      },
+      reread: {
+        reasons: ["requirement", "interval", "retry", "user", "signal"],
+        confirms: "view-stable",
+        successMovesDeadline: true,
+        failureCounts: "always",
+        liftsBanners: false,
+        setsBanners: true,
+        discarded: "pause-then-deadline",
+      },
+      keys: {
+        reasons: ["signal", "requirement", "write-confirm"],
+        confirms: "rows",
+        successMovesDeadline: false,
+        failureCounts: "by-reason",
+        liftsBanners: false,
+        setsBanners: false,
+        discarded: "nothing",
+      },
+      service: {
+        reasons: ["requirement", "interval"],
+        confirms: "service",
+        successMovesDeadline: true,
+        failureCounts: "never",
+        liftsBanners: null,
+        setsBanners: false,
+        discarded: "none",
+      },
+    })
+    expect(KEYS_FAILURE).toEqual({
+      signal: "composition-unconfirmed",
+      requirement: "requirement-budget",
+      "write-confirm": "reply-to-requester",
+    })
+  })
+})
+
 describe("settle points on main: the point × outcome table", () => {
   it("has a cell for every point and every outcome of the closed list", () => {
     for (const [point, cells] of Object.entries(MATRIX))
@@ -1141,66 +1517,75 @@ describe("the kind table against the recorded behaviour of main", () => {
     lines(name).some((line) => pattern.test(line))
   const R = FLIGHT_KIND_RULES
 
-  it("failureCounts: the pause counts for a loaded view only (load), never (page), always (reread)", () => {
-    expect([
-      R.load.failureCounts,
-      R.page.failureCounts,
-      R.reread.failureCounts,
-    ]).toEqual(["if-loaded", "never", "always"])
+  it("failureCounts: the cells of load and page say what main recorded, reread says always", () => {
+    // Клітинки, які читають точки завантаження й сторінки, — з клітинки, а не
+    // з копії: запис `main` незмінний, тож зміна клітинки червонить і тест.
+    const countsFor = (cell: typeof R.load.failureCounts, loaded: boolean) =>
+      cell === "always" || (cell === "if-loaded" && loaded)
     expect(has("load failed: read refused, view loaded", /failures=1/)).toBe(
-      true
+      countsFor(R.load.failureCounts, true)
     )
     expect(
       has("load failed: read refused, view never loaded", /failures=/)
-    ).toBe(false)
-    expect(has("page failed: read refused", /failures=/)).toBe(false)
+    ).toBe(countsFor(R.load.failureCounts, false))
+    expect(has("page failed: read refused", /failures=/)).toBe(
+      countsFor(R.page.failureCounts, true)
+    )
     expect(
       has(
         "reread failed: read refused (the pause counts for a loaded view)",
         /failures=1/
       )
-    ).toBe(true)
+    ).toBe(countsFor(R.reread.failureCounts, true))
+    // Вигляд, що жодного разу не завантажився (ТЧ, яку перечитує бар'єр R12):
+    // збій його перечитування теж рахує паузу збоїв.
+    expect(
+      has(
+        "reread failed: read refused on a section that never loaded (R12)",
+        /failures=1/
+      )
+    ).toBe(countsFor(R.reread.failureCounts, false))
   })
 
   it("liftsBanners and setsBanners: load lifts, page and reread leave, only reread sets", () => {
-    expect([
-      R.load.liftsBanners,
-      R.page.liftsBanners,
-      R.reread.liftsBanners,
-    ]).toEqual([true, false, false])
-    expect(has("load applied lifts the banners", /hasNewRows=false/)).toBe(true)
+    expect(has("load applied lifts the banners", /hasNewRows=false/)).toBe(
+      R.load.liftsBanners
+    )
     expect(has("page applied leaves the banners", /hasNewRows=false/)).toBe(
-      false
+      R.page.liftsBanners
     )
     expect(has("reread applied leaves the banners", /hasNewRows=false/)).toBe(
-      false
+      R.reread.liftsBanners
     )
-    expect([
-      R.load.setsBanners,
-      R.page.setsBanners,
-      R.reread.setsBanners,
-    ]).toEqual([false, false, true])
+    // Банери ставить лише системне перечитування, і його точка читає клітинку.
+    expect([R.load.setsBanners, R.page.setsBanners]).toEqual([false, false])
     expect(
       has(
         "reread after a purge of the object: barrier, R16 again",
         /hasNewRows=true/
       )
-    ).toBe(true)
+    ).toBe(R.reread.setsBanners)
     for (const name of Object.keys(EXPECTED))
       if (name.startsWith("load ") || name.startsWith("page "))
         expect(has(name, /hasNewRows=true/), name).toBe(false)
   })
 
   it("confirms: load and page write their composition, reread does not; a page keeps the requirement", () => {
-    expect([
-      R.load.confirms,
-      R.page.confirms,
-      R.reread.confirms,
-      R.keys.confirms,
-    ]).toEqual(["view-with-composition", "own-page", "view-stable", "rows"])
-    expect(has("load applied", /^ops\.own/)).toBe(true)
-    expect(has("reread applied", /^ops\.own/)).toBe(false)
-    expect(has("tail read", /^ops\.own/)).toBe(false)
+    expect(has("load applied", /^ops\.own/)).toBe(
+      R.load.confirms === "view-with-composition"
+    )
+    // Сторінка теж пише рядки (`ops.own`), але лише власні.
+    expect(has("page applied", /^ops\.own/)).toBe(
+      R.page.confirms === "own-page"
+    )
+    // Ключі підтверджують рядки: хвіст пише рядок, а не склад вигляду.
+    expect(has("tail read", /^ops\.put/)).toBe(R.keys.confirms === "rows")
+    expect(has("tail read", /^ops\.own/)).toBe(
+      R.keys.confirms === "view-with-composition"
+    )
+    expect(has("reread applied", /^ops\.own/)).toBe(
+      R.reread.confirms === "view-with-composition"
+    )
     // Завантаження знімає вимогу власним польотом, сторінка — лише читанням,
     // яке вона викликає після себе.
     const own = lines(
@@ -1218,70 +1603,70 @@ describe("the kind table against the recorded behaviour of main", () => {
   })
 
   it("discarded: load and page pause then retry, reread moves the object deadline, keys do nothing", () => {
-    expect([
-      R.load.discarded,
-      R.page.discarded,
-      R.reread.discarded,
-      R.keys.discarded,
-    ]).toEqual([
-      "pause-then-retry",
-      "pause-then-retry",
-      "pause-then-deadline",
-      "nothing",
-    ])
+    // Ключі: відкинута відповідь не пише й не ставить повтору.
+    const silent = (name: string) =>
+      !lines(name).some((l) =>
+        /^(ops\.put|scheduled|attempt\.start)/.test(l)
+      ) && lines(name).filter((l) => l.startsWith("read ")).length === 1
+    expect(silent("tail discarded by epoch")).toBe(
+      R.keys.discarded === "nothing"
+    )
     expect(
       has("load discarded by epoch, pause, then M8", /^attempt\.start load M8/)
-    ).toBe(true)
+    ).toBe(R.load.discarded === "pause-then-retry")
     expect(
       has("page discarded by epoch, pause, then P2", /^attempt\.start page P2/)
-    ).toBe(true)
+    ).toBe(R.page.discarded === "pause-then-retry")
     const reread = lines(
       "reread discarded by epoch: pause in the object deadline, then retry"
     )
-    expect(reread).toContain("scheduled Catalog.Task")
+    const deadline = R.reread.discarded === "pause-then-deadline"
+    expect(reread.includes("scheduled Catalog.Task")).toBe(deadline)
     expect(reread.some((l) => l.startsWith("attempt.start reread R3"))).toBe(
-      true
+      deadline
     )
     // Одне читання хвоста й жодного повтору після відкинутої відповіді.
     expect(
       lines("tail discarded by epoch").filter((l) => l.startsWith("read "))
     ).toHaveLength(1)
-    expect(keysDiscarded("signal")).toBe("nothing")
-    expect(keysDiscarded("requirement")).toBe("nothing")
+    expect(silent("signal read discarded by epoch")).toBe(
+      keysDiscarded("signal") === "nothing"
+    )
+    expect(silent("tail discarded by epoch")).toBe(
+      keysDiscarded("requirement") === "nothing"
+    )
   })
 
   it("keys failure by reason: signal and K2 mark the views, the tail marks nothing", () => {
-    expect(KEYS_FAILURE.signal).toBe("composition-unconfirmed")
-    expect(KEYS_FAILURE.requirement).toBe("requirement-budget")
-    expect(
+    const marks = (name: string) =>
       has(
-        "signal read failed: refused (needsRefresh and the composition mark)",
-        /needsRefresh=true/
+        name,
+        /needsRefresh=true.*unconfirmedSince|unconfirmedSince.*needsRefresh=true/
       )
-    ).toBe(true)
     expect(
-      has(
-        "tail failed: read refused (no retry)",
-        /needsRefresh|unconfirmedSince/
+      marks(
+        "signal read failed: refused (needsRefresh and the composition mark)"
       )
-    ).toBe(false)
+    ).toBe(KEYS_FAILURE.signal === "composition-unconfirmed")
+    expect(marks("tail failed: read refused (no retry)")).toBe(
+      KEYS_FAILURE.requirement === "composition-unconfirmed"
+    )
     // K2 — перевизначення: збій як K1, а повтор іде після області запису.
     expect(Object.keys(SITE_OVERRIDES)).toEqual(["K2"])
-    expect(keysFailureOf("K2", "requirement")).toBe("composition-unconfirmed")
-    expect(keysFailureOf("K3", "requirement")).toBe("requirement-budget")
-    expect(
-      has(
-        "min-version retry read refused (K2 fails like K1)",
-        /needsRefresh=true/
-      )
-    ).toBe(true)
-    expect(SITE_OVERRIDES.K2?.schedulesRetryAfterCommit).toBe(true)
+    expect(marks("min-version retry read refused (K2 fails like K1)")).toBe(
+      keysFailureOf("K2", "requirement") === "composition-unconfirmed"
+    )
+    // K3 — хвіст: його збій читає правило причини, а не перевизначення.
+    expect(keysFailureOf("K3", "requirement")).toBe(KEYS_FAILURE.requirement)
+    expect(keysFailureOf("K1", "signal")).toBe(KEYS_FAILURE.signal)
     const retry = lines(
       "signal read with a version below the promised one: min-version retry after the region"
     )
+    // Повтор K2 іде гачком після області запису (клітинка перевизначення).
     expect(
-      retry.findIndex((l) => l.startsWith("read keys K2"))
-    ).toBeGreaterThan(retry.indexOf("flush"))
+      retry.findIndex((l) => l.startsWith("read keys K2")) >
+        retry.indexOf("flush")
+    ).toBe(SITE_OVERRIDES.K2?.schedulesRetryAfterCommit)
   })
 
   it("reasons: every read of the recordings carries a reason of its kind", () => {
@@ -1324,11 +1709,11 @@ describe("the kind table against the recorded behaviour of main", () => {
    *   сценарії.
    */
   it("moves of the deadline: load moves it, page does not", () => {
-    expect([R.load.successMovesDeadline, R.page.successMovesDeadline]).toEqual([
-      true,
-      false,
-    ])
-    expect(has("load applied", /refreshedAt=set/)).toBe(true)
-    expect(has("page applied", /refreshedAt=set/)).toBe(false)
+    expect(has("load applied", /refreshedAt=set/)).toBe(
+      R.load.successMovesDeadline
+    )
+    expect(has("page applied", /refreshedAt=set/)).toBe(
+      R.page.successMovesDeadline
+    )
   })
 })

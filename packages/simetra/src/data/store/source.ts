@@ -276,7 +276,7 @@ export interface StoreSource extends Omit<CoreSource, "read"> {
   readonly admit: Gate["admit"]
   /** The settle consequence past the discard limit, asked of the gate. */
   readonly settledPastBound: Gate["settledPastBound"]
-  /** A new write lease for one flight; only {@link settle} releases it. */
+  /** A new write lease for one flight; only the settle pass releases it. */
   lease(): WriteLease
 }
 
@@ -306,26 +306,12 @@ export function bound(source: StoreSource, flight: Flight): BoundSource {
  * The write lease of one flight (P4-B spec §8.4, rule 2): the source issues
  * it at dispatch, by the parts of each read, for every object whose rows the
  * answer may write; the entry of a released channel of such an object is
- * kept while the lease exists. Released once, by {@link settle}.
+ * kept while the lease exists. Released once, by the settle pass
+ * (`sync/settle-pass.ts`, step 9).
  */
 export interface WriteLease {
   issue(objects: ReadonlySet<ObjectName>): void
   release(): void
-}
-
-/**
- * The one settle point of a flight: `apply` writes its answer by one
- * `commit` (or discards it), then the write lease is released — also when
- * `apply` throws. This is step 9 of the settle pass (`sync/settle-pass.ts`,
- * which releases the leases of its flights itself); the points that have not
- * moved onto the pass yet keep calling it, and the last one to move deletes it.
- */
-export function settle(lease: WriteLease, apply: () => void): void {
-  try {
-    apply()
-  } finally {
-    lease.release()
-  }
 }
 
 /**

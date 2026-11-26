@@ -9,6 +9,7 @@ import type {
   ReadCause,
   ReadTarget,
   ReadWhy,
+  SettleOutcome,
   SiteCode,
   TestSite,
 } from "./vocabulary"
@@ -22,6 +23,12 @@ import type {
  */
 
 declare const FLIGHT: unique symbol
+
+/** `gen` вигляду й номер його польоту на старті системного перечитування. */
+export interface LoadsAtStart {
+  readonly gen: number
+  readonly flight: number | undefined
+}
 
 /** Причина, ціль і код рядка: усе, що бачить подія `watchReads`. */
 export type ReadRecord = ReadCause & {
@@ -56,6 +63,12 @@ export type Flight = ReadRecord & {
    * їх бере (системне перечитування); для решти purge діє через токен.
    */
   readonly purgeBarrier?: ReadonlyMap<string, number>
+  /**
+   * Покоління й політ власного завантаження вигляду на старті (лише системне
+   * перечитування): завантаження, що стартувало чи осіло після старту,
+   * свіжіше за це перечитування, і його відповідь пропускають.
+   */
+  readonly loadsAtStart?: LoadsAtStart
   /** Лише `write-confirm`: зворотний виклик запитувача в `commit` осідання. */
   readonly requester?: (outcome: RereadOutcome, scope: Scope) => void
   /** Лише `write-confirm`: межа часу (`REREAD_TIMEOUT_MS`), мс від старту. */
@@ -78,14 +91,42 @@ export type RereadOutcome =
   | { readonly kind: "read"; readonly row: ServerRow | undefined }
   | { readonly kind: "failed" | "discarded" }
 
+/**
+ * Наслідок читання ключа з наслідку проходу: `applied` — `read` (рядок ключа
+ * дає шлях), `discarded-by-epoch` — `discarded`, `failed` — `failed`. Інші
+ * наслідки (`closed`, `evicted`, `after-purge`) запитувачу не віддаються: або
+ * області запису не було, або вона не дійшла до відповіді.
+ */
+export function rereadOutcomeOf(
+  outcome: SettleOutcome,
+  row: ServerRow | undefined
+): RereadOutcome | undefined {
+  switch (outcome) {
+    case "applied":
+      return { kind: "read", row }
+    case "discarded-by-epoch":
+      return { kind: "discarded" }
+    case "failed":
+      return { kind: "failed" }
+    default:
+      return undefined
+  }
+}
+
 /** Те, що шлях додає до польоту, крім причини, цілі й коду. */
 export interface FlightExtras {
+  /**
+   * Епоха старту підробленого польоту самотесту: шлюз його не видавав, тож
+   * епохи йому не ставив. Видані шлюзом польоти беруть її з допуску.
+   */
+  readonly epoch?: number
   readonly attempt?: number
   readonly caller?: Subset
   readonly lease?: WriteLease
   readonly kind?: FlightKind
   readonly token?: GenerationToken
   readonly purgeBarrier?: ReadonlyMap<string, number>
+  readonly loadsAtStart?: LoadsAtStart
   readonly requester?: (outcome: RereadOutcome, scope: Scope) => void
   readonly deadlineMs?: number
   readonly done?: { fired: boolean }

@@ -115,7 +115,7 @@ export interface ReaderContextBase {
 }
 
 /**
- * What the readers of one flight see: the source already carries the flight (`gated`), so a reader cannot read without one.
+ * What the readers of one flight see: the source already carries the flight (`readGated`), so a reader cannot read without one.
  */
 export interface ReaderContext extends ReaderContextBase {
   readonly source: BoundSource
@@ -126,7 +126,7 @@ export interface ReaderHost extends ReaderContextBase {
   readonly source: StoreSource
 }
 
-/** `C` over another source: the context a flight's readers get from {@link gated}. */
+/** `C` over another source: the context a flight's readers get from {@link readGated}. */
 export type WithSource<C, S> = Omit<C, "source"> & { readonly source: S }
 
 /** The part of a subset a reader's `apply` writes. */
@@ -186,29 +186,25 @@ export interface ReaderTarget {
 export type Write = (scope: Scope) => void
 
 /**
- * Applies a read result inside one `commit`; `false` — the session discarded
- * an epoch of the answer (P4-B spec §6.2) and nothing was written.
+ * The answer of one flight before the session judged it: the epochs of its
+ * parts and the write it prepared. The settle pass judges the epochs (step 4)
+ * and runs the write (step 5), so a point that settles through the pass
+ * reads through {@link readGated}.
  */
-export type Apply = (scope: Scope) => boolean
+export interface GatedRead {
+  readonly epochs: ReadonlySet<string | null>
+  readonly write: Write
+}
 
-/**
- * Runs `read` over a source that records the epoch of every answer; the
- * returned `Apply` writes only after the session accepted each of them and
- * none is abandoned (`acceptEpochs` — the single check before a write).
- */
-export async function gated<C extends ReaderHost>(
+/** Runs `read` over a source that records the epoch of every answer. */
+export async function readGated<C extends ReaderHost>(
   ctx: C,
-  readEpoch: number,
   read: (ctx: WithSource<C, BoundSource>) => Promise<Write>,
   flight: Flight
-): Promise<Apply> {
+): Promise<GatedRead> {
   const { source, epochs } = tracked(ctx.source, flight)
   const write = await read({ ...ctx, source })
-  return (scope) => {
-    if (ctx.session.acceptEpochs(epochs, readEpoch) === "discard") return false
-    write(scope)
-    return true
-  }
+  return { epochs, write }
 }
 
 function lineOf(
@@ -1082,8 +1078,8 @@ async function readSection(
 }
 
 /**
- * Reads the form of `s`; the result is applied by one `commit`, gated by the
- * epochs of its answers. A multi-request read stops once `token` is invalid.
+ * Reads the form of `s`; the answer is written by the settle pass after its
+ * epochs are judged. A multi-request read stops once `token` is invalid.
  */
 export function readForm(
   ctx: ReaderHost,
@@ -1091,13 +1087,8 @@ export function readForm(
   readEpoch: number,
   token: GenerationToken,
   flight: Flight
-): Promise<Apply> {
-  return gated(
-    ctx,
-    readEpoch,
-    (c) => readFormWrite(c, s, readEpoch, token),
-    flight
-  )
+): Promise<GatedRead> {
+  return readGated(ctx, (c) => readFormWrite(c, s, readEpoch, token), flight)
 }
 
 /** {@link readForm} without the epoch gate: the caller gates the whole read. */
