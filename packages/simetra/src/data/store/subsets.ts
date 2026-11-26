@@ -418,10 +418,12 @@ export function settleTarget(
   }
 ): boolean {
   const rules = rulesOf(flight)
-  const epoch = required(flight.epoch, "its start epoch")
   if (outcome === "applied") {
+    const epoch = required(flight.epoch, "its start epoch")
     if (rules.successMovesDeadline) {
-      s.loaded = true
+      // `loaded` ставить лише завантаження: системне перечитування його не
+      // чіпає (R12 перечитує й ТЧ, що не завантажилась).
+      if (rules.confirms === "view-with-composition") s.loaded = true
       s.refreshedAt = required(flight.startedAt, "its start time")
       s.okReadEpoch = epoch
       s.failures = 0
