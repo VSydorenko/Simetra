@@ -19,7 +19,7 @@ import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 import type { ParsedObject } from "./stages/files"
-import { findStandardColumn } from "./standard-column"
+import { findStandardColumn, standardColumn } from "./standard-column"
 import { sqlLiteral } from "./stages/model"
 
 const ROW_LABEL = "simetra_language"
@@ -77,9 +77,6 @@ export function languageStateTables(
     if (kind.languagesCatalog?.(object.data) !== true) continue
     const state = kind.languageState?.(object.data)
     if (state === undefined) continue
-    // Довідник без колонки ролі (`codeLength: 0`) уже відмовляє правило
-    // `languages.code-form` стадії цілісності; ця функція кличеться раніше
-    // (`derivedFunctions`), тож такої таблиці не будує, а не падає.
     const defs = kind.standardColumns(object.data)
     const column = (logicalName: string) => {
       const def = defs.find((d) => d.logicalName === logicalName)
@@ -87,22 +84,26 @@ export function languageStateTables(
         ? undefined
         : findStandardColumn(table, def, attributeCase)?.name
     }
-    const columns = {
-      state: column(state.stateColumn),
-      primary: column(state.primaryColumn),
-      code: column(state.codeColumn),
-      mark: findStandardColumn(table, deletionMarkColumn(), attributeCase)
-        ?.name,
+    const required = (logicalName: string) => {
+      const name = column(logicalName)
+      if (name === undefined)
+        throw new Error(
+          `internal: ${object.name} has no standard column ${logicalName}`
+        )
+      return name
     }
-    const { state: s, primary, code, mark } = columns
-    if (
-      s === undefined ||
-      primary === undefined ||
-      code === undefined ||
-      mark === undefined
-    )
-      continue
-    result.push({ table, state, columns: { state: s, primary, code, mark } })
+    // Законно відсутня лише колонка коду (`codeLength: 0`): таку форму
+    // відмовляє правило `languages.code-form` стадії цілісності, а ця функція
+    // кличеться раніше (`derivedFunctions`), тож таблиці не будує, а не падає.
+    // Решта колонок ролі є завжди — їхня відсутність є дефектом реєстру.
+    const code = column(state.codeColumn)
+    const columns = {
+      state: required(state.stateColumn),
+      primary: required(state.primaryColumn),
+      mark: standardColumn(table, deletionMarkColumn(), attributeCase).name,
+    }
+    if (code === undefined) continue
+    result.push({ table, state, columns: { ...columns, code } })
   }
   return result.sort(
     (a, b) =>
