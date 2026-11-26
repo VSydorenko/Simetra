@@ -10,9 +10,9 @@ import { describe, expect, it } from "vitest"
  * не обходять їх.
  *
  * (1) Бренд польоту не згадується поза `sync/`.
- * (2) Сирий стан умов читають лише шлюз, власник стану й тіла зворотних
- *     викликів, переданих у `session.commit` чи `settle`; решта — перелік з
- *     причиною.
+ * (2) Сирий стан умов читають лише шлюз і власник стану; межу відкинутих
+ *     (`versions.unavailable`) — ще й тіла зворотних викликів, переданих у
+ *     `session.commit` чи `settle` (Р-SK1-7); решта — перелік з причиною.
  * (3) Запити умов шлюзу — лише в місцях переліку, кожне з причиною.
  * (4) Функції інвентаря (Додаток Б, колонка «Файл :: функція») і помічники
  *     сховища, яких вони кличуть транзитивно, не мають читань з (2) і (3),
@@ -570,6 +570,11 @@ function analyze(
     ...gateStateDecl.members,
     ...closedMembers,
   ])
+  // Синтаксичний виняток осідання (Р-SK1-7) — лише межа відкинутих: сирі
+  // `session.versions.unavailable()` у тілі колбека `commit`/`settle`. Решта
+  // сирого стану в колбеках — місця переліку, як і будь-де.
+  const exemptIn = (settled: boolean, kind: Kind) =>
+    settled && kind === "unavailable"
   /** Читання носіїв члена, і носіїв, яких носій сам передає далі. */
   const carried = (member: ts.Node, seen = new Set<ts.Node>()): Read[] => {
     if (known.has(member) || seen.has(member)) return []
@@ -577,26 +582,28 @@ function analyze(
     return (bound.get(member) ?? [])
       .filter((b) => b.carrier && !exempt(b.file))
       .flatMap((b) => [
-        ...b.reads.filter((r) => !r.settled),
-        ...b.members.flatMap((e) => (e.settled ? [] : carried(e.to, seen))),
+        ...b.reads.filter((r) => !exemptIn(r.settled, r.kind)),
+        ...b.members.flatMap((e) =>
+          carried(e.to, seen).filter((r) => !exemptIn(e.settled, r.kind))
+        ),
       ])
   }
   /** Читання, передані функцією через член інтерфейсу: на місці виклику. */
-  const viaOf = (unit: Unit, throughSettlement: boolean): Finding[] =>
+  const viaOf = (unit: Unit): Finding[] =>
     unit.members.flatMap((edge) =>
-      edge.settled && !throughSettlement
-        ? []
-        : carried(edge.to).map((r) => ({
-            key: unit.key,
-            kind: r.kind,
-            via: memberLabel(edge.to),
-            line: edge.line,
-            pos: edge.pos,
-          }))
+      carried(edge.to)
+        .filter((r) => !exemptIn(edge.settled, r.kind))
+        .map((r) => ({
+          key: unit.key,
+          kind: r.kind,
+          via: memberLabel(edge.to),
+          line: edge.line,
+          pos: edge.pos,
+        }))
     )
   const own = (unit: Unit): Finding[] =>
     unit.reads
-      .filter((r) => !r.settled)
+      .filter((r) => !exemptIn(r.settled, r.kind))
       .map((r) => ({ key: unit.key, kind: r.kind, line: r.line, pos: r.pos }))
 
   const unique = (findings: readonly Finding[]) => [
@@ -608,7 +615,7 @@ function analyze(
   const sites = unique(
     all
       .filter((u) => !exempt(u.file) && !u.gateState)
-      .flatMap((u) => [...own(u), ...(u.carrier ? [] : viaOf(u, false))])
+      .flatMap((u) => [...own(u), ...(u.carrier ? [] : viaOf(u))])
   )
 
   return {
@@ -672,7 +679,7 @@ function analyze(
         [...from.keys()].flatMap((u) =>
           (u.carrier && !rootKeys.includes(u.key)
             ? []
-            : [...own(u), ...viaOf(u, through)]
+            : [...own(u), ...viaOf(u)]
           ).map((f) => ({
             ...f,
             path: pathOf(u),
@@ -946,7 +953,7 @@ const PLACES: readonly Group[] = [
   {
     inventory: true,
     reason:
-      "(ii) Токен охороняє не-читальні ефекти після закриття: журнал (`rights-failed`, `listener-failed`), застосування версії й знімка прав, `core.close`, `commit` після таймауту K4, підсумок спроби `closed` (`watchAttempts`), підписки приймача; читання судить `admit`",
+      "(ii) Токен охороняє не-читальні ефекти після закриття: журнал (`rights-failed`, `listener-failed`), застосування версії й знімка прав, `core.close`, `commit` після таймауту K4 і в `settle` відповіді, підсумок спроби `closed` (`watchAttempts`), підписки приймача; читання судить `admit`",
     sites: [
       "core.ts::createCore.dispatch token",
       "core.ts::createCore.batcher.onVersion token",
@@ -954,7 +961,7 @@ const PLACES: readonly Group[] = [
       "core.ts::createCore.rightsSessionChanged token",
       "core.ts::createCore.connectionRefused token",
       "core.ts::createCore.startVersion token",
-      "writer.ts::rereadKey token",
+      "writer.ts::rereadKey token ×2",
       "subsets.ts::createRegistry.load.attempt.lost token",
       "subsets.ts::createRegistry.loadMore.attempt.lost token",
       "receiver.ts::createReceiver.sync token",
@@ -1407,14 +1414,14 @@ ${dispatch}
 })
 
 describe("read gate guard self-test: what it passes", () => {
-  it("the gate state, the writers, the commit and settle callbacks", () => {
+  it("the gate state, the writers and the discard limit in commit and settle callbacks", () => {
     const t = selfTest(`  function load() {
     visible = false
     staleObjects.add("a")
     session.commit(() => {
       if (session.versions.unavailable()) gone(session)
     }, session.token())
-    settle(() => staleObjects.has("a"))
+    settle(() => session.versions.unavailable())
     return gate.settledPastBound()
   }`)
     expect(t.sites.filter((s) => s.startsWith("core.ts"))).toEqual([
@@ -1427,6 +1434,31 @@ describe("read gate guard self-test: what it passes", () => {
     expect(t.closure([LOAD], true)).toEqual([
       "core.ts::createCore.load gate.settledPastBound",
       "helper.ts::gone token",
+    ])
+  })
+
+  it("other raw state in commit and settle callbacks is read like anywhere", () => {
+    // Мутація приймання PR #435: стан об'єкта, вкладки, токена й закриття в
+    // колбеку осідання — не виняток Р-SK1-7.
+    const t = selfTest(
+      `  function load(ctx: Ctx) {
+    session.commit(() => {
+      if (staleObjects.has("a") || visible || ctx.isStale("b")) return
+    }, session.token())
+    settle(() => session.token().valid || closed !== undefined)
+  }
+  const ctx: Ctx = {
+    isStale: (o) => staleObjects.has(o),
+    hidden: gate.tabHidden,
+    closedSnapshot: () => closed,
+  }`
+    )
+    expect(t.closure([LOAD])).toEqual([
+      "core.ts::createCore.load closed",
+      "core.ts::createCore.load staleObjects",
+      "core.ts::createCore.load staleObjects via Ctx.isStale",
+      "core.ts::createCore.load token",
+      "core.ts::createCore.load visible",
     ])
   })
 
