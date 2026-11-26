@@ -157,29 +157,40 @@ describe("RichText on a live database", () => {
             }
 
             // Функцію виконує кожна роль, що може писати: роль команд і роль
-            // користувача (`SET ROLE` — логін членствує без наслідування)
-            for (const role of [PLATFORM_ROLES.command, USER_ROLE]) {
-              const client = new pg.Client({ connectionString: login })
-              await client.connect()
-              try {
-                await client.query(`SET ROLE "${role}"`)
-                for (const row of RICH_TEXT_EMPTINESS_CASES) {
-                  const answer = await client.query(
-                    "SELECT simetra.rich_text_is_empty($1::jsonb) AS empty",
-                    [JSON.stringify(row.doc)]
-                  )
-                  expect(
-                    { role, name: row.name, empty: answer.rows[0].empty },
-                    `${role}: ${row.name}`
-                  ).toEqual({ role, name: row.name, empty: row.empty })
-                }
-                const nul = await client.query(
-                  "SELECT simetra.rich_text_is_empty(NULL) AS empty"
+            // користувача. Перемикання — `SET LOCAL ROLE` дозволеної сталої в
+            // транзакції (логін членствує без наслідування)
+            const emptinessAs = async (
+              client: pg.Client,
+              role: string
+            ): Promise<void> => {
+              for (const row of RICH_TEXT_EMPTINESS_CASES) {
+                const answer = await client.query(
+                  "SELECT simetra.rich_text_is_empty($1::jsonb) AS empty",
+                  [JSON.stringify(row.doc)]
                 )
-                expect(nul.rows[0].empty).toBeNull()
-              } finally {
-                await client.end()
+                expect(
+                  { role, name: row.name, empty: answer.rows[0].empty },
+                  `${role}: ${row.name}`
+                ).toEqual({ role, name: row.name, empty: row.empty })
               }
+              const nul = await client.query(
+                "SELECT simetra.rich_text_is_empty(NULL) AS empty"
+              )
+              expect(nul.rows[0].empty).toBeNull()
+            }
+            const client = new pg.Client({ connectionString: login })
+            await client.connect()
+            try {
+              await client.query("BEGIN")
+              await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+              await emptinessAs(client, PLATFORM_ROLES.command)
+              await client.query("ROLLBACK")
+              await client.query("BEGIN")
+              await client.query(`SET LOCAL ROLE ${USER_ROLE}`)
+              await emptinessAs(client, USER_ROLE)
+              await client.query("ROLLBACK")
+            } finally {
+              await client.end()
             }
           },
           "rich_text"
