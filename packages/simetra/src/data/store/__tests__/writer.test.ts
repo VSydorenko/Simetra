@@ -13,6 +13,7 @@ import {
   type ViewSnapshot,
   type Writer,
 } from "../types"
+import { invalidateLoads } from "../writer"
 import {
   OBJECTS,
   ORG,
@@ -533,6 +534,56 @@ describe("purge", () => {
       expect(fake.pending).toHaveLength(0)
       expect(readsOf(fake, TASK).filter(isPage)).toHaveLength(1)
       expect(keysIn(handle.getSnapshot())).toEqual(rows)
+    }
+  )
+
+  // Доправлення #465 (рішення архітекторки 26.11): звуження прав у тому самому
+  // проміжку «осідання → `finally`» не перезапускає перше завантаження, яке
+  // впало, — його відповідь рядків уже не принесе. Перше завантаження, чия
+  // відповідь ще летить, звуження перезапускає, як і раніше (П12).
+  it.each([
+    { when: "after its failed answer settled", pages: 1, status: "error" },
+    { when: "while its answer is pending", pages: 2, status: "ready" },
+  ] as const)(
+    "invalidateLoads re-runs a first load only $when (#465)",
+    async ({ when, pages, status }) => {
+      const { core, fake, inspect } = setup()
+      seed(fake, 1, 2)
+      fake.hold = (read) => isPage(read)
+      const handle = core.view({ kind: "full", object: TASK })
+      watch(handle)
+      await settle()
+      const page = fake.take()
+      const narrow = () =>
+        invalidateLoads(
+          [...coreInternals(core).registry.subsets()],
+          core.readEpoch() + 1_000
+        )
+      const flying: boolean[] = []
+      if (when === "while its answer is pending") narrow()
+      else
+        inspect.watchAttempts((event) => {
+          if (event.phase !== "settled" || event.outcome !== "failed") return
+          queueMicrotask(() => {
+            flying.push(
+              inspect
+                .sync()
+                .some(
+                  (x) =>
+                    x.target.kind === "view" &&
+                    x.flights.some((f) => f.kind === "load")
+                )
+            )
+            narrow()
+          })
+        })
+      fake.hold = undefined
+      page.fail("command.unavailable")
+      await settle()
+      if (when === "after its failed answer settled")
+        expect(flying).toEqual([true])
+      expect(readsOf(fake, TASK).filter(isPage)).toHaveLength(pages)
+      expect(handle.getSnapshot().status).toBe(status)
     }
   )
 

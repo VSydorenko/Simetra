@@ -1802,6 +1802,11 @@ export function invalidateLoads(views: Iterable<Subset>, before: number) {
   for (const s of views) {
     if (!s.alive || s.purged || s.loaded || s.flight === undefined) continue
     if ((s.flightEpoch ?? before) >= before) continue
+    // Той самий предикат, що в `forget` (#465): політ, чия остання спроба вже
+    // осіла (збійне перше завантаження), стоїть до свого `finally`, але рядків
+    // не принесе — перезапуск був би зайвим читанням. Пауза повтору
+    // відкинутого — ще той самий політ.
+    if (!(s.answerPending || s.retryAt !== undefined)) continue
     s.gen++
     queueTrailing(s, { reason: "requirement", requirement: "access-narrowed" })
   }
