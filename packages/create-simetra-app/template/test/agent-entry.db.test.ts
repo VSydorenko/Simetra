@@ -40,6 +40,7 @@ import {
   type Browser,
   type Login,
   type Stand,
+  tokenPost,
 } from "./agent-oauth-helpers"
 
 /**
@@ -512,6 +513,37 @@ describe("401 on both eras (invariants 17, 18)", () => {
     events.length = 0
     await setLastUsed(l.grantId, OLD_USE)
     await expectRefused(at(l), pinnedMcp)
+    expect(await lastUsed(l.grantId)).toEqual(OLD_USE)
+  }, 60_000)
+
+  it("an access token of a refresh with scope=offline_access carries no mcp; last_used_at stays", async () => {
+    const narrow = (l: Login) =>
+      tokenPost(app, {
+        grant_type: "refresh_token",
+        refresh_token: rt(l),
+        client_id: CLIENT,
+        resource: RESOURCE,
+        scope: "offline_access",
+      })
+    // Без `prompt=consent` бібліотека прибирає `offline_access` зі scope
+    // запиту, тож вужчого оновлення токен оновлення не дозволяє
+    expect((await narrow(await login())).body.error).toBe("invalid_scope")
+    // З `prompt=consent` дозволяє: токен видано, але без `mcp`
+    const l = await connectAgent(await stand.browser(app), {
+      clientId: CLIENT,
+      redirectUri: LOOPBACK,
+      prompt: "consent",
+    })
+    await expectAccepted(at(l))
+    events.length = 0
+    const narrowed = await narrow(l)
+    expect(narrowed.status, JSON.stringify(narrowed.body)).toBe(200)
+    const token = narrowed.body.access_token as string
+    expect(
+      (await app.provider.AccessToken.find(token))?.scope?.split(" ")
+    ).not.toContain("mcp")
+    await setLastUsed(l.grantId, OLD_USE)
+    await expectRefused(token)
     expect(await lastUsed(l.grantId)).toEqual(OLD_USE)
   }, 60_000)
 

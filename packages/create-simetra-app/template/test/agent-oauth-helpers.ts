@@ -399,11 +399,17 @@ export function authorizeUrl(
 
 export async function authorize(
   app: App,
-  o: { clientId: string; redirectUri: string; scope?: string },
+  o: { clientId: string; redirectUri: string; scope?: string; prompt?: string },
   browser = new Browser(app)
 ): Promise<{ res: Response; flow?: Flow }> {
   const { verifier, challenge } = pkce()
-  const res = await browser.fetch(authorizeUrl(o, challenge))
+  const res = await browser.fetch(
+    authorizeUrl(
+      o,
+      challenge,
+      o.prompt === undefined ? {} : { prompt: o.prompt }
+    )
+  )
   const uid = agentConnectUid(res.headers.get("location") ?? "")
   if (res.status !== 303 || uid === undefined) return { res }
   return { res, flow: { browser, verifier, uid, ...o } }
@@ -481,6 +487,8 @@ export async function connectAgent(
     clientId: string
     redirectUri: string
     scope?: string
+    /** `prompt=consent` лишає `offline_access` у scope гранту й токена оновлення. */
+    prompt?: string
     tenant?: string
     /** Без обміну коду: тест обмінює його сам. */
     noExchange?: boolean

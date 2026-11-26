@@ -36,6 +36,8 @@ declare module "oidc-provider" {
     accountId?: string
     clientId?: string
     aud?: string | string[]
+    /** Через пробіл; у токена доступу — scope ресурсу, якого він стосується. */
+    scope?: string
     exp?: number
     isExpired?: boolean
     extra?: Record<string, unknown>

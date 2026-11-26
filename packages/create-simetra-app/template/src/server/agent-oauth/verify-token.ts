@@ -44,6 +44,9 @@ export function createVerifyAgentToken(
     if (token.jkt !== undefined || token["x5t#S256"] !== undefined) return null
     const aud = asArray(token.aud)
     if (!aud.includes(resource)) return null
+    // Аудиторія ще не означає права на MCP: оновлення з вужчим scope
+    // (`scope=offline_access`) видає токен того самого ресурсу без `mcp`
+    if (!(token.scope ?? "").split(" ").includes("mcp")) return null
     const { grantId, accountId, clientId } = token
     if (
       grantId === undefined ||
