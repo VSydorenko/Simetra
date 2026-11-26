@@ -248,7 +248,7 @@ string[]): Promise<void>; revoke(tags: readonly string[]): Promise<void> }`
 `CommandRuntimeOptions`. Після коміту команди, що змінила рядки об'єкта з
 `publicRead` ролі `anon` (з умовою чи без), T3 кличе порт з тегами змінених
 рядків і їхніх об'єктів через `afterCommit` транзакції (`server/transaction.ts`)
-і `defer` (`waitUntil` на Vercel, `template/src/server/runtime.ts`):
+і `defer` (`waitUntil` на Vercel, `template/src/server/defer.ts`):
 відкликання (`unpublish`, `markDeletion`, видалення) — `revoke`, зміна змісту —
 `invalidate`. Відкат порту не кличе; збій порту журналюється й команду не валить.
 Запис поза командами (`import`, прямий SQL, публікація мови даних) зникає з

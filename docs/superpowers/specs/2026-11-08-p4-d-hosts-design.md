@@ -116,6 +116,11 @@ chromium/webkit × production/dev і стиснення відповідей (§
 | `src/server/runtime.ts` | **зв'язування рантайму**: пул `simetra_runtime` на рівні модуля (Рт17) з DSN `SIMETRA_RUNTIME_DATABASE_URL`, `createCommandRuntime({ database: fromPgPool(pool), catalog, defer })`, `createDataHandler` |
 | `src/server/auth-db.ts` | пул Better Auth з DSN `SIMETRA_AUTH_DATABASE_URL` (роль `simetra_auth`, власник схеми `better_auth`) |
 | `src/server/auth.ts` | конфіг Better Auth (§4.3) і `verifySession` |
+| `src/server/defer.ts` | `defer` — фонова робота через `waitUntil` запиту; окремий модуль, бо `auth.ts` імпортують і поза Nitro (фікстура e2e), а `runtime.ts` тягне рантайм і каталог |
+| `src/server/start-checks.ts` | відмови старту входу (`assertAuthStartable`), спільні для `startupPlugin` і `src/server.ts` (§4.1) |
+| `src/server/sign-in-code-slot.ts` | слот надсилання коду на адресу в `hooks.before` (§4.3, спека публічної частини §5.5) |
+| `src/server/mail.ts`, `src/server/mail-dev.ts` | порт пошти й шов застосунку `appMailTransport()`; транспорт розробки поза production (спека публічної частини §5.5) |
+| `src/server/login-methods.ts`, `src/server/login-methods-fn.ts` | способи входу для екрана — лише прапорці й ідентифікатори провайдерів, без секретів; серверна функція `/login` |
 | `src/server/origin.ts` | факти походження й канонічне походження застосунку |
 | `src/server/data-fn.ts` | одна Server Function даних (§4.2) |
 | `src/server/data-request.ts` | `handleDataRequest`: кроки §4.2 винесено з файлу Server Function, щоб `auth`, пул і каталог рантайму не потрапляли в клієнтський пакет |
@@ -195,7 +200,7 @@ production показує лише код; помилка `pg` (хост, рол
 | `socialProviders` | кожен увімкнений провайдер: `{ clientId, clientSecret, disableSignUp: signUp === "closed" }` у опціях провайдера; `account.accountLinking` не задається |
 | `user.validateUserInfo` | відмовляє створенню запису з `emailVerified !== true` для будь-якого способу |
 | `disabledPaths` | усі шляхи пробного екземпляра `betterAuth(<ті самі опції без disabledPaths>).api` мінус закріплений перелік відкритих шляхів і `:`-шляхи (§5.5 спеки публічної частини); endpoint без екрана (зокрема `/sign-in/anonymous`) лише плодить рядки `better_auth.user` |
-| `advanced.backgroundTasks.handler` | `defer` шаблону (`runtime.ts`) |
+| `advanced.backgroundTasks.handler` | `defer` шаблону (`defer.ts`) |
 | `hooks.before` | слот надсилання коду на `/email-otp/send-verification-otp` (§5.5 спеки публічної частини) |
 | `session.cookieCache` | вимкнено |
 | `rateLimit` | `{ enabled: true, storage: "database" }`; окреме правило для `/sign-in/email` |
