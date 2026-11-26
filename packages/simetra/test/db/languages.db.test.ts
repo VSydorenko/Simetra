@@ -369,9 +369,13 @@ describe("languages catalog invariants on a live database", () => {
     })
 
     it.each([
-      ["a user without rights on languages", "u0", ["en", "uk"]],
-      ["a user with read", "s1", ["de", "en", "fr", "uk"]],
-    ])("%s sees %s", async (_, user, expected) => {
+      [
+        "a user without rights on languages sees only published rows",
+        "u0",
+        ["en", "uk"],
+      ],
+      ["a user with read sees every row", "s1", ["de", "en", "fr", "uk"]],
+    ])("%s", async (_, user, expected) => {
       expect(
         codes(
           await queryAs<{ v: string[] }>(
