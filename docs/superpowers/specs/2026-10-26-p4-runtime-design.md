@@ -386,7 +386,11 @@ T3 валідує каталог схемою при створенні рант
   операцією над об'єктом: `{ action: "create", object, id, values?, tabularSections? }`,
   `{ action: "update", object, id, expectedVersion, values?, expectedValues?, tabularSections?, deleteIds? }`,
   `{ action: "markDeletion", object, id, expectedVersion, mark }`,
-  `{ action: "delete", object, id, expectedVersion }`. Функцію ядра й дію
+  `{ action: "delete", object, id, expectedVersion }`; для об'єкта з умовним
+  `publicRead` — ще `{ action: "publish" | "unpublish", object, id,
+  expectedVersion }` (дії з реєстру об'єкта, ADR-0119); у наборі змін перехід
+  `published` має операцію `publish`/`unpublish`, а решта змін умовного
+  об'єкта — `update`. Функцію ядра й дію
   контексту `simetra.command` T3 бере з каталогу (`operations.<операція>`,
   §6.3): клієнт обирає лише операцію, тож підробити контекст адміністрування
   прав через вхід неможливо. `create` передає ядру `p_expected_version` =
