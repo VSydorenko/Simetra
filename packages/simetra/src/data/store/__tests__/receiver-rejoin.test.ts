@@ -439,10 +439,11 @@ describe("the rejoin wave", () => {
     expect(requestsSince(h)).toHaveLength(1)
   })
 
-  // Об'єкт, що став несумісним, поки хвиля чекала, `markStale` виймає з неї
-  // (рішення архітекторки 25.11), а несумісного до приєднання `joinWave` не
-  // бере (запит умови шлюзу): ефекти хвилі — як у `main`, де його пропускав
-  // `fireWave`. Контроль — та сама хвиля без позначки.
+  // Об'єкт, що став несумісним, поки хвиля чекала, пропускає іменована
+  // перевірка `fireWave`, а несумісного до приєднання `joinWave` не бере
+  // (запит умови шлюзу): ні `commit` позначок, ні слухача, ні сплеску, а
+  // `sync()` до спрацювання — як у `main`. Контроль — та сама хвиля без
+  // позначки.
   it.each([
     ["live", "live"],
     ["marked stale-client after the join", "after"],
@@ -460,12 +461,16 @@ describe("the rejoin wave", () => {
         h.inspect
           .sync()
           .filter((t) => t.target.kind === "view")
-          .map((t) => t.requirements)
+          .map((t) => t.requirements.map((r) => r.kind))
       if (mark === "before") h.core.staleClient(TASK)
       h.transport.join(channel, false)
       if (mark === "after") h.core.staleClient(TASK)
       await settle()
-      const before = requirementsOf()
+      // До спрацювання хвиля чекає й над несумісним об'єктом, приєднаним
+      // раніше за позначку.
+      expect(requirementsOf()).toEqual([
+        mark === "before" ? [] : ["channel-rejoin"],
+      ])
       const logged = h.log.length
       const from = h.fake.log.length
       await advance(REJOIN_JITTER_MS)
@@ -479,7 +484,8 @@ describe("the rejoin wave", () => {
         expect(seen).toEqual([])
         expect(bursts).toEqual([])
         expect(taskReads).toEqual([])
-        expect(requirementsOf()).toEqual(before)
+        // Позначки «склад не підтверджено» хвиля не ставить.
+        expect(requirementsOf()).toEqual([[]])
       } else {
         expect(seen).toEqual([TASK])
         expect(bursts).toHaveLength(1)

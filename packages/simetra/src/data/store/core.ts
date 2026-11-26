@@ -1649,9 +1649,13 @@ export function createCore(options: {
     const marked: ObjectName[] = []
     let reads = 0
     let readViews = 0
-    // Несумісного об'єкта в хвилі немає: `joinWave` його не бере, а
-    // `markStale` виймає з хвилі, що чекає (рішення архітекторки 25.11).
     for (const object of fired.objects) {
+      // Іменована перевірка (рішення архітекторки 25.11, варіант (в)): вона
+      // береже не читання (його судить шлюз, R4), а ефекти хвилі —
+      // `commit` позначок, слухача діагностики й сплеск. Виймати об'єкт із
+      // хвилі в `markStale` не можна: `sync()` до спрацювання показує вимогу
+      // приєднання, як на `main`.
+      if (staleObjects.has(object)) continue
       const views = activeViews(writerContext, object)
       marked.push(object)
       if (views.some((v) => v.visible)) {
@@ -2025,8 +2029,6 @@ export function createCore(options: {
     // Строк перемикання епохи не перечитає несумісний об'єкт: `revalidate` у
     // ньому перевів би вигляди в `error` замість `isStale`.
     scheduled.delete(o.name)
-    // Хвиля, що чекає, його вже не бере: позначки її вигляди не отримують.
-    wave?.objects.delete(o.name)
     // Частини, що вже стоять у черзі збирача й обмежувача, не підуть: їх
     // відмовляє той самий предикат шлюзу на скиданні й на старті задачі.
     // Власник із рядками ТЧ може не мати шапки в сховищі (`disown`).
