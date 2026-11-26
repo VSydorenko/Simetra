@@ -111,6 +111,9 @@ importers:
       simetra:
         specifier: workspace:*
         version: link:../../simetra
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@simetrajs/designer':
         specifier: workspace:*
