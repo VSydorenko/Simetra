@@ -20,6 +20,7 @@ import {
 } from "simetra/model"
 import {
   EVOLUTION,
+  EVOLUTION_HOOK_TIMEOUT,
   evolvedCatalogs,
 } from "../../compiler/__tests__/fixtures/evolution"
 import { TICKET_ID } from "../../compiler/__tests__/fixtures/rights"
@@ -53,6 +54,9 @@ let region: CatalogEntry
 let sectionKey: string
 let sectionId: string
 
+// Хук будує каталоги `A` і `A′` — вісім компіляцій домену. Сам по собі він займає
+// ~8,5 с, тобто майже весь типовий ліміт 10 с, а під навантаженням повного
+// прогону CI перевищує його. Ліміт — з запасом ~3,5× від виміру.
 beforeAll(async () => {
   let a: RuntimeCatalog
   ;({ a, aPrime } = await evolvedCatalogs())
@@ -68,7 +72,7 @@ beforeAll(async () => {
   const lines = ticket.tabularSections.find((s) => s.name === section.from)!
   sectionKey = lines.keyName
   sectionId = lines.id
-})
+}, EVOLUTION_HOOK_TIMEOUT)
 
 const refOf = (entry: CatalogEntry) => ({ kind: entry.kind, name: entry.name })
 const columnOf = (name: string) =>

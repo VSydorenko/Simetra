@@ -22,7 +22,11 @@ import {
   type ReadQuery,
   type RuntimeCatalog,
 } from "simetra/model"
-import { EVOLUTION, evolvedCatalogs } from "./fixtures/evolution"
+import {
+  EVOLUTION,
+  EVOLUTION_HOOK_TIMEOUT,
+  evolvedCatalogs,
+} from "./fixtures/evolution"
 import { TICKET_ID } from "./fixtures/rights"
 
 const ID = "11111111-1111-4111-8111-111111111111"
@@ -45,6 +49,9 @@ let server: CatalogIndex
 let ticket: CatalogEntry
 let issue: CatalogEntry
 
+// Хук будує каталоги `A` і `A′` — вісім компіляцій домену. Сам по собі він займає
+// ~8,5 с, тобто майже весь типовий ліміт 10 с, а під навантаженням повного
+// прогону CI перевищує його. Ліміт — з запасом ~3,5× від виміру.
 beforeAll(async () => {
   ;({ a, aPrime } = await evolvedCatalogs())
   client = catalogIndex(buildClientCatalog(a).objects)
@@ -55,7 +62,7 @@ beforeAll(async () => {
   // іменах, а UUID об'єкта — лишитися.
   expect(ticket.name).toBe(object.from)
   expect(issue.name).toBe(object.to)
-})
+}, EVOLUTION_HOOK_TIMEOUT)
 
 const refOf = (entry: CatalogEntry) => ({ kind: entry.kind, name: entry.name })
 const sectionOf = (entry: CatalogEntry, name: string) =>
