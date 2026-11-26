@@ -608,8 +608,15 @@ whose user id is the `sub` claim):
 - A table of a kind is read only through a role's `read` right on its object,
   at the extent of the grant (`any`, `own`, a dimension, in a container); its
   tabular sections and a register's movements and totals follow the object.
-  `publicRead` opens every row instead and needs no right. It is an error
-  (`rights.public-read-forbidden`) on the users catalog, a membership catalog
+  `publicRead` as a string opens every row instead and needs no right. The
+  conditional form `{ "role": "anon" | "authenticated", "published": true }`
+  opens only rows that are published and not marked for deletion (the header
+  and its tabular sections): it needs a catalog with commands, rights
+  functions and a rights contract with `read`, keeps the read policies and the
+  tenant boundary for everyone else, and adds the actions `publish` and
+  `unpublish`; marking a row for deletion unpublishes it. Example:
+  `"publicRead": { "role": "anon", "published": true }`. Any
+  `publicRead` is an error (`rights.public-read-forbidden`) on the users catalog, a membership catalog
   and the rights system catalogs: for public profiles declare a separate
   catalog with the public fields and a reference to the users catalog.
 - A scoped object is read only inside the reader's scopes, and only through a
