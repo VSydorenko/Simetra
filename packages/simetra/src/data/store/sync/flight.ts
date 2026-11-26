@@ -2,6 +2,7 @@ import type { DefectFlag } from "../defects"
 import type { WriteLease } from "../source"
 import type { Subset } from "../subsets"
 import type { GenerationToken, ObjectName } from "../types"
+import type { FlightKind } from "./flight-kinds"
 import { answerOf, JUDGED_CONDITIONS, type JudgedCondition } from "./admission"
 import type {
   ReadCause,
@@ -38,13 +39,41 @@ export type ReadRecord = ReadCause & {
 export type Flight = ReadRecord & {
   readonly caller?: Subset
   readonly lease?: WriteLease
+  /** Вид польоту з таблиці §5.5; ставить шлях, що знає свій вид. */
+  readonly kind?: FlightKind
+  /** `epochs.now()` у мить допуску (§5.4); `admit` бере її зі стану шлюзу. */
+  readonly epoch?: number
+  /** Монотонний годинник ядра в мить допуску — лише для строку й пауз. */
+  readonly startedAt?: number
+  /**
+   * Дочірній токен цілі (`gen` вигляду, покоління сторінки чи хвоста), де він
+   * є; інакше поле відсутнє, а діє токен сесії.
+   */
+  readonly token?: GenerationToken
+  /**
+   * Відмітки purge об'єкта й цілей `include` на старті. Лише там, де `main`
+   * їх бере (системне перечитування); для решти purge діє через токен.
+   */
+  readonly purgeBarrier?: ReadonlyMap<string, number>
+  /** Лише `write-confirm`: зворотний виклик запитувача в `commit` осідання. */
+  readonly requester?: (outcome: WriteConfirmOutcome) => void
+  /** Лише `write-confirm`: межа часу (`REREAD_TIMEOUT_MS`), мс від старту. */
+  readonly deadlineMs?: number
 } & { readonly [FLIGHT]: true }
+
+/** Наслідок, який `write-confirm` віддає запитувачу (`writer.ts`). */
+export type WriteConfirmOutcome = "applied" | "failed" | "discarded" | "timeout"
 
 /** Те, що шлях додає до польоту, крім причини, цілі й коду. */
 export interface FlightExtras {
   readonly attempt?: number
   readonly caller?: Subset
   readonly lease?: WriteLease
+  readonly kind?: FlightKind
+  readonly token?: GenerationToken
+  readonly purgeBarrier?: ReadonlyMap<string, number>
+  readonly requester?: (outcome: WriteConfirmOutcome) => void
+  readonly deadlineMs?: number
 }
 
 // Один реєстр: запис — копія полів у мить видачі плюс шлюз, що видав політ
@@ -96,6 +125,10 @@ export interface GateState {
   readonly staleObject?: (object: ObjectName) => boolean
   readonly discardBound?: () => boolean
   readonly tabHidden?: () => boolean
+  /** `epochs.now()` сесії: `admit` ставить її в політ як епоху старту. */
+  readonly epoch?: () => number
+  /** Монотонний годинник ядра: `admit` ставить його як час старту. */
+  readonly now?: () => number
   /** Прапорці самотесту (`defects.ts`): мутація шляху сягає й рішення шлюзу. */
   readonly defects?: ReadonlySet<DefectFlag>
 }
@@ -169,9 +202,10 @@ function issue(
   cause: ReadCause,
   target: ReadTarget,
   site: SiteCode | TestSite,
-  extras: FlightExtras
+  extras: FlightExtras,
+  start: { readonly epoch?: number; readonly startedAt?: number } = {}
 ): Flight {
-  const { attempt, caller, lease } = extras
+  const { attempt, caller, lease, ...rest } = extras
   const record: ReadRecord = {
     ...cause,
     target,
@@ -183,6 +217,12 @@ function issue(
     ...record,
     ...(caller === undefined ? {} : { caller }),
     ...(lease === undefined ? {} : { lease }),
+    // Поля, яких шлях не дав, у польоті відсутні, а не `undefined`.
+    ...Object.fromEntries(
+      Object.entries(rest).filter(([, value]) => value !== undefined)
+    ),
+    ...(start.epoch === undefined ? {} : { epoch: start.epoch }),
+    ...(start.startedAt === undefined ? {} : { startedAt: start.startedAt }),
   }) as Flight
   registry.set(flight, { record: Object.freeze(record), gate })
   return flight
@@ -231,7 +271,12 @@ export function createGate(state: GateState): Gate {
         flight(extras = {}) {
           if (used) throw new Error("a permit issues one flight")
           used = true
-          return issue(gate, cause, target, site, extras)
+          // Епоха й час беруться в мить видачі, де шлях уже вирішив читати:
+          // повтор дії проходить `admit` знову й бере нові (§5.4).
+          return issue(gate, cause, target, site, extras, {
+            ...(state.epoch ? { epoch: state.epoch() } : {}),
+            ...(state.now ? { startedAt: state.now() } : {}),
+          })
         },
       } as Permit
     },

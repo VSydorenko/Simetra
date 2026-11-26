@@ -659,6 +659,8 @@ export function createCore(options: {
     // `tab-hidden` — стан `visible` ядра (`suspend` / `resume`), один для ядра,
     // приймача й вимоги складу (Р-SK1-8).
     tabHidden: () => !visible,
+    epoch: () => session.epochs.now(),
+    now,
     defects,
   })
   const batcher = createBatcher(options.source, {
