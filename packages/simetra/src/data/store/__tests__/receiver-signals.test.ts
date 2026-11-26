@@ -1159,6 +1159,34 @@ describe("version epochs", () => {
     expect(requestsSince(h, from)).toHaveLength(0)
   })
 
+  // Зупинка збору — наслідок осідання за межею (Р-SK1-7), а не допуск: читання
+  // пачки відмовив би й шлюз, але зупинка береже й не-читальні ефекти пачки —
+  // діагностику сигналу, сплеск і вимогу «склад не підтверджено» виглядам.
+  it("collects no signal after the discard limit: no signal read, no burst, no requirement", async () => {
+    const h = await switched()
+    await exhaust(h)
+    const seen: string[] = []
+    h.inspect.watchSignalReads((object, signal) => {
+      if (signal.by === "batch") seen.push(object)
+    })
+    const logged = h.log.length
+    const version = h.fake.edit(TASK, key(1), { title: "late" })
+    emit(h, change("update", key(1), version))
+    emit(h, { id: String(++seq), object: task.id, op: "invalidate" })
+    await closeBatch()
+    await settle()
+    expect(seen).toEqual([])
+    expect(
+      h.log.slice(logged).filter((e) => e.kind === "revalidate-burst")
+    ).toEqual([])
+    expect(
+      h.inspect
+        .sync()
+        .flatMap((state) => state.requirements)
+        .filter((r) => r.kind === "composition-unconfirmed")
+    ).toEqual([])
+  })
+
   it("drops the batch waiting behind a read in flight once the discard limit is reached", async () => {
     const h = await switched()
     h.fake.mode = "manual"
@@ -1229,4 +1257,62 @@ describe("own mutation in the journal", () => {
     release()
     await settle()
   })
+})
+
+// Несумісний об'єкт у пачці (§10): ключі відмовляє шлюз (K1, K2), а гілки
+// прихованої вкладки й цілого об'єкта стереже іменована перевірка приймача —
+// ні позначок виглядів, ні діагностики, ні сплеску (рішення архітекторки
+// 25.11). Контроль — та сама пачка над сумісним об'єктом.
+describe("a stale-client object in a signal batch", () => {
+  it.each([
+    ["on a hidden tab", "hidden"],
+    ["invalidated whole", "whole"],
+    ["of changed keys", "keys"],
+  ] as const)(
+    "a batch %s: nothing for the stale object, the effects for the live one",
+    async (_, branch) => {
+      for (const stale of [false, true]) {
+        const h = await open(keysView(key(1)))
+        const seen: string[] = []
+        h.inspect.watchSignalReads((object, signal) => {
+          if (signal.by === "batch") seen.push(object)
+        })
+        if (stale) h.core.staleClient(TASK)
+        await settle()
+        if (branch === "hidden") h.core.suspend()
+        const logged = h.log.length
+        const from = h.fake.log.length
+        const v = h.fake.edit(TASK, key(1), { title: "changed" })
+        emit(
+          h,
+          branch === "whole"
+            ? { id: String(++seq), object: task.id, op: "invalidate" }
+            : change("update", key(1), v)
+        )
+        await closeBatch()
+        const bursts = h.log
+          .slice(logged)
+          .filter((e) => e.kind === "revalidate-burst")
+        const taskReads = h.fake.log
+          .slice(from)
+          .filter((r) => r.query?.object.name === "Task")
+        const label = `${branch}, stale: ${stale}`
+        if (stale) {
+          expect(seen, label).toEqual([])
+          expect(bursts, label).toEqual([])
+          expect(taskReads, label).toEqual([])
+          expect(h.handle.getSnapshot().needsRefresh, label).toBe(false)
+        } else {
+          expect(seen, label).toEqual([TASK])
+          if (branch === "hidden") {
+            expect(taskReads, label).toEqual([])
+            expect(h.handle.getSnapshot().needsRefresh, label).toBe(true)
+          } else {
+            expect(bursts, label).toHaveLength(1)
+            expect(taskReads, label).toHaveLength(1)
+          }
+        }
+      }
+    }
+  )
 })

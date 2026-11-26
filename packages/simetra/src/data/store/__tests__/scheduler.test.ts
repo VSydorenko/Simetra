@@ -573,6 +573,16 @@ describe("scheduler: the seam of the rights block (B5b)", () => {
     expect(readsAt(h)).toBe(base)
   })
 
+  // Строк — таймер: несумісному об'єкту його не ставить запит умови шлюзу
+  // (Р-SK1-9), а не відмова читання, коли строк настане.
+  it("requestReread of a stale-client object keeps no due time while the jitter runs", async () => {
+    const h = await threeObjects()
+    h.core.staleClient(TASK)
+    await settle()
+    h.core.freshness.requestReread([TASK, ORG], { jitterMs: 60_000 })
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(1)
+  })
+
   it("lastTickAt: the start of the last tick that read; a tick without targets leaves it", async () => {
     const h = await threeObjects()
     expect(h.core.freshness.lastTickAt()).toBeUndefined()
@@ -635,6 +645,37 @@ describe("scheduler: a synchronous failure of the tick", () => {
 })
 
 describe("scheduler: the tail of an explicit revalidate", () => {
+  // Хвіст R15 бере причину виклику, що його поставив, і вкладки не
+  // перевіряє: хвіст звірки гідратації (R5, вимога, яку ціль відкладає) на
+  // прихованій вкладці читає, як на `main` (рядок 1 §5.14; рішення
+  // архітекторки 25.11). Оцінка хвоста шлюзом за власною умовою — SK-4.
+  it("the tail of the hydration check over a view in flight reads on a hidden tab (R15)", async () => {
+    const source = build()
+    await loadedTask(source)
+    const snapshot = JSON.parse(JSON.stringify(source.core.dehydrate()))
+    const h = build()
+    h.core.hydrate(snapshot)
+    const view = h.core.view(taskKeys(1, 2))
+    watch(view)
+    await settle()
+    h.fake.hold = () => true
+    view.refresh()
+    await settle()
+    const flying = h.fake.take()
+    h.core.suspend()
+    const reads: string[] = []
+    const stop = h.inspect.watchReads((e) =>
+      reads.push(`${e.site} ${e.reason}`)
+    )
+    h.core.endHydration()
+    await settle()
+    h.fake.hold = undefined
+    flying.answer()
+    await settle()
+    stop()
+    expect(reads).toContain("R15 requirement")
+  })
+
   it("a later call with visibleOnly: false joins the pending tail and is not lost", async () => {
     const h = build({ mode: "manual" })
     const spec = taskKeys(1, 2)

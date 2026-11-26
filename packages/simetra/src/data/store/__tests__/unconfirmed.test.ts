@@ -270,6 +270,39 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
     expect(handle.getSnapshot().needsRefresh).toBe(false)
   })
 
+  // Позначку сторінки на прихованій вкладці знято в тому самому `commit`, що
+  // пише відповідь, — до сповіщення: підписник, що в ньому просить наступну
+  // сторінку, її дістає. Перевірку вкладки в точці осідання береже саме ця
+  // мить, а не читання (повтор P3 відкладає шлюз; рішення архітекторки 25.11).
+  it("window page rejected on a hidden tab: its mark is released before the notification, a next page asked there goes out", async () => {
+    const h = setup({ limits: { windowPage: 2 } })
+    seed(h.fake, 1, 7)
+    const spec: ViewSpec = { kind: "window", object: TASK }
+    const handle = h.core.view(spec)
+    watch(handle)
+    await settle()
+    const bury = await divergence(h, key(3))
+    h.fake.hold = isPage
+    handle.loadAfter()
+    await settle()
+    const page = h.fake.take(isPage)
+    await bury()
+    h.core.suspend()
+    let asked = false
+    const stop = handle.subscribe(() => {
+      if (asked) return
+      asked = true
+      handle.loadAfter()
+    })
+    const sent = h.fake.requests.length
+    page.answer()
+    await drain(h)
+    stop()
+    expect(asked).toBe(true)
+    // Наступна сторінка з підписника пішла (P1 на прихованій вкладці допущено).
+    expect(h.fake.requests.length).toBe(sent + 1)
+  })
+
   // Дві сторінки в польоті, відхилені без руху епохи між відповідями,
   // дають ту саму вимогу: повтор іде за фактом відхилення кожної відповіді,
   // а не за зміною значення вимоги.

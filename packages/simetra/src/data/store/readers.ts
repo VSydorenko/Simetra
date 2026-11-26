@@ -17,6 +17,7 @@ import { differentEpochs, keyId } from "./epoch"
 import { visibleRow, type PutResult, type RestoredRow } from "./object-store"
 import type { OwnerScope, SectionEntry } from "./section-store"
 import type { Scope, Session } from "./session"
+import type { Flight } from "./sync/flight"
 import type { Subset } from "./subsets"
 import {
   readKeys,
@@ -25,7 +26,6 @@ import {
   rowsOf,
   tracked,
   type BoundSource,
-  type ReadOrigin,
   type StoreSource,
 } from "./source"
 import {
@@ -115,14 +115,13 @@ export interface ReaderContextBase {
 }
 
 /**
- * What the readers of one flight see: the source already carries the origin
- * of the flight (`gated`), so a reader cannot read without one.
+ * What the readers of one flight see: the source already carries the flight (`gated`), so a reader cannot read without one.
  */
 export interface ReaderContext extends ReaderContextBase {
   readonly source: BoundSource
 }
 
-/** What the core holds: the source still wants an origin per read. */
+/** What the core holds: the source still wants a flight per read. */
 export interface ReaderHost extends ReaderContextBase {
   readonly source: StoreSource
 }
@@ -201,9 +200,9 @@ export async function gated<C extends ReaderHost>(
   ctx: C,
   readEpoch: number,
   read: (ctx: WithSource<C, BoundSource>) => Promise<Write>,
-  origin: ReadOrigin
+  flight: Flight
 ): Promise<Apply> {
-  const { source, epochs } = tracked(ctx.source, origin)
+  const { source, epochs } = tracked(ctx.source, flight)
   const write = await read({ ...ctx, source })
   return (scope) => {
     if (ctx.session.acceptEpochs(epochs, readEpoch) === "discard") return false
@@ -1091,13 +1090,13 @@ export function readForm(
   s: Subset,
   readEpoch: number,
   token: GenerationToken,
-  origin: ReadOrigin
+  flight: Flight
 ): Promise<Apply> {
   return gated(
     ctx,
     readEpoch,
     (c) => readFormWrite(c, s, readEpoch, token),
-    origin
+    flight
   )
 }
 

@@ -34,11 +34,17 @@ import type { ServerFunctionAdapter } from "../../adapter"
 import type {
   CoreSource,
   ReadOptions,
-  ReadOrigin,
   ServerPort,
   StoreSource,
 } from "../source"
-import { TEST_SITE } from "../sync/vocabulary"
+import { createGate, issueTestFlight, type Flight } from "../sync/flight"
+import {
+  TEST_SITE,
+  type ReadCause,
+  type ReadTarget,
+  type SiteCode,
+  type TestSite,
+} from "../sync/vocabulary"
 import type { Key, ObjectName, ServerRow, Values } from "../types"
 
 /**
@@ -888,15 +894,20 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
   return fake
 }
 
+/** Шлюз прямих викликів у тестах: польоти не з ядра сесії, сесія не закривається. */
+const testGate = createGate({ token: () => ({ valid: true }) })
+
 /**
- * Службове походження прямих викликів у тестах: код `TEST_SITE` поза
- * інвентарем Додатка Б, тож збирач О1 не сплутає його з читанням ядра.
+ * Політ прямого виклику джерела в тесті: код `TEST_SITE` поза інвентарем
+ * Додатка Б, тож збирач О1 не сплутає його з читанням ядра.
  */
-export const TEST_ORIGIN: ReadOrigin = {
-  reason: "user",
-  target: { kind: "keys", object: "test" },
-  site: TEST_SITE,
-}
+export const testFlight = (
+  cause: ReadCause = { reason: "user" },
+  target: ReadTarget = { kind: "keys", object: "test" },
+  site: SiteCode | TestSite = TEST_SITE
+): Flight => issueTestFlight(cause, target, site)
+
+export const TEST_FLIGHT: Flight = testFlight()
 
 /**
  * A {@link CoreSource} as the store modules see it: `read` carries the sleep
@@ -910,8 +921,9 @@ export function withSleep(
 ): StoreSource {
   return {
     close: () => source.close(),
-    refuse: source.refuse?.bind(source),
     run: (operation) => source.run(operation),
+    admit: testGate.admit,
+    settledPastBound: testGate.settledPastBound,
     read: (parts) => source.read(parts, { sleep }),
     // Пряме джерело тесту: оренд запису немає кому обліковувати.
     lease: () => ({ issue() {}, release() {} }),

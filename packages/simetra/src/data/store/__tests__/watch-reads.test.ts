@@ -20,8 +20,13 @@ import {
   type ReadLimiter,
   type ReadOptions,
 } from "../source"
-import { SITE_CODES, type ReadIntent } from "../sync/vocabulary"
-import { createFakeSource, type FakeSource } from "../testing/fake-source"
+import type { Flight } from "../sync/flight"
+import { SITE_CODES } from "../sync/vocabulary"
+import {
+  createFakeSource,
+  testFlight,
+  type FakeSource,
+} from "../testing/fake-source"
 import type { ViewSpec } from "../types"
 import {
   ORG,
@@ -55,11 +60,12 @@ const SLEEP: ReadOptions["sleep"] = () => Promise.resolve()
 
 // Походження слота: код рядка — свій на кожен слот, ціль чергується між двома
 // об'єктами, тож будь-яка перестановка змінює пару «код — запит».
-const originAt = (slot: number): ReadIntent => ({
-  reason: "user",
-  target: { kind: "keys", object: slot % 2 === 0 ? TASK : ORG },
-  site: SITE_CODES[slot]!,
-})
+const originAt = (slot: number): Flight =>
+  testFlight(
+    { reason: "user" },
+    { kind: "keys", object: slot % 2 === 0 ? TASK : ORG },
+    SITE_CODES[slot]!
+  )
 
 const queryOf = (object: MetadataRef, n: number): CorePart => ({
   type: "query",
@@ -110,16 +116,19 @@ function twoAdapters(options: {
     fake.server
   )
   const events: ReadEvent[] = []
+  // Пізня відмова шлюзу: об'єкти, які тест позначає несумісними.
+  const stale = new Set<string>()
   const read = (
     parts: readonly CorePart[],
-    origins: readonly (ReadIntent | undefined)[]
+    origins: readonly (Flight | undefined)[]
   ) =>
     source.read(parts, {
       sleep: SLEEP,
       origins,
       onRead: (event) => events.push(event),
+      staleObject: (object) => stale.has(object),
     })
-  return { fake, source, events, read }
+  return { fake, source, events, read, stale }
 }
 
 describe("watchReads at the source: one event per live part of a request", () => {
@@ -163,14 +172,14 @@ describe("watchReads at the source: one event per live part of a request", () =>
       queryOf(TASK_REF, 2),
       { type: "version" },
     ]
-    const origins: ReadIntent[] = [
+    const origins: Flight[] = [
       originAt(0),
       originAt(1),
-      {
-        reason: "interval",
-        target: { kind: "service", service: "version" },
-        site: "S1",
-      },
+      testFlight(
+        { reason: "interval" },
+        { kind: "service", service: "version" },
+        "S1"
+      ),
     ]
     const { items } = await read(parts, origins)
     expect(events).toHaveLength(3)
@@ -215,7 +224,7 @@ describe("watchReads at the source: one event per live part of a request", () =>
 
   it("gives no event to a part refused without a request, and keeps the origin of the live one", async () => {
     // Обмежувач тримає обидві задачі, доки не відкриємо: частину об'єкта,
-    // закритого `refuse`, задача бачить відмовленою.
+    // який шлюз тим часом назвав несумісним, задача бачить відмовленою.
     const inner = createReadLimiter(4)
     let open!: () => void
     const gate = new Promise<void>((resolve) => (open = resolve))
@@ -223,13 +232,13 @@ describe("watchReads at the source: one event per live part of a request", () =>
       close: () => inner.close(),
       run: (task) => inner.run(() => gate.then(task)),
     }
-    const { source, events, read } = twoAdapters({ limiter })
+    const { stale, events, read } = twoAdapters({ limiter })
     const parts = [queryOf(TASK_REF, 1), queryOf(ORG_REF, 2)]
     const reading = read(
       parts,
       parts.map((_, i) => originAt(i))
     )
-    source.refuse?.("Catalog.Task")
+    stale.add("Catalog.Task")
     open()
     const { items } = await reading
     expect(requestOf(items[0]!)).toBeUndefined()
@@ -365,7 +374,7 @@ describe("watchReads at the source: re-sent rounds", () => {
 describe("watchReads at the batcher: origins follow the slots", () => {
   /** Джерело, що пам'ятає опції кожного виклику. */
   function recording() {
-    const seen: (readonly (ReadIntent | undefined)[] | undefined)[] = []
+    const seen: (readonly (Flight | undefined)[] | undefined)[] = []
     const source: CoreSource = {
       read: (parts, options) => {
         seen.push(options.origins)
@@ -378,7 +387,6 @@ describe("watchReads at the batcher: origins follow the slots", () => {
         })
       },
       run: () => Promise.reject(new Error("unexpected run")),
-      refuse: () => {},
       close: () => {},
     }
     return { source, seen }
@@ -398,29 +406,37 @@ describe("watchReads at the batcher: origins follow the slots", () => {
 
   it("drops the origin of a part refused while it queued and keeps the origin of the live one", async () => {
     const r = recording()
-    const batcher = createBatcher(r.source, { sleep: SLEEP })
+    const stale = new Set<string>()
+    const batcher = createBatcher(r.source, {
+      sleep: SLEEP,
+      staleObject: (object) => stale.has(object),
+    })
     const reading = batcher.read(
       [queryOf(TASK_REF, 1), queryOf(ORG_REF, 2)],
       [originAt(0), originAt(1)]
     )
-    batcher.refuse?.("Catalog.Task")
+    stale.add("Catalog.Task")
     await reading
     expect(r.seen).toEqual([[originAt(1)]])
   })
 
   it("keeps the origin of a refused part from shifting the origins of later calls", async () => {
     const r = recording()
-    const batcher = createBatcher(r.source, { sleep: SLEEP })
+    const stale = new Set<string>()
+    const batcher = createBatcher(r.source, {
+      sleep: SLEEP,
+      staleObject: (object) => stale.has(object),
+    })
     const first = batcher.read([queryOf(TASK_REF, 1)], [originAt(0)])
     const second = batcher.read([queryOf(ORG_REF, 2)], [originAt(1)])
     const third = batcher.read([queryOf(ORG_REF, 3)], [originAt(3)])
-    batcher.refuse?.("Catalog.Task")
+    stale.add("Catalog.Task")
     await Promise.all([first, second, third])
     expect(r.seen).toEqual([[originAt(1), originAt(3)]])
   })
 
   it("re-runs the calls one by one after a mapping refusal with the same origins", async () => {
-    const seen: (readonly (ReadIntent | undefined)[] | undefined)[] = []
+    const seen: (readonly (Flight | undefined)[] | undefined)[] = []
     const source: CoreSource = {
       read: (parts, options) => {
         seen.push(options.origins)
