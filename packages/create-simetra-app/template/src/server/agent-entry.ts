@@ -2,6 +2,7 @@
 // сервером авторизації, а не маршрутом Start. Модуль легкий: адаптер MCP,
 // каталог інструментів, порт токена й `oidc-provider` вантажаться справжнім
 // `import()` на першому запиті свого шляху (знахідка 7 F0).
+import type { RuntimeCatalog } from "simetra/model"
 import { isAgentEntryPath } from "./agent-oauth/paths"
 
 type Fetch<Rest extends unknown[]> = (
@@ -48,12 +49,21 @@ async function loadEntry(): Promise<Handler> {
     verifyAgentToken: createVerifyAgentToken({
       provider: agentOauthProvider(),
       pool: getAuthPool(),
+      requiresTenant: hasScopeKinds(runtime.catalog),
     }),
     onAgentCall: createAgentCallLog(),
     appOrigin: origin,
     inputHashKey: agentInputHashKey(agentOauthKeys()),
   })
   return (request) => entry.fetch(request)
+}
+
+// Правило Р-F4-4, те саме, що в адаптера (`createMcpEntry`): будь-який
+// скоуплений об'єкт або корінь виду скоупу — закріплення обов'язкове
+function hasScopeKinds(catalog: RuntimeCatalog): boolean {
+  return catalog.objects.some(
+    (o) => o.scopeKindId !== undefined || o.rights?.root !== undefined
+  )
 }
 
 /**

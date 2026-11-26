@@ -9,6 +9,8 @@ export interface VerifyAgentTokenOptions {
   provider: Provider
   /** Пул ролі auth (`getAuthPool()`): `agent_oauth` і `better_auth`. */
   pool: Pool
+  /** Застосунок має види скоупу (Р-F4-4): токен без закріплення не проходить. */
+  requiresTenant: boolean
 }
 
 type GrantRow = {
@@ -28,7 +30,7 @@ const asArray = (v: unknown): string[] =>
 export function createVerifyAgentToken(
   o: VerifyAgentTokenOptions
 ): VerifyAgentToken {
-  const { provider, pool } = o
+  const { provider, pool, requiresTenant } = o
   return async (value, resource): Promise<AgentTokenInfo | null> => {
     // Пошук лише серед токенів доступу: токен оновлення чи код як bearer
     // у сховищі `AccessToken` не знаходиться
@@ -73,14 +75,22 @@ export function createVerifyAgentToken(
     // Закріплення токена — знімок тенанта гранту на видачу; розбіжність із
     // рядком означає, що токен не відповідає гранту
     if ((pin ?? null) !== row.tenant) return null
+    // Відмови адаптера (анонім, нема закріплення) — тут же, до запису
+    // `last_used_at`: відмова не має виглядати використанням гранту.
+    // Адаптер перевіряє їх ще раз як другий шар
+    const isAnonymous = row.is_anonymous === true
+    if (isAnonymous) return null
+    if (requiresTenant && typeof pin !== "string") return null
     await pool.query(
       "UPDATE agent_oauth.agent_grants SET last_used_at = $2 WHERE grant_id = $1",
       [grantId, now]
     )
     return {
       sub: accountId,
-      // З запису користувача, а не з гранту: позначка після підключення діє
-      isAnonymous: row.is_anonymous === true,
+      // З запису користувача, а не з гранту: позначка після підключення діє.
+      // Тут завжди `false` (анонім відмовлений вище), але адаптер має що
+      // перевірити як другий шар
+      isAnonymous,
       clientId,
       aud,
       ...(typeof pin === "string" ? { pin } : {}),

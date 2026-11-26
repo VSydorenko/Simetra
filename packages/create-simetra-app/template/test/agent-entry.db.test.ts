@@ -51,7 +51,10 @@ import {
 let stand: Stand
 let app: App
 let tenantApp: App
-let mcp: (request: Request) => Promise<Response>
+type Fetch = (request: Request) => Promise<Response>
+let mcp: Fetch
+// Вхід застосунку з видами скоупу (Р-F4-4): порт вимагає закріплення сам
+let pinnedMcp: Fetch
 let port: ReturnType<typeof createVerifyAgentToken>
 const events: AgentCallEvent[] = []
 const reads: ReadQuery[] = []
@@ -80,7 +83,11 @@ beforeAll(async () => {
   })
   app = stand.app(provider)
   tenantApp = stand.app(provider, { requiresTenant: true })
-  port = createVerifyAgentToken({ provider, pool: stand.pool })
+  port = createVerifyAgentToken({
+    provider,
+    pool: stand.pool,
+    requiresTenant: false,
+  })
   // Рантайм без застосованої схеми застосунку: `describe` і подія не
   // торкаються бази даних застосунку, а `read` віддає рядок зі значенням-
   // сторожем, щоб довести, що його немає в події
@@ -92,21 +99,29 @@ beforeAll(async () => {
     },
     run: async () => ({ rows: [], changes: [], epoch: "e" }),
   } as unknown as CommandRuntime
-  const entry = createMcpEntry({
-    catalog: createAgentToolCatalog({ runtime }),
-    runtimeCatalog,
-    resource: RESOURCE,
-    authorizationServer: ORIGIN,
-    verifyAgentToken: port,
-    onAgentCall: (event) => {
-      events.push(event)
-    },
-    appOrigin: ORIGIN,
-    inputHashKey: agentInputHashKey(stand.keys),
-  })
-  // Вхід MCP поверх застосунку стенду — так, як `src/server.ts` монтує його
-  // над сервером авторизації
-  mcp = withAgentEntry(app, async () => (request) => entry.fetch(request))
+  const over = (verifyAgentToken: typeof port): Fetch => {
+    const entry = createMcpEntry({
+      catalog: createAgentToolCatalog({ runtime }),
+      runtimeCatalog,
+      resource: RESOURCE,
+      authorizationServer: ORIGIN,
+      verifyAgentToken,
+      onAgentCall: (event) => {
+        events.push(event)
+      },
+      appOrigin: ORIGIN,
+      inputHashKey: agentInputHashKey(stand.keys),
+    })
+    // Вхід MCP поверх застосунку стенду — так, як `src/server.ts` монтує його
+    // над сервером авторизації
+    return withAgentEntry(app, async () => (request) => entry.fetch(request))
+  }
+  mcp = over(port)
+  // Каталог шаблону без видів скоупу, тож адаптер закріплення не вимагає:
+  // відмову дає лише порт
+  pinnedMcp = over(
+    createVerifyAgentToken({ provider, pool: stand.pool, requiresTenant: true })
+  )
 }, 180_000)
 afterAll(() => stand?.close(), 60_000)
 afterEach(() => {
@@ -189,9 +204,9 @@ async function expectAccepted(token: string): Promise<void> {
 }
 
 /** Відмова 401 на обох ерах і жодної події виклику. */
-async function expectRefused(token: string): Promise<void> {
+async function expectRefused(token: string, entry: Fetch = mcp): Promise<void> {
   for (const era of ERAS) {
-    const response = await mcp(describeCall(era, token))
+    const response = await entry(describeCall(era, token))
     expect(response.status, era).toBe(401)
     expect(response.headers.get("www-authenticate"), era).toContain(
       "resource_metadata="
@@ -213,6 +228,20 @@ const patchGrant = (grantId: string, patch: Record<string, unknown>) =>
   )
 
 const nowSec = () => Math.floor(Date.now() / 1000)
+
+const OLD_USE = new Date("2001-01-01T00:00:00Z")
+const setLastUsed = (grantId: string, at: Date) =>
+  stand.pool.query(
+    "UPDATE agent_oauth.agent_grants SET last_used_at = $2 WHERE grant_id = $1",
+    [grantId, at]
+  )
+async function lastUsed(grantId: string): Promise<Date> {
+  const { rows } = await stand.pool.query(
+    "SELECT last_used_at FROM agent_oauth.agent_grants WHERE grant_id = $1",
+    [grantId]
+  )
+  return rows[0].last_used_at as Date
+}
 
 describe("a granted agent calls the MCP entry", () => {
   it.each([
@@ -470,6 +499,46 @@ describe("401 on both eras (invariants 17, 18)", () => {
       'UPDATE better_auth."user" SET "isAnonymous" = true WHERE id = $1',
       [l.userId]
     )
+    // Відмова не рахується як використання гранту
+    await setLastUsed(l.grantId, OLD_USE)
+    await expectRefused(at(l))
+    expect(await lastUsed(l.grantId)).toEqual(OLD_USE)
+  }, 60_000)
+
+  it("a token without a pin in an application with scope kinds; last_used_at stays", async () => {
+    const l = await login()
+    await expectAccepted(at(l))
+    events.length = 0
+    await setLastUsed(l.grantId, OLD_USE)
+    await expectRefused(at(l), pinnedMcp)
+    expect(await lastUsed(l.grantId)).toEqual(OLD_USE)
+  }, 60_000)
+
+  it("the agent_grants row belongs to another user", async () => {
+    const l = await login()
+    await expectAccepted(at(l))
+    events.length = 0
+    const other = await stand.signUp()
+    await stand.pool.query(
+      "UPDATE agent_oauth.agent_grants SET user_id = $2 WHERE grant_id = $1",
+      [l.grantId, other.userId]
+    )
+    await expectRefused(at(l))
+  }, 60_000)
+
+  it("a replayed refresh token revokes the grant: the rotated and the original access token", async () => {
+    const l = await login()
+    const rotated = await refresh(app, CLIENT, rt(l))
+    expect(rotated.status, JSON.stringify(rotated.body)).toBe(200)
+    await expectAccepted(rotated.body.access_token as string)
+    events.length = 0
+    const replay = await refresh(app, CLIENT, rt(l))
+    expect(replay.status).toBe(400)
+    // Позначку рядка ставить слухач `grant.revoked` після відповіді
+    await vi.waitFor(async () =>
+      expect((await grantRow(stand.pool, l.grantId))?.revoked_at).not.toBe(null)
+    )
+    await expectRefused(rotated.body.access_token as string)
     await expectRefused(at(l))
   }, 60_000)
 
@@ -501,7 +570,11 @@ describe("401 on both eras (invariants 17, 18)", () => {
     await vi.waitFor(async () =>
       expect((await grantRow(stand.pool, l.grantId))?.revoked_at).not.toBe(null)
     )
-    await expectRefused(winners[0]!.body.access_token as string)
+    const winner = winners[0]!.body.access_token as string
+    // Сирота: токен переможця пережив видалення записів гранту програвшим
+    // запитом, тож відмову дає саме порт, а не відсутність токена
+    expect(await app.provider.AccessToken.find(winner)).toBeDefined()
+    await expectRefused(winner)
     await expectRefused(at(l))
   }, 60_000)
 })
