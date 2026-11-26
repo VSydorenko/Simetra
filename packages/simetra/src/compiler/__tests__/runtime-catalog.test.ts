@@ -4,6 +4,7 @@ import {
   buildClientCatalog,
   buildRuntimeCatalog,
   canonicalSnapshot,
+  compile,
   kernelHashOf,
   renameElement,
   type CompileResult,
@@ -59,6 +60,8 @@ import {
   writeRoles,
   type Layer,
 } from "./fixtures/rights"
+import { kitchenSink } from "./fixtures/kitchen-sink"
+import { loadShapeParsers } from "./fixtures/sql-shape"
 import { uuid } from "./helpers"
 
 /**
@@ -1564,5 +1567,69 @@ describe("buildRuntimeCatalog: storage", () => {
     expect(
       new Set([stored, bigger, plain].map((c) => c.snapshotHash)).size
     ).toBe(3)
+  })
+})
+
+// Р-D1-12, інваріант 14: умовний `publicRead` не відкриває об'єкта жодному
+// каталогу; роль умови — лише в `publicReadPublished` каталогу рантайму.
+describe("buildRuntimeCatalog: conditional publicRead", () => {
+  let sinkModel: CompiledModel
+  let sink: RuntimeCatalog
+  beforeAll(async () => {
+    await loadShapeParsers()
+    const result = await compile(kitchenSink())
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    sinkModel = result.model!
+    sink = buildRuntimeCatalog(sinkModel)
+  })
+
+  const entry = (name: string): RuntimeObject => {
+    const found = sink.objects.find((o) => o.name === name)
+    expect(found, name).toBeDefined()
+    return found!
+  }
+
+  it.each(["Partner", "Item"])(
+    "%s: the role is publicReadPublished, there is no publicRead",
+    (name) => {
+      expect(entry(name).publicReadPublished).toBe("anon")
+      expect(entry(name)).not.toHaveProperty("publicRead")
+    }
+  )
+
+  it("an unconditional publicRead has no publicReadPublished", () => {
+    for (const o of sink.objects.filter((o) => o.publicRead !== undefined))
+      expect(o, o.name).not.toHaveProperty("publicReadPublished")
+    expect(objectOf("Bulletin")).not.toHaveProperty("publicReadPublished")
+  })
+
+  it("the client catalog opens no conditional object", () => {
+    const client = buildClientCatalog(sink)
+    for (const name of ["Partner", "Item"]) {
+      const o = client.objects.find((c) => c.name === name)
+      expect(o, name).toBeDefined()
+      expect(o).not.toHaveProperty("publicRead")
+      expect(o).not.toHaveProperty("publicReadPublished")
+    }
+  })
+
+  it("the condition leaves the kernelHash as it was", () => {
+    for (const name of ["Partner", "Item"]) {
+      const o = entry(name)
+      expect(o.kernelHash).toBe(kernelHashOf(o.operations))
+    }
+    const bare = buildRuntimeCatalog({
+      ...sinkModel,
+      contracts: {
+        ...sinkModel.contracts,
+        access: sinkModel.contracts.access.map((a) => ({
+          ...a,
+          published: undefined,
+        })),
+      },
+    })
+    expect(bare.objects.map((o) => [o.name, o.kernelHash])).toEqual(
+      sink.objects.map((o) => [o.name, o.kernelHash])
+    )
   })
 })
