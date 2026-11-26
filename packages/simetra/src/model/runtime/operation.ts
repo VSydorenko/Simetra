@@ -9,6 +9,9 @@ export const OBJECT_OPERATIONS = [
   "update",
   "markDeletion",
   "delete",
+  // Дописано в кінець: `envelope.ts` розбирає варіанти за позицією.
+  "publish",
+  "unpublish",
 ] as const
 
 export type ObjectOperation = (typeof OBJECT_OPERATIONS)[number]
@@ -25,6 +28,8 @@ export const OPERATION_EVENTS: Readonly<
   update: "write",
   markDeletion: "write",
   delete: undefined,
+  publish: "write",
+  unpublish: "write",
 }
 
 // `z.guid()`, а не `z.uuid()`: Postgres приймає UUID без RFC-варіанта.
@@ -170,6 +175,19 @@ export const operationSchema = z.discriminatedUnion("action", [
   }),
   z.strictObject({
     action: z.literal("delete"),
+    object: metadataRefSchema,
+    id: rowIdSchema,
+    expectedVersion: expectedVersionSchema,
+  }),
+  // Публікація умовного об'єкта (Р-D1-11): лише версія рядка, без значень.
+  z.strictObject({
+    action: z.literal("publish"),
+    object: metadataRefSchema,
+    id: rowIdSchema,
+    expectedVersion: expectedVersionSchema,
+  }),
+  z.strictObject({
+    action: z.literal("unpublish"),
     object: metadataRefSchema,
     id: rowIdSchema,
     expectedVersion: expectedVersionSchema,

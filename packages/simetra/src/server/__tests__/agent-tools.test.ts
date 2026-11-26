@@ -32,8 +32,10 @@ const claims = session as SessionClaims
 // дереві зі зміною; число з цього коментаря не брати. Замір 19731 символ →
 // бюджет 20 718 (19731 × 1,05). Додано `offset` у вхід `describe` (сторінки
 // переліку, Р-F3-11): до — 19731, після — 19906 (+175), бюджет 20 718 +
-// ceil(175 × 1,05) = 20 902.
-const AGENT_TOOLS_BUDGET = 20_902
+// ceil(175 × 1,05) = 20 902. Операції `publish` і `unpublish` (Р-D1-11) —
+// два варіанти схеми пакета в `write` і `remove`: замір 23741 символ → бюджет
+// 24 929 (23741 × 1,05).
+const AGENT_TOOLS_BUDGET = 24_929
 
 const update = (object: typeof CLIENT, id = ID) =>
   ({
@@ -188,6 +190,13 @@ describe("input narrowing (І-F3-5)", () => {
       "operations.1.object",
     ],
     ["remove", "write-дія", [mark(CLIENT), createOp], "operations.1.action"],
+    // Публікація нічого не видаляє: вона — дієслово запису (Р-D1-11).
+    [
+      "remove",
+      "publish",
+      [mark(CLIENT), { ...del(CLIENT), action: "publish" }],
+      "operations.1.action",
+    ],
     [
       "remove",
       "два об'єкти",
@@ -206,6 +215,18 @@ describe("input narrowing (І-F3-5)", () => {
       expect(f.runs).toEqual([])
     }
   )
+
+  it("write пропускає publish і unpublish", async () => {
+    const f = fake()
+    ok(
+      await f.tools.call(claims, "write", {
+        operations: [
+          { ...del(CLIENT), action: "publish" },
+          { ...del(CLIENT), action: "unpublish" },
+        ],
+      })
+    )
+  })
 
   it("пропускає свої дієслова над одним об'єктом", async () => {
     const f = fake()

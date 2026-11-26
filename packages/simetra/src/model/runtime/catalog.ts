@@ -355,6 +355,9 @@ export const runtimeObjectSchema = catalogEntrySchema
         update: runtimeOperationTargetSchema.optional(),
         markDeletion: runtimeOperationTargetSchema.optional(),
         delete: runtimeOperationTargetSchema.optional(),
+        // Лише в об'єкта з умовним `publicRead` (Р-D1-11).
+        publish: runtimeOperationTargetSchema.optional(),
+        unpublish: runtimeOperationTargetSchema.optional(),
       })
       .optional(),
     constraints: z.array(runtimeConstraintSchema),

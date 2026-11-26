@@ -15,6 +15,8 @@ import {
 import { fakeDatabase, failureOf, type Answer } from "./fake-database"
 import {
   COMPANY,
+  PAGE,
+  pageCatalog,
   ID,
   OTHER,
   catalog,
@@ -248,6 +250,50 @@ describe("command transaction", () => {
       COMMIT,
       { release: false },
     ])
+  })
+
+  // Р-D1-11: перехід публікації — окрема функція ядра з дією-іменем, а
+  // `Change.operation` несе саме `publish`/`unpublish` (точка переходу для D4).
+  it.each(["publish", "unpublish"] as const)(
+    "calls %s with the id and the version and reports it in the change",
+    async (action) => {
+      const { db, runtime } = await setup(
+        (text) =>
+          text.endsWith("AS r") ? { rows: [{ r: coreRow(ID, 6) }] } : undefined,
+        { catalog: pageCatalog }
+      )
+      const result = await runtime.run(session, {
+        action,
+        object: PAGE,
+        id: ID,
+        expectedVersion: 5,
+      })
+      expect(db.calls).toEqual([
+        ...OPEN,
+        context(action, "page", ID),
+        call(`page_${action}`, "$1::uuid, $2::bigint", [ID, "5"]),
+        EPOCH,
+        COMMIT,
+        { release: false },
+      ])
+      expect(result.changes.map((c) => [c.id, c.operation])).toEqual([
+        [ID, action],
+      ])
+    }
+  )
+
+  it("refuses publish on an object without the conditional public read", async () => {
+    const { runtime } = await setup()
+    expect(
+      await failureOf(
+        runtime.run(session, {
+          action: "publish",
+          object: CLIENT,
+          id: ID,
+          expectedVersion: 5,
+        })
+      )
+    ).toMatchObject({ code: "command.invalid" })
   })
 
   it("sets administerRights and a NULL version on a rights catalog create", async () => {

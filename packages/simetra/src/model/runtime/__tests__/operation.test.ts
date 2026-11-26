@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest"
 import { z } from "zod"
-import { BATCH_MAX, batchSchema, operationSchema } from "../operation"
+import {
+  BATCH_MAX,
+  OBJECT_OPERATIONS,
+  OPERATION_EVENTS,
+  batchSchema,
+  operationSchema,
+} from "../operation"
 import { TABULAR_LINES_MAX } from "../read"
 
 const ID = "11111111-1111-4111-8111-111111111111"
@@ -11,6 +17,42 @@ const OBJECT = { kind: "Catalog", name: "Organization" }
  * каталогу (`operations.create.root`), їх вирішує T3 `prepareInput`.
  */
 describe("operationSchema", () => {
+  // `envelope.ts` розбирає варіанти за позицією: нові — лише в кінці.
+  it("appends publish and unpublish: earlier variants keep their positions", () => {
+    expect(OBJECT_OPERATIONS).toEqual([
+      "create",
+      "update",
+      "markDeletion",
+      "delete",
+      "publish",
+      "unpublish",
+    ])
+    expect(operationSchema.options.map((o) => o.shape.action.value)).toEqual([
+      "create",
+      "update",
+      "markDeletion",
+      "delete",
+      "publish",
+      "unpublish",
+    ])
+    expect(OPERATION_EVENTS.publish).toBe("write")
+    expect(OPERATION_EVENTS.unpublish).toBe("write")
+  })
+
+  it.each(["publish", "unpublish"])(
+    "%s takes an id and a version",
+    (action) => {
+      const op = { action, object: OBJECT, id: ID, expectedVersion: 1 }
+      expect(operationSchema.safeParse(op).success).toBe(true)
+      expect(
+        operationSchema.safeParse({ ...op, expectedVersion: undefined }).success
+      ).toBe(false)
+      expect(operationSchema.safeParse({ ...op, values: {} }).success).toBe(
+        false
+      )
+    }
+  )
+
   it.each<[string, unknown, boolean]>([
     ["create with an id", { action: "create", object: OBJECT, id: ID }, true],
     ["create without an id", { action: "create", object: OBJECT }, true],

@@ -77,6 +77,32 @@ describe("wire schemas", () => {
       true,
       { action: "delete", object: OBJECT_ID, id: ID, expectedVersion: 1 },
     ],
+    [
+      "a publish",
+      true,
+      { action: "publish", object: OBJECT_ID, id: ID, expectedVersion: 1 },
+    ],
+    [
+      "an unpublish",
+      true,
+      { action: "unpublish", object: OBJECT_ID, id: ID, expectedVersion: 1 },
+    ],
+    [
+      "a publish without a version",
+      false,
+      { action: "publish", object: OBJECT_ID, id: ID },
+    ],
+    [
+      "a publish with a mark",
+      false,
+      {
+        action: "publish",
+        object: OBJECT_ID,
+        id: ID,
+        expectedVersion: 1,
+        mark: true,
+      },
+    ],
     ["an object that is a reference", false, { action: "create", object: REF }],
     ["an object that is not a UUID", false, { action: "create", object: "x" }],
     [

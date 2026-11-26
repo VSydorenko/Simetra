@@ -47,8 +47,14 @@ const wireTabularSectionsSchema = z.record(
 // змінюються лише `object` і ключі ТЧ. `update` — без уточнення й без
 // `deleteIds`: форма передачі шле повні масиви ТЧ (фасад, `fullTabularArrays`),
 // а схему з уточненням Zod 4 розширити не дає.
-const [createSchema, , markDeletionSchema, deleteSchema] =
-  operationSchema.options
+const [
+  createSchema,
+  ,
+  markDeletionSchema,
+  deleteSchema,
+  publishSchema,
+  unpublishSchema,
+] = operationSchema.options
 
 /** One operation of a command in wire form: object by UUID, physical columns. */
 export const wireOperationSchema = z.discriminatedUnion("action", [
@@ -62,6 +68,8 @@ export const wireOperationSchema = z.discriminatedUnion("action", [
   }),
   markDeletionSchema.extend({ object: wireObjectSchema }),
   deleteSchema.extend({ object: wireObjectSchema }),
+  publishSchema.extend({ object: wireObjectSchema }),
+  unpublishSchema.extend({ object: wireObjectSchema }),
 ])
 
 export type WireOperation = z.infer<typeof wireOperationSchema>
