@@ -241,7 +241,7 @@ describe("dev-user", () => {
       )
       await client.query(
         `INSERT INTO better_auth.session (id, token, "userId", "expiresAt", "createdAt", "updatedAt")
-         SELECT 'devusr-session', 'devusr-token', id, now() + interval '1 day', now(), now()
+         SELECT gen_random_uuid(), 'devusr-token', id, now() + interval '1 day', now(), now()
            FROM better_auth."user" WHERE email = $1`,
         ["dev@example.test"]
       )
