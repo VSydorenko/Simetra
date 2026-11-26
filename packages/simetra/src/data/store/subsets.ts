@@ -152,6 +152,12 @@ export interface Subset extends ReaderTarget {
    * only, `sync()`): the flight stays set meanwhile, but nothing is in flight.
    */
   retryAt: number | undefined
+  /**
+   * An attempt of the load in flight has not settled yet, so its answer may
+   * still write rows; after the last attempt settles the flight stays set
+   * until its `finally`, but carries nothing.
+   */
+  answerPending: boolean
   /** The start epochs of the system re-reads (`revalidate`) in flight. */
   rereadEpochs: number[]
   /**
@@ -670,6 +676,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       const { why } = permit
       const lease = ctx.source.lease()
       const number = ctx.attempts.start("load", target, why)
+      s.answerPending = true
       const flight = permit.flight({
         attempt: number,
         caller: s,
@@ -684,13 +691,22 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         s.readStart = readEpoch
       }
       const verdict = { again: false, discarded: false }
-      const settleLoad = (entry: ViewEntry) =>
-        settleView(s, target, what, entry, {
-          apply: ({ read }, scope) => required(read, "its answer").write(scope),
-          finish: () => {
-            s.dirty = true
-          },
-        })
+      const settleLoad = (entry: ViewEntry) => {
+        try {
+          settleView(s, target, what, entry, {
+            apply: ({ read }, scope) =>
+              required(read, "its answer").write(scope),
+            finish: () => {
+              s.dirty = true
+            },
+          })
+        } finally {
+          // Остання спроба осіла: політ лишається до свого `finally`, але
+          // рядків не принесе (#465); прохід синхронний, тож `purge` не
+          // втискається між областю запису й цим скиданням.
+          s.answerPending = false
+        }
+      }
       return readForm(ctx, s, readEpoch, token, flight).then(
         (read) => {
           settleLoad({ flight, number, read, verdict })
@@ -1161,6 +1177,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       flightEpoch: undefined,
       flightCause: undefined,
       retryAt: undefined,
+      answerPending: false,
       rereadEpochs: [],
       trailing: undefined,
       settled: false,

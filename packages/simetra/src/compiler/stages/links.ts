@@ -640,8 +640,21 @@ function beforeWriteMechanics(
         objectKey(source.ref.kind, source.ref.name)
     )
     if (target === undefined) continue
-    for (const def of KIND_REGISTRY[target.kind].standardColumns(target.data)) {
-      if (standard.has(standardLogicalName(def, style))) {
+    const kind = KIND_REGISTRY[target.kind]
+    // Колонки факту ролі «мови» (Р-B2-12): BEFORE-тригери йдуть за іменем, тож
+    // обробник після тригера стану обійшов би матрицю переходів.
+    const fixed = kind.languagesCatalog?.(target.data)
+      ? new Set([
+          ...(kind.fixedColumns?.(target.data)?.insert ?? []),
+          ...(kind.fixedColumns?.(target.data)?.update ?? []),
+          kind.languageState?.(target.data)?.stateColumn,
+        ])
+      : undefined
+    for (const def of kind.standardColumns(target.data)) {
+      if (
+        standard.has(standardLogicalName(def, style)) ||
+        fixed?.has(def.logicalName)
+      ) {
         names.add(def.physicalName.toLowerCase())
       }
     }

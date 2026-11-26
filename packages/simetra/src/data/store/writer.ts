@@ -191,7 +191,8 @@ function releaseTargets(ctx: WriterContext, scope: Scope, s: Subset) {
  * Drops purged keys from every subset (§6.5): ownership, composition and
  * `include` targets (also those only the purged rows referred to); a card or
  * section of a purged key becomes `purged`. Loads in flight that may carry
- * rows of the object are invalidated and re-run after the purge (П12): their
+ * rows of the object (an attempt not settled yet, or the retry pause of a
+ * discarded one) are invalidated and re-run after the purge (П12): their
  * answer would bring a row that was not in the store at the purge moment.
  */
 function forget(
@@ -234,9 +235,13 @@ function forget(
     // `purge` у сховищі не було: їхню відповідь відкинуто, наступну
     // сторінку читає дія користувача чи край списку.
     if ((own || target) && s.window !== undefined) s.paging.clear()
+    // Політ, чия остання спроба вже осіла, лишається до свого `finally`, але
+    // рядків не принесе: перезапуск був би системним читанням, що змінює склад
+    // (#465). Пауза повтору відкинутого — ще той самий політ.
     if (
       (own || target) &&
       s.flight !== undefined &&
+      (s.answerPending || s.retryAt !== undefined) &&
       !ctx.defects.has("purge-keeps-flights")
     ) {
       s.gen++

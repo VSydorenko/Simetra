@@ -1,0 +1,15 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/catalogs.schema.json",
+  "id": "dce9527a-bdf4-4102-8c14-5d2fe2f7efb8",
+  "kind": "Catalog",
+  "name": "Languages",
+  "physicalName": "languages",
+  "kindLabel": "languages",
+  "scope": "none",
+  "title": {
+    "uk": "Мови"
+  },
+  "role": "languages",
+  "codeLength": 12,
+  "autonumber": false
+}

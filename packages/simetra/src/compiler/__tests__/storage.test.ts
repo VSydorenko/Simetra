@@ -45,6 +45,7 @@ describe("catalog storage in the compiler", () => {
       attributeCase: "camelCase",
       main: true,
       users: false,
+      fixed: undefined,
     })
     for (const list of [base, update].map((l) => l.map((c) => c.name))) {
       expect(list).toContain("file_name")

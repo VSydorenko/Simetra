@@ -5,12 +5,14 @@ import { uniformExtents } from "../rights/contracts"
 import { kitchenSink } from "./fixtures/kitchen-sink"
 import {
   COMMENT_FILE,
+  LANGUAGES_FILE,
   MEMBER_REGION_ID,
   ORG_KIND_ID,
   TASK_FILE,
   TASK_ID,
   compileRights,
   globalConstant,
+  languagesLayer,
   policyDomain,
   rightsFiles,
   writableRegister,
@@ -588,6 +590,44 @@ describe("rights contract", () => {
       "a catalog custom action naming update column %s is not refused as immutable",
       async (name, expected) => {
         expect(await headerErrors(COMMENT_FILE, name)).toEqual(expected)
+      }
+    )
+
+    // Колонки поза грантом зміни за фактом ролі «мови» (Р-B2-3) шапка не
+    // називає; `state` — у гранті зміни, тож дозволений.
+    it.each([
+      [
+        "code",
+        [
+          [
+            "rights.custom-action-effects",
+            { action: "stamp", reason: "immutableColumn" },
+          ],
+        ],
+      ],
+      [
+        "isPrimary",
+        [
+          [
+            "rights.custom-action-effects",
+            { action: "stamp", reason: "immutableColumn" },
+          ],
+        ],
+      ],
+      ["state", []],
+    ])(
+      "a languages custom action naming %s follows the role's update grant",
+      async (name, expected) => {
+        const result = await compileRights(
+          policyDomain(languagesLayer(), {
+            [LANGUAGES_FILE]: {
+              customActions: [
+                { id: uuid(7901), name: "stamp", effects: { header: [name] } },
+              ],
+            },
+          })
+        )
+        expect(errors(result).map((d) => [d.code, d.params])).toEqual(expected)
       }
     )
 

@@ -17,6 +17,7 @@ import {
   authorCarrier,
   commandCoreLayer,
   compileRights,
+  languagesLayer,
   policyDomain,
   singleTenantRights,
   writeRoles,
@@ -29,6 +30,7 @@ const FAMILIES: readonly PlatformTriggerFamily[] = [
   "key",
   "carriers",
   "hierarchy",
+  "languageState",
   "effects",
   "rightsGuards",
   "rightsSignals",
@@ -43,8 +45,14 @@ let models: CompiledModel[]
 beforeAll(async () => {
   models = []
   for (const files of [
-    // Носії, ефекти, запобіжники; `Ticket` з авторством та ієрархією
-    policyDomain(writeRoles(), adminRoles(), commandCoreLayer()),
+    // Носії, ефекти, запобіжники; `Ticket` з авторством та ієрархією;
+    // «Мови» зі станом мови
+    policyDomain(
+      writeRoles(),
+      adminRoles(),
+      commandCoreLayer(),
+      languagesLayer()
+    ),
     // Оновлення механіки й авторства з умовою змісту — таблиця з копіями
     singleTenantRights(authorCarrier()),
   ]) {

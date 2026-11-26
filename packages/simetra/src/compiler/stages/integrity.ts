@@ -239,6 +239,7 @@ export function checkIntegrity(
   diagnostics.push(...checkPosting(objects, references, byKey))
   diagnostics.push(...checkSubscriptions(objects, model, provider, style))
   diagnostics.push(...checkUsersCatalogs(objects, model))
+  diagnostics.push(...checkLanguagesCatalogs(objects, project, model))
   diagnostics.push(...checkAuthorTracking(objects))
   diagnostics.push(...checkMembership(objects, scopeKinds))
   diagnostics.push(...checkStorageRoot(objects, scopeKinds))
@@ -299,40 +300,123 @@ function checkUsersCatalogs(
         )
       )
     }
-    for (const field of KIND_REGISTRY[object.kind].columnFields) {
-      const attributes = (object.data as Record<string, unknown>)[field] as
-        CatalogAttribute[] | undefined
-      attributes?.forEach((attribute, index) => {
-        const reason = provisionHazard(attribute)
-        if (reason === undefined) return
-        found.push(
-          diagnostic(
-            "users.provision-unsafe",
-            object.file,
-            `/${field}/${index}`,
-            {
-              name,
-              reason,
-              element: attribute.name,
-            }
-          )
-        )
-      })
+    for (const hazard of rowInsertHazards(object, model)) {
+      found.push(
+        diagnostic("users.provision-unsafe", hazard.file, hazard.pointer, {
+          name,
+          reason: hazard.reason,
+          element: hazard.element,
+        })
+      )
     }
-    for (const table of model.physical.tables) {
-      if (!isObjectOrigin(table.origin) || table.origin.objectId !== object.id)
-        continue
-      for (const check of table.checks) {
-        if (check.origin === undefined) continue
+  }
+  return found
+}
+
+/**
+ * Роль «мови» (Р-B2-2): невідповідність фактам ролі — відмова, а не тихе
+ * перевизначення. Довідник ролі знаходить факт реєстру, не ім'я ролі.
+ */
+function checkLanguagesCatalogs(
+  objects: readonly ParsedObject[],
+  project: Project,
+  model: ModelStageResult
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  const catalogs = objects
+    .filter((o) => KIND_REGISTRY[o.kind].languagesCatalog?.(o.data) === true)
+    .sort((a, b) => compareStrings(a.file, b.file))
+  const first = catalogs[0]
+  const primary = project.primaryDataLanguage
+  for (const object of catalogs) {
+    const { name, file } = object
+    const def = KIND_REGISTRY[object.kind]
+    const data = object.data as Catalog
+    if (object !== first) {
+      found.push(
+        diagnostic("languages.catalog-duplicate", file, "/role", {
+          name,
+          firstFile: first!.file,
+        })
+      )
+    }
+    if (
+      def.requiredScope?.(object.data) === "none" &&
+      data.scope !== undefined &&
+      data.scope !== NO_SCOPE
+    ) {
+      found.push(
+        diagnostic("languages.scope-not-none", file, "/scope", { name })
+      )
+    }
+    const form = def.codeForm?.(object.data)
+    if (form !== undefined) {
+      for (const field of [
+        "codeType",
+        "codeLength",
+        "autonumber",
+        "codeUnique",
+      ] as const) {
+        if (data[field] === form[field]) continue
         found.push(
-          diagnostic("users.provision-unsafe", check.origin.rowRule.file, "", {
+          diagnostic("languages.code-form", file, `/${field}`, {
             name,
-            reason: "rowRule",
-            element: check.name,
+            field,
+            expected: String(form[field]),
           })
         )
       }
     }
+    if (data.descriptionLength === 0) {
+      found.push(
+        diagnostic(
+          "languages.description-required",
+          file,
+          "/descriptionLength",
+          { name }
+        )
+      )
+    }
+    if (def.publishedRead?.(object.data) !== undefined && data.publicRead) {
+      found.push(
+        diagnostic("languages.public-read", file, "/publicRead", { name })
+      )
+    }
+    if (def.predefinedSeed?.(object.data) !== undefined) {
+      for (const hazard of rowInsertHazards(object, model)) {
+        found.push(
+          diagnostic("languages.seed-unsafe", hazard.file, hazard.pointer, {
+            name,
+            reason: hazard.reason,
+            element: hazard.element,
+          })
+        )
+      }
+    }
+    if (data.predefinedItems.length > 0) {
+      found.push(
+        diagnostic("languages.predefined-items", file, "/predefinedItems", {
+          name,
+        })
+      )
+    }
+  }
+  if (first !== undefined && primary === undefined) {
+    found.push(
+      diagnostic("languages.primary-missing", first.file, "/role", {
+        name: first.name,
+      })
+    )
+  }
+  if (first === undefined && primary !== undefined) {
+    found.push(
+      diagnostic(
+        "languages.primary-without-catalog",
+        PROJECT_FILE,
+        "/primaryDataLanguage",
+        { language: primary }
+      )
+    )
   }
   return found
 }
@@ -466,7 +550,56 @@ function checkMembership(
   return found
 }
 
-/** Перша причина, з якої вставка провізії порушила б обмеження реквізиту. */
+/** Небезпека платформної вставки рядка: місце, елемент і причина. */
+interface RowInsertHazard {
+  file: string
+  pointer: string
+  element: string
+  reason: string
+}
+
+/**
+ * Власні реквізити й правила рядка модуля, чиї обмеження порушить платформна
+ * вставка рядка лише з колонками виду й ролі (провізія «Користувачів», засів
+ * «Мов»): одна перевірка для обох правил. Правило рядка статично не
+ * доводиться, тож небезпечне будь-яке.
+ */
+function rowInsertHazards(
+  object: ParsedObject,
+  model: ModelStageResult
+): RowInsertHazard[] {
+  const found: RowInsertHazard[] = []
+  for (const field of KIND_REGISTRY[object.kind].columnFields) {
+    const attributes = (object.data as Record<string, unknown>)[field] as
+      CatalogAttribute[] | undefined
+    attributes?.forEach((attribute, index) => {
+      const reason = provisionHazard(attribute)
+      if (reason === undefined) return
+      found.push({
+        file: object.file,
+        pointer: `/${field}/${index}`,
+        element: attribute.name,
+        reason,
+      })
+    })
+  }
+  for (const table of model.physical.tables) {
+    if (!isObjectOrigin(table.origin) || table.origin.objectId !== object.id)
+      continue
+    for (const check of table.checks) {
+      if (check.origin === undefined) continue
+      found.push({
+        file: check.origin.rowRule.file,
+        pointer: "",
+        element: check.name,
+        reason: "rowRule",
+      })
+    }
+  }
+  return found
+}
+
+/** Перша причина, з якої платформна вставка порушила б обмеження реквізиту. */
 function provisionHazard(attribute: CatalogAttribute): string | undefined {
   const { defaultValue } = attribute
   if (attribute.required && defaultValue === undefined)

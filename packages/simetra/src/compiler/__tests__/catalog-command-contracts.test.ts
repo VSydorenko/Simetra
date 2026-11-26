@@ -21,12 +21,14 @@ import { loadPlpgsqlParser, type PlpgsqlParser } from "../sql/plpgsql"
 import { handlerAssigns } from "../stages/links"
 import { findStandardColumn } from "../standard-column"
 import {
+  LANGUAGES_TABLE,
   TICKET_FILE,
   catalog,
   commandCoreLayer,
   compileRights,
   compiledPolicyDomain,
   adminRoles,
+  languagesLayer,
   objects,
   policyDomain,
   scopeRootCarrier,
@@ -405,6 +407,33 @@ function subordinates(): Layer {
     }),
   }
 }
+
+describe("довідник ролі «мови»: ключі ядра — колонки гранту (Р-B2-3)", () => {
+  it("створення без is_primary і state, зміна без is_primary і code, без позначки й видалення", async () => {
+    const model = await compiled(compileRights(policyDomain(languagesLayer())))
+    const contract = contractOf(contractsOf(model), LANGUAGES_TABLE)
+    expect([contract.createKeys, contract.updateKeys]).toEqual([
+      ["id", "code", "description"],
+      ["description", "state"],
+    ])
+    expect(contract.actions).toEqual({ create: "create", update: "update" })
+    // Ядро пише рівно ці колонки: `INSERT` і `SET` — з ключів контракту.
+    const save = model.sqlUnits.find(
+      (u) =>
+        u.identity ===
+        `function:public.${LANGUAGES_TABLE}_save(jsonb,int8,jsonb)`
+    )!
+    expect(save.sql).toContain(
+      `INSERT INTO public.${LANGUAGES_TABLE} (id, code, description) VALUES`
+    )
+    expect(save.sql).toMatch(
+      new RegExp(
+        `UPDATE public\\.${LANGUAGES_TABLE} SET description = [^;]*, state = [^;]* WHERE id = v_in\\.id`
+      )
+    )
+    expect(save.sql).not.toMatch(/ SET [^;]*\b(code|is_primary) = /)
+  })
+})
 
 describe("власник підпорядкованого довідника — посилання ядра", () => {
   it.each([

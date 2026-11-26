@@ -8,6 +8,7 @@ import {
   withoutLocations,
   type CompiledModel,
   type Node,
+  type PredefinedSeedContract,
   type RuleCode,
   type SqlParser,
   type SqlUnit,
@@ -68,6 +69,12 @@ import {
   pendingCarrierCopies,
   type CreatedByPlan,
 } from "./carrier-backfill"
+import {
+  predefinedSeedSteps,
+  readSeedTargetRows,
+  seedVerdict,
+  type SeedVerdict,
+} from "./predefined-seed"
 import { desiredForApply, type ApplyDesired } from "./desired"
 import { applyDiagnostic } from "./diagnostic"
 import { driftGate, type DriftReport } from "./drift"
@@ -413,6 +420,43 @@ async function backfillActions(p: {
     if (checks.length > 0) return { ok: false, diagnostics: checks }
   }
   return { ok: true, actions: planned.actions }
+}
+
+/**
+ * Звірка передвизначених рядків з ціллю (Р-B2-8): рядки цілі — у
+ * rollback-транзакції читача, у вихідних іменах (`names`); вердикт кожного
+ * рядка вирішує, чи план його засіває. Відмова — до будь-якого кроку. Без
+ * рядків засіву ціль не читається.
+ */
+async function seedChecks(p: {
+  reader: ApplyDatabase
+  target: DbConnection
+  model: CompiledModel
+  /** Модель живої цілі: таблиця чи колонка, якої немає, — «ще немає». */
+  live: CatalogModel
+  names: TargetNames
+}): Promise<
+  | {
+      ok: true
+      seeds: { seed: PredefinedSeedContract; verdict: SeedVerdict }[]
+    }
+  | { ok: false; diagnostics: EngineDiagnostic[] }
+> {
+  const contracts = p.model.contracts.predefinedSeeds
+  if (contracts.length === 0) return { ok: true, seeds: [] }
+  const rows = await p.reader.transaction(p.target, "rollback", (tx) =>
+    readSeedTargetRows(tx, contracts, p.live, p.names)
+  )
+  const seeds = contracts.map((seed, i) => ({
+    seed,
+    verdict: seedVerdict(seed, rows[i]!),
+  }))
+  const diagnostics = seeds.flatMap(({ verdict }) =>
+    verdict.status === "refused" ? [verdict.diagnostic] : []
+  )
+  return diagnostics.length > 0
+    ? { ok: false, diagnostics }
+    : { ok: true, seeds }
 }
 
 /**
@@ -1265,6 +1309,15 @@ export async function buildPlan(
   })
   if (!checked.ok) return refused([...diagnostics, ...checked.diagnostics])
   const planSteps = checked.steps
+  // 7′′. Звірка засіву з ціллю (Р-B2-8) — на плані, до будь-якого кроку
+  const seeded = await seedChecks({
+    reader: dbs.reader,
+    target: o.target,
+    model,
+    live: live.extracted.model,
+    names: SAME_NAMES,
+  })
+  if (!seeded.ok) return refused([...diagnostics, ...seeded.diagnostics])
   // 7а. Кроки даних нових копій носіїв (спека прав §5.2, спека промоції §7.2) — після кроків
   // двигуна, що створюють колонки-копії: копію звіряємо зі знімком marker, а
   // не з живою колонкою
@@ -1298,6 +1351,11 @@ export async function buildPlan(
       offset: withCarriers.length,
     }),
   ]
+  // 7б′′. Кроки засіву (Р-B2-7) — після DDL і блоку `versions`
+  const withSeeds = [
+    ...withVersions,
+    ...predefinedSeedSteps(seeded.seeds, withVersions.length),
+  ]
   const collected = await collectEnvironment({
     engine,
     dbs,
@@ -1307,12 +1365,12 @@ export async function buildPlan(
     live,
     desired: target.extracted.catalog,
     role: targetOwners.session,
-    steps: withVersions,
+    steps: withSeeds,
     parse,
   })
   if (!collected.ok) return refused([...diagnostics, ...collected.diagnostics])
   const { environment } = collected
-  const steps = [...withVersions, ...collected.steps]
+  const steps = [...withSeeds, ...collected.steps]
   const permissions = requiredPermissions({ steps, drift, promotion: null })
   // Слід кроків — те саме правило, що й для плану з промоцією (спека промоції §7.2); без
   // промоції імена вихідного стану й кроків збігаються
@@ -1724,6 +1782,15 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   })
   if (!checked.ok) return refused([...withClone, ...checked.diagnostics])
   const planSteps = checked.steps
+  // Звірка засіву з ціллю (Р-B2-8): ціль — у старих іменах
+  const seeded = await seedChecks({
+    reader: dbs.reader,
+    target: o.target,
+    model: c.model,
+    live: live.extracted.model,
+    names,
+  })
+  if (!seeded.ok) return refused([...withClone, ...seeded.diagnostics])
 
   // Типи й функції моделі кроків даних і нові типи замірів, які створює,
   // змінює чи знищує крок плану, — лише за кроками двигуна (спека
@@ -1837,6 +1904,11 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       },
     }),
   ]
+  // Кроки засіву (Р-B2-7) — після DDL і блоку `versions`, у нових іменах
+  const withSeeds = [
+    ...withVersions,
+    ...predefinedSeedSteps(seeded.seeds, withVersions.length),
+  ]
   const collected = await collectEnvironment({
     engine,
     dbs,
@@ -1846,12 +1918,12 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     live,
     desired: target.extracted.catalog,
     role: c.targetOwners.session,
-    steps: withVersions,
+    steps: withSeeds,
     parse,
   })
   if (!collected.ok) return refused([...withClone, ...collected.diagnostics])
   const { environment } = collected
-  const steps = [...withVersions, ...collected.steps]
+  const steps = [...withSeeds, ...collected.steps]
 
   // Залежні доступу (спека промоції §8) — з живої цілі, у старих іменах, транзакцією
   // READ ONLY

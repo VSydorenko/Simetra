@@ -285,6 +285,14 @@ export {
   type CreatedByPlan,
   type PendingCarrierCopies,
 } from "./carrier-backfill"
+export {
+  predefinedSeedSql,
+  predefinedSeedSteps,
+  readSeedTargetRows,
+  seedVerdict,
+  type SeedTargetRows,
+  type SeedVerdict,
+} from "./predefined-seed"
 export type { RightsOrphans } from "./rights-sources"
 export {
   PROVIDER_ASSUMED_SCHEMAS,

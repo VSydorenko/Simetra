@@ -5488,6 +5488,31 @@ describe("core model regressions", () => {
     await modelRun(runModel(steps, false, "full", [], true, true, true))
   })
 
+  // #465: завантаження користувача вигляду 5 вже осіло (`applied`; рядки пари
+  // за бар'єром знімка не записано), а знімок прав, що прийшов до кінця польоту,
+  // прибирає пару. `purge` не мусить перезапускати завантаження, відповідь якого
+  // вже записано: інакше системний перезапуск `mount` змінює склад без дії
+  // користувача. Профіль `burial` тримає `full` через `churn`.
+  it("does not restart a load whose answer already settled when a purge follows (#465)", async () => {
+    const steps: Step[] = [
+      { t: "hideSection", state: "mounted", then: "none", evict: false },
+      { t: "answer", pick: 0, how: "unavailable", at: 0 },
+      { t: "move", k: 0 },
+      { t: "churn", v: 5, scroll: false },
+      { t: "churn", v: 8, scroll: false },
+      { t: "purgeKey", org: false, k: 0 },
+      { t: "answer", pick: 1, how: "stale", at: 0 },
+      { t: "sub", v: 5 },
+      { t: "answer", pick: 6, how: "stale", at: 0 },
+      { t: "race", group: 2, settle: "now" },
+      { t: "rights", what: "narrow", object: 0, scope: 0 },
+      { t: "answer", pick: 6, how: "stale", at: 0 },
+      { t: "rights", what: "hold", object: 0, scope: 0 },
+      { t: "rights", what: "narrow", object: 0, scope: 1 },
+    ]
+    await modelRun(runModel(steps, false, "burial", [], true, true, false))
+  })
+
   it.each([
     // #312: явний `revalidate` над виглядом у польоті після `unavailable`/`resume`.
     {
@@ -5746,6 +5771,14 @@ describe("core model regressions", () => {
       rights: true,
       seed: -1708729583,
       path: "9564:1:0:2:2:2:3:3:3:3:2:3:3:3:3:3:3:3:3:4:5:5:5:5:6:6:6",
+    },
+    // #465: `purge` пари з проходу знімка прав між осіданням завантаження й
+    // кінцем його польоту перезапускав уже записане завантаження.
+    {
+      issue: 465,
+      rights: true,
+      seed: -494771294,
+      path: "3269:5:0:1:5:10:10:11:11:11:17:17:23:25:29:30:30:30:34:34:23:24:23:37:46:56:61:69:77:75:76:80:80:83:96:100:103:103:105:33:49:15:9:65:74:69:63:62:62:64:64:59:58:58:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59",
     },
   ])(
     "replays the counterexample of #$issue (seed $seed)",

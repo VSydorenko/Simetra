@@ -31,7 +31,11 @@ import {
 } from "./contracts"
 import { compareStrings } from "./diagnostics"
 import { CURRENT_USER } from "./membership-functions"
-import { commandWriteColumns } from "./rights/command-columns"
+import {
+  commandWriteColumns,
+  roleFixedColumns,
+  type CommandFixedColumns,
+} from "./rights/command-columns"
 import { COMMAND_FUNCTIONS } from "./rights/command-units"
 import {
   RIGHTS_FUNCTIONS,
@@ -51,7 +55,7 @@ import { sha256HexSync } from "./sha256"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 import { isDeclaredTable, sqlLiteral } from "./stages/model"
-import { styleFreeColumn } from "./standard-column"
+import { standardColumn, styleFreeColumn } from "./standard-column"
 import type { ParsedObject } from "./stages/files"
 
 /**
@@ -108,17 +112,19 @@ export function accessContracts(
         table.origin.tabularSectionId === undefined &&
         table.origin.part === undefined
       const users = objectId === usersObjectId
-      const command = KIND_REGISTRY[object.kind].commandWrites
+      const kind = KIND_REGISTRY[object.kind]
+      const published = main ? kind.publishedRead?.(object.data) : undefined
+      const command = kind.commandWrites
         ? commandColumns(table, {
             attributeCase,
             main,
             users,
+            fixed: roleFixedColumns(object),
             transitions: main
               ? (rightsById.get(objectId)?.transitions ?? [])
               : [],
             roleAssignments:
-              KIND_REGISTRY[object.kind].rightsSystem?.(object.data) ===
-              "roleAssignments",
+              kind.rightsSystem?.(object.data) === "roleAssignments",
           })
         : undefined
       return [
@@ -135,6 +141,22 @@ export function accessContracts(
           users,
           ...(withRights.has(objectId) ? { rights: { objectId } } : {}),
           ...(command === undefined ? {} : { command }),
+          ...(published === undefined
+            ? {}
+            : {
+                publishedRead: {
+                  stateColumn: physicalOf(
+                    table,
+                    object,
+                    published.stateColumn,
+                    attributeCase
+                  ),
+                  publishedState: published.publishedState,
+                  guestColumns: published.guestColumns.map((name) =>
+                    physicalOf(table, object, name, attributeCase)
+                  ),
+                },
+              }),
         },
       ]
     })
@@ -143,6 +165,24 @@ export function accessContracts(
         compareStrings(a.table.schema, b.table.schema) ||
         compareStrings(a.table.name, b.table.name)
     )
+}
+
+/**
+ * Фізичне ім'я стандартної колонки за логічним ім'ям факту ролі: визначення —
+ * з реєстру виду, колонка — з таблиці за походженням, не за назвою.
+ */
+function physicalOf(
+  table: ObjectTable,
+  object: ParsedObject,
+  logicalName: string,
+  attributeCase: AttributeCase
+): string {
+  const def = must(
+    KIND_REGISTRY[object.kind]
+      .standardColumns(object.data)
+      .find((d) => d.logicalName === logicalName)
+  )
+  return standardColumn(table, def, attributeCase).name
 }
 
 /**
@@ -158,6 +198,7 @@ function commandColumns(
     attributeCase: AttributeCase
     main: boolean
     users: boolean
+    fixed: CommandFixedColumns | undefined
     transitions: readonly { column: string }[]
     roleAssignments: boolean
   }
@@ -207,6 +248,17 @@ export function publicReadUsing(
   return publicReadNeedsUser(contract, sessionUser)
     ? `${CURRENT_USER} IS NOT NULL`
     : "true"
+}
+
+/**
+ * Умова політики `<t>_published_read` (Р-B2-5) над виразом колонки стану:
+ * одне місце для політики й рядка пояснення прав (права §5.1).
+ */
+export function publishedReadUsing(
+  stateColumn: string,
+  publishedState: string
+): string {
+  return `${stateColumn} = ${sqlLiteral(publishedState)}`
 }
 
 /** Гість бачить не більше за користувача: `anon` відкриває обидві ролі запиту. */
@@ -261,6 +313,7 @@ export function accessPolicyNames(table: { name: string }): {
   scopeUpdate: string
   scopeDelete: string
   publicRead: string
+  publishedRead: string
   commandInsert: string
   commandUpdate: string
   commandDelete: string
@@ -274,6 +327,7 @@ export function accessPolicyNames(table: { name: string }): {
     scopeUpdate: name("scope_update"),
     scopeDelete: name("scope_delete"),
     publicRead: name("public_read"),
+    publishedRead: name("published_read"),
     commandInsert: name("command_insert"),
     commandUpdate: name("command_update"),
     commandDelete: name("command_delete"),
@@ -368,12 +422,16 @@ function clipUtf8(text: string, limit: number): string {
  * ще пише перелічені колонки: окремий оператор на привілей, порожній перелік
  * — без оператора. `REVOKE` їй не потрібен: типових привілеїв провайдера
  * вона не має, а зайве знімає дифф ACL рушія.
+ *
+ * `guestColumns` — колонковий `SELECT` гостю (читання опублікованих, Р-B2-5):
+ * гість не серед `readers`, тож решта колонок йому закрита.
  */
 export function tableGrants(
   table: QualifiedName,
   readers: readonly ApiRolePurpose[],
   provider: DatabaseProvider,
-  command?: AccessContract["command"]
+  command?: AccessContract["command"],
+  guestColumns?: readonly string[]
 ): string[] {
   const apiRoles = PROVIDER_API_ROLES[provider]
   const target = `TABLE ${qualified(table)}`
@@ -391,6 +449,11 @@ export function tableGrants(
         ? []
         : [`GRANT SELECT ON ${target} TO ${quoteIdent(role)};`]
     }),
+    ...(guestColumns === undefined
+      ? []
+      : [
+          `GRANT SELECT (${columns(guestColumns)}) ON ${target} TO ${quoteIdent(apiRoles.anonymous)};`,
+        ]),
     `GRANT SELECT ON ${target} TO ${commandRole};`,
     ...(command === undefined
       ? []
@@ -600,6 +663,26 @@ export function buildAccessUnits(
           )
         )
       }
+      if (contract.publishedRead !== undefined) {
+        // Опубліковані рядки «Мов» читають гість, користувач і роль команд
+        // від його імені незалежно від функцій прав (Р-B2-5); решту рядків
+        // відкривають лише політики прав читання нижче.
+        policies.push(
+          policy(
+            names.publishedRead,
+            table,
+            "PERMISSIVE",
+            "SELECT",
+            [apiRoles.anonymous, apiRoles.user, PLATFORM_ROLES.command],
+            {
+              using: publishedReadUsing(
+                quoteIdent(contract.publishedRead.stateColumn),
+                contract.publishedRead.publishedState
+              ),
+            }
+          )
+        )
+      }
       // Без функцій прав політика, що їх кличе, не застосувалась би;
       // `publicRead` відкриває всі рядки й без прав (спека прав §5.2).
       const rights =
@@ -653,7 +736,13 @@ export function buildAccessUnits(
         }
       }
       return [
-        ...tableGrants(table, readers, provider, contract.command),
+        ...tableGrants(
+          table,
+          readers,
+          provider,
+          contract.command,
+          contract.publishedRead?.guestColumns
+        ),
         ...policies,
       ].map((sql): SqlUnit => ({
         ...generatedUnit(sql, table.schema, parse),
