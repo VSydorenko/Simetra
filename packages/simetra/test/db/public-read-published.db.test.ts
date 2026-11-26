@@ -275,7 +275,22 @@ describe("conditional publicRead", () => {
           params: [JSON.stringify({ id: key("dA"), published: true })],
         },
       ])
-      expect(update.refusal).toMatchObject({ code: "22023" })
+      // Шар — ядро команди: `command.invalid` з назвою колонки, не тригер
+      expect(update.refusal).toEqual({
+        code: E.invalid.errcode,
+        message: E.invalid.message,
+        detail: "published",
+      })
+      expect(
+        (
+          await tx
+            .client()
+            .query(
+              `SELECT published FROM public.${NOTICE_TABLE} WHERE id = $1`,
+              [key("dA")]
+            )
+        ).rows
+      ).toEqual([{ published: false }])
       const direct = await commandAs(
         tx.client(),
         claims("wA"),
