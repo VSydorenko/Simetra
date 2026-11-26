@@ -493,6 +493,30 @@ describe("purge", () => {
     expect(handle.getSnapshot()).toMatchObject({ status: "ready", rows: [] })
   })
 
+  // #465: політ лишається до свого `finally` і після осідання відповіді;
+  // `purge` у цьому проміжку (на `main` — прохід знімка прав з іншого запиту)
+  // не перезапускає вже записаного завантаження.
+  it("does not re-run a load whose answer settled before its flight ended (#465)", async () => {
+    const { core, fake, inspect } = setup()
+    seed(fake, 1, 2)
+    fake.hold = (read) => isPage(read)
+    const handle = core.view({ kind: "full", object: TASK })
+    watch(handle)
+    await settle()
+    const page = fake.take()
+    inspect.watchAttempts((event) => {
+      if (event.phase === "settled" && event.outcome === "applied")
+        queueMicrotask(() =>
+          write(core, (w) => w.purge(TASK, { keys: [key(1)] }))
+        )
+    })
+    page.answer()
+    await settle()
+    expect(fake.pending).toHaveLength(0)
+    expect(readsOf(fake, TASK).filter(isPage)).toHaveLength(1)
+    expect(keysIn(handle.getSnapshot())).toEqual([key(2)])
+  })
+
   it("keeps owner counts exact after a purge and a re-read", async () => {
     const { core, fake, inspect } = setup()
     seed(fake, 1, 2)

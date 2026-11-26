@@ -146,6 +146,12 @@ export interface Subset extends ReaderTarget {
    * only, `sync()`): the flight stays set meanwhile, but nothing is in flight.
    */
   retryAt: number | undefined
+  /**
+   * An attempt of the load in flight has not settled yet, so its answer may
+   * still write rows; after the last attempt settles the flight stays set
+   * until its `finally`, but carries nothing.
+   */
+  answerPending: boolean
   /** The start epochs of the system re-reads (`revalidate`) in flight. */
   rereadEpochs: number[]
   /**
@@ -540,6 +546,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       let again = false
       const lease = ctx.source.lease()
       const number = ctx.attempts.start("load", target, why)
+      s.answerPending = true
       // Наслідок осідання (§5.5); `commit` не пройшов — токен недійсний.
       let outcome: SettleOutcome = "applied"
       let detail: SettleDetail | undefined
@@ -599,6 +606,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               ran ? outcome : lost(),
               ran ? detail : undefined
             )
+            s.answerPending = false
           })
           // Вимога стала, поки летіло читання (M7): повтор тієї самої дії.
           if (again && token.valid) return retry("M7")
@@ -634,6 +642,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         },
         (error: unknown) =>
           settle(lease, () => {
+            // Збійна відповідь рядків не несе.
+            s.answerPending = false
             // Закритий обмежувач — сесію закрито: писати нікуди.
             if (error instanceof ReadLimiterClosed) {
               ctx.attempts.settle(number, "load", target, "closed")
@@ -1139,6 +1149,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       flightEpoch: undefined,
       flightCause: undefined,
       retryAt: undefined,
+      answerPending: false,
       rereadEpochs: [],
       trailing: undefined,
       settled: false,
