@@ -7,10 +7,8 @@ import {
   PROVIDER_OWNER_ROLES,
   type ApiRolePurpose,
 } from "simetra/model"
-import {
-  accessPolicyNames,
-  publicReadNeedsUser,
-} from "../../src/compiler/access-units"
+import { accessPolicyNames } from "../../src/compiler/access-units"
+import { publicReadNeedsUser } from "../../src/compiler/rights/public-read"
 import { signUp } from "./auth"
 import { claimsFor, queryAs, testRoleFor, withRollback } from "./connection"
 import {

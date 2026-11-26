@@ -8,7 +8,6 @@ import {
 } from "simetra/model"
 import {
   accessPolicyNames,
-  publicReadNeedsUser,
   rightsPolicyLabel,
   scopeSetCall,
 } from "../access-units"
@@ -43,9 +42,10 @@ import {
 } from "./functions"
 import {
   rightsPredicates,
-  type RightsCondition,
+  type PredicateCondition,
   type RightsPredicate,
 } from "./predicates"
+import { publicReadNeedsUser } from "./public-read"
 import { must } from "./references"
 
 /**
@@ -411,7 +411,7 @@ function predicateRow(
   }
 }
 
-const isGrant = (condition: RightsCondition) =>
+const isGrant = (condition: PredicateCondition) =>
   condition.kind === "boolean" ||
   (condition.kind === "column" && condition.grantDependent)
 
@@ -424,7 +424,7 @@ const isGrant = (condition: RightsCondition) =>
  */
 function grantFilter(
   predicate: RightsPredicate,
-  grant: RightsCondition,
+  grant: PredicateCondition,
   rights: RightsContract
 ): string {
   const { inner, container } = extentOf(predicate)
@@ -453,7 +453,7 @@ function extentOf(predicate: RightsPredicate): {
     : { inner: extent, container: false }
 }
 
-const columnOf = (condition: RightsCondition): string | undefined =>
+const columnOf = (condition: PredicateCondition): string | undefined =>
   condition.kind === "boolean" ? undefined : condition.column
 
 /**
@@ -463,7 +463,7 @@ const columnOf = (condition: RightsCondition): string | undefined =>
  * `NULL` (невідомо), а не FALSE.
  */
 function carrierMatch(
-  condition: RightsCondition,
+  condition: PredicateCondition,
   dimensions: ReadonlyMap<string, ExplainContracts["accessDimensions"][number]>,
   subject: Subject
 ): string {

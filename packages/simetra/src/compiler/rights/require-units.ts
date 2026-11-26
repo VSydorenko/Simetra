@@ -6,12 +6,7 @@ import {
   type ObjectTable,
   type PhysicalSnapshot,
 } from "simetra/model"
-import {
-  publicReadUsing,
-  readBoundaries,
-  tenantBoundary,
-  usersBoundary,
-} from "../access-units"
+import { readBoundaries, tenantBoundary, usersBoundary } from "../access-units"
 import { rightsCheck } from "../catalog-command/rights-check"
 import { bodyRequires } from "../catalog-command/units"
 import {
@@ -37,6 +32,7 @@ import {
   hasVisibleUsers,
 } from "./functions"
 import { anyScopeSet, renderCondition, type PredicateDml } from "./predicates"
+import { publicReadConditions, renderConditions } from "./public-read"
 import { must } from "./references"
 
 export interface RequireInput {
@@ -148,7 +144,7 @@ function rowBranch(
       input.contracts.users?.keyColumn
     ),
     publicRead
-      ? `(${publicReadUsing(must(access), hasSessionUser(input.contracts, input.provider))})`
+      ? `(${renderConditions(publicReadConditions(must(access), hasSessionUser(input.contracts, input.provider)), must(access).published, ROW)})`
       : `(${rightsCheck(contract, action, main, ROW, dmlOf(action))})`,
   ]
   return `EXISTS (SELECT 1 FROM ${qualified(contract.table)} ${ROW} WHERE ${where.join(" AND ")})`
