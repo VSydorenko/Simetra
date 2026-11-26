@@ -325,15 +325,17 @@ export function kitchenSink(): Map<string, string> {
     ...header("Catalog", "Partner", "partner"),
     rightsContainer: true,
     // Умовна форма (спека публічної частини §5.1): поля `role` і `published`
-    // мусить читати компілятор, інакше ратчет полів червоний. Без ТЧ: копії
-    // умови в ТЧ приходять окремою задачею.
+    // мусить читати компілятор, інакше ратчет полів червоний. Шапка без ТЧ;
+    // копії умови в ТЧ несе `Item`.
     publicRead: { role: "anon", published: true },
   }
 
   const item = {
     ...header("Catalog", "Item", "item"),
     trackAuthor: true,
-    publicRead: "anon",
+    // Умовна форма з ТЧ: рядки `barcodes` несуть копії V шапки (Р-D1-9) поруч
+    // із копіями носіїв прав.
+    publicRead: { role: "anon", published: true },
     codeLength: 12,
     codeType: "Number",
     descriptionLength: 200,
