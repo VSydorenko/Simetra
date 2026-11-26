@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { appOrigin, authSecret, signalsConfig } from "../src/server/config"
+import {
+  appOrigin,
+  authSecret,
+  authSettings,
+  signalsConfig,
+} from "../src/server/config"
 import { generateKey, mismatchedKey } from "./signal-keys"
 
 afterEach(() => vi.unstubAllEnvs())
@@ -152,5 +157,85 @@ describe("signalsConfig", () => {
     vi.stubEnv("SIMETRA_SIGNALS_URL", url)
     vi.stubEnv("SIMETRA_SIGNALS_KEYS", JSON.stringify([key, key]))
     expect(() => signalsConfig()).toThrow(/repeated/)
+  })
+})
+
+describe("authSettings", () => {
+  const clear = () => {
+    for (const name of [
+      "SIMETRA_SIGN_UP",
+      "SIMETRA_SIGN_IN_METHODS",
+      "SIMETRA_OAUTH_GOOGLE_CLIENT_ID",
+      "SIMETRA_OAUTH_GOOGLE_CLIENT_SECRET",
+      "SIMETRA_OAUTH_GITHUB_CLIENT_ID",
+      "SIMETRA_OAUTH_GITHUB_CLIENT_SECRET",
+    ]) {
+      vi.stubEnv(name, undefined)
+    }
+  }
+
+  it("defaults to a closed sign-up and password only", () => {
+    clear()
+    expect(authSettings()).toEqual({
+      signUp: "closed",
+      password: true,
+      emailCode: false,
+      providers: [],
+    })
+  })
+
+  it("reads sign-up, methods and provider credentials", () => {
+    clear()
+    vi.stubEnv("SIMETRA_SIGN_UP", "open")
+    vi.stubEnv("SIMETRA_SIGN_IN_METHODS", "email-code, github")
+    vi.stubEnv("SIMETRA_OAUTH_GITHUB_CLIENT_ID", "gh-id")
+    vi.stubEnv("SIMETRA_OAUTH_GITHUB_CLIENT_SECRET", "gh-secret")
+    expect(authSettings()).toEqual({
+      signUp: "open",
+      password: false,
+      emailCode: true,
+      providers: [
+        { id: "github", clientId: "gh-id", clientSecret: "gh-secret" },
+      ],
+    })
+  })
+
+  it.each([
+    ["SIMETRA_SIGN_UP", "maybe", /SIMETRA_SIGN_UP/],
+    ["SIMETRA_SIGN_IN_METHODS", "password,facebook", /SIMETRA_SIGN_IN_METHODS/],
+    ["SIMETRA_SIGN_IN_METHODS", "password,", /SIMETRA_SIGN_IN_METHODS/],
+    ["SIMETRA_SIGN_IN_METHODS", ",", /SIMETRA_SIGN_IN_METHODS/],
+  ])("refuses %s=%j", (name, value, pattern) => {
+    clear()
+    vi.stubEnv(name, value)
+    expect(() => authSettings()).toThrow(pattern)
+  })
+
+  it.each([
+    "SIMETRA_OAUTH_GOOGLE_CLIENT_ID",
+    "SIMETRA_OAUTH_GOOGLE_CLIENT_SECRET",
+  ])(
+    "refuses a provider without %s and does not leak the other value",
+    (missing) => {
+      clear()
+      vi.stubEnv("SIMETRA_SIGN_IN_METHODS", "google")
+      vi.stubEnv("SIMETRA_OAUTH_GOOGLE_CLIENT_ID", "visible-id")
+      vi.stubEnv("SIMETRA_OAUTH_GOOGLE_CLIENT_SECRET", "top-secret")
+      vi.stubEnv(missing, undefined)
+      let message = ""
+      try {
+        authSettings()
+      } catch (error) {
+        message = (error as Error).message
+      }
+      expect(message).toContain(missing)
+      expect(message).not.toContain("top-secret")
+    }
+  )
+
+  it("does not demand credentials of a provider that is not enabled", () => {
+    clear()
+    vi.stubEnv("SIMETRA_SIGN_IN_METHODS", "password")
+    expect(() => authSettings()).not.toThrow()
   })
 })
