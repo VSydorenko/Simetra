@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto"
+import { betterAuth } from "better-auth"
 import type { Pool } from "pg"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { authPoolConfig } from "../src/server/auth-db"
-import { authOptions, createVerifySession } from "../src/server/auth"
+import {
+  authOptions,
+  createVerifySession,
+  OPEN_AUTH_PATHS,
+  PARAM_AUTH_PATHS,
+} from "../src/server/auth"
 import { OAUTH_PROVIDERS, type AuthSettings } from "../src/server/config"
 import { defer } from "../src/server/defer"
 import type { MailMessage, MailTransport } from "../src/server/mail"
@@ -284,6 +290,119 @@ describe("Better Auth config (spec P4-D 4.3)", () => {
     expect(http.advanced.defaultCookieAttributes.secure).toBe(false)
     expect(http.advanced.defaultCookieAttributes.sameSite).toBe("lax")
     expect(http.advanced.defaultCookieAttributes.httpOnly).toBe(true)
+  })
+})
+
+// Закріплені літерали (спека §5.5): новий відкритий шлях — лише разом зі
+// зміною цього тесту
+const OPEN = [
+  "/sign-in/email",
+  "/sign-out",
+  "/get-session",
+  "/email-otp/send-verification-otp",
+  "/sign-in/email-otp",
+  "/sign-in/social",
+  "/ok",
+  "/error",
+]
+const PARAM = ["/callback/:id", "/reset-password/:token"]
+
+/** Екземпляр застосунку на адаптері в пам'яті: перелік шляхів від бази не залежить. */
+function memoryAuth(settings: AuthSettings, withDisabledPaths = true) {
+  const appOptions = authOptions(pool, ORIGIN, "secret", settings, mail)
+  return betterAuth({
+    ...appOptions,
+    database: undefined,
+    disabledPaths: withDisabledPaths ? appOptions.disabledPaths : undefined,
+  })
+}
+
+/** Маршрути пробного екземпляра тесту, кожен зі своїм першим методом. */
+function probeRoutes(settings: AuthSettings) {
+  return Object.values(memoryAuth(settings, false).api).flatMap(
+    (endpoint): { path: string; method: string }[] => {
+      const method = endpoint.options?.method
+      if (typeof endpoint.path !== "string" || method === undefined) return []
+      return [
+        {
+          path: endpoint.path,
+          method: Array.isArray(method) ? method[0] : method,
+        },
+      ]
+    }
+  )
+}
+
+const closedRoutes = (settings: AuthSettings) =>
+  probeRoutes(settings).filter(
+    ({ path }) => !OPEN.includes(path) && !PARAM.includes(path)
+  )
+
+// Метод — свій для кожного шляху: чужий метод теж дає 404 і сховав би
+// відкритий шлях
+function request(path: string, method: string) {
+  return new Request(`${ORIGIN}/api/auth${path}`, {
+    method,
+    headers: {
+      "content-type": "application/json",
+      origin: ORIGIN,
+      "x-simetra-client-ip": "203.0.113.7",
+    },
+    body: method === "GET" ? undefined : "{}",
+  })
+}
+
+describe("auth path allowlist (Р-D5-7)", () => {
+  it("pins the open and the parameter paths", () => {
+    expect([...OPEN_AUTH_PATHS]).toEqual(OPEN)
+    expect([...PARAM_AUTH_PATHS]).toEqual(PARAM)
+  })
+
+  it("knows every parameter path of the probe instance", () => {
+    const withParam = probeRoutes(everyMethod("open"))
+      .map(({ path }) => path)
+      .filter((path) => path.includes(":"))
+    expect(new Set(withParam)).toEqual(new Set(PARAM))
+  })
+
+  it.each([
+    ["password only", PASSWORD_ONLY],
+    ["every method", everyMethod("open")],
+  ])("closes every other probe path (%s)", (_, settings) => {
+    expect(
+      [
+        ...authOptions(pool, ORIGIN, "secret", settings, mail).disabledPaths,
+      ].sort()
+    ).toEqual(
+      closedRoutes(settings)
+        .map(({ path }) => path)
+        .sort()
+    )
+  })
+
+  it.each(closedRoutes(everyMethod("open")))(
+    "$method $path answers 404 through the handler",
+    async ({ path, method }) => {
+      const response = await memoryAuth(everyMethod("open")).handler(
+        request(path, method)
+      )
+      expect(response.status).toBe(404)
+    }
+  )
+
+  it.each(
+    probeRoutes(everyMethod("open")).filter(({ path }) => OPEN.includes(path))
+  )("$method $path stays reachable", async ({ path, method }) => {
+    const response = await memoryAuth(everyMethod("open")).handler(
+      request(path, method)
+    )
+    expect(response.status).not.toBe(404)
+  })
+
+  it("refuses an anonymous record through the auth API (validateUserInfo)", async () => {
+    await expect(
+      memoryAuth(PASSWORD_ONLY).api.signInAnonymous()
+    ).rejects.toMatchObject({ body: { code: "email_not_verified" } })
   })
 })
 

@@ -74,6 +74,52 @@ function socialProviders(settings: AuthSettings) {
 }
 
 /**
+ * Відкриті шляхи auth (спека §5.5, Р-D5-7). Блок, якому потрібен ще шлях,
+ * додає його сюди з тестом, а шлях, що видає чи перевіряє код, — під слот
+ * надсилання.
+ */
+export const OPEN_AUTH_PATHS: readonly string[] = [
+  "/sign-in/email",
+  "/sign-out",
+  "/get-session",
+  "/email-otp/send-verification-otp",
+  "/sign-in/email-otp",
+  "/sign-in/social",
+  "/ok",
+  "/error",
+]
+
+/**
+ * Шляхи з параметром відкриті завжди: `disabledPaths` порівнює точний рядок
+ * нормалізованого шляху (`router.onRequest`, `api/index.mjs`), а запит несе
+ * значення параметра. `/reset-password/:token` безпечний — токенів скидання
+ * ніхто не видає (§5.5).
+ */
+export const PARAM_AUTH_PATHS: readonly string[] = [
+  "/callback/:id",
+  "/reset-password/:token",
+]
+
+/**
+ * Закриті шляхи — усе, що дає пробний екземпляр з тими самими опціями, поза
+ * переліками вище: новий маршрут бібліотеки чи плагіна закривається сам.
+ * Проба — без бази (адаптер у пам'яті): маршрути дають лише ядро й плагіни, а
+ * екземпляр над пулом звіряв би схему з базою ще раз. Серверні маршрути без
+ * `path` (`api/to-auth-endpoints.mjs`) через HTTP недосяжні.
+ */
+function closedAuthPaths(options: BetterAuthOptions): string[] {
+  const probe = betterAuth({ ...options, database: undefined })
+  return Object.values(probe.api)
+    .map((endpoint) => endpoint.path)
+    .filter(
+      (path): path is string =>
+        typeof path === "string" &&
+        !OPEN_AUTH_PATHS.includes(path) &&
+        !PARAM_AUTH_PATHS.includes(path)
+    )
+}
+
+/**
  * Конфіг Better Auth шаблону (спека П4-D §4.3, Р-D5-3). Окрема функція від
  * пула, походження, налаштувань входу й транспорту — щоб тест читав таблицю
  * опцій рядок за рядком без бази. `session.cookieCache` свідомо відсутній: кеш
@@ -91,7 +137,7 @@ export function authOptions(
   // Годинник слота надсилання (Р-D5-6); тест ставить керований
   now: () => Date = () => new Date()
 ) {
-  return {
+  const options = {
     database,
     baseURL: origin,
     trustedOrigins: [origin],
@@ -118,9 +164,6 @@ export function authOptions(
       anonymous(),
       ...(settings.emailCode ? [emailCodePlugin(settings, secret, mail)] : []),
     ],
-    // Анонімного входу немає, доки немає екрана гостя: endpoint без екрана
-    // лише плодить рядки `better_auth.user`
-    disabledPaths: ["/sign-in/anonymous"],
     rateLimit: {
       enabled: true,
       storage: "database",
@@ -142,6 +185,9 @@ export function authOptions(
       backgroundTasks: { handler: defer },
     },
   } satisfies BetterAuthOptions
+  // Анонімного входу серед відкритих немає, доки немає екрана гостя:
+  // endpoint без екрана лише плодить рядки `better_auth.user`
+  return { ...options, disabledPaths: closedAuthPaths(options) }
 }
 
 function createAuth() {
