@@ -116,6 +116,17 @@ describe("languages catalog role refusals (Р-B2-2)", () => {
       "/publicRead",
     ],
     [
+      // Р-D1-13, стик B2: роль уже дає гостю опубліковані рядки, тож і
+      // умовна форма відмовляє.
+      "conditional publicRead",
+      base({
+        [FILE]: languages({ publicRead: { role: "anon", published: true } }),
+      }),
+      "languages.public-read",
+      FILE,
+      "/publicRead",
+    ],
+    [
       "declared predefinedItems",
       base({
         [FILE]: languages({
