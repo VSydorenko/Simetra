@@ -120,6 +120,8 @@ export type DefectFlag =
   | "discard-no-retry"
   /** `sync()` shows the pause before a load retry as an ordinary deadline, without the cause `retry`. */
   | "sync-pause-no-cause"
+  /** The end of the retry pause drops the trailing load queued in it: nothing reads the view after the pause. */
+  | "pause-drops-trailing"
   /** The rejoin wave neither reads nor sets requirements. */
   | "rejoin-wave-no-read"
   /** The gate check of `read` is off, and the tail re-read (K3) sends a forged flight. */

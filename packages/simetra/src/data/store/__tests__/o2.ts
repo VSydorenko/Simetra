@@ -911,7 +911,14 @@ export function createO2(): O2 {
         continue
       const key = targetKey(state.target)
       if (state.flights.length > 0) continue
-      if (state.queued.length > 0) {
+      // В паузі повтору відкинутого старт до `due` заборонений самим ядром, тож
+      // борг «черга» там хибний: наступник стартує з кінцем паузи, а борг
+      // «строк» вимагає читання до `due` (відсунути строк можна лише до його
+      // спливу, як і решту боргів «строк»).
+      if (
+        state.queued.length > 0 &&
+        !(state.dueCause === "retry" && state.due !== undefined)
+      ) {
         if (!obligations.has(key))
           obligations.set(key, { kind: "queue", since: events.length, due: 0 })
       } else if (state.due !== undefined) {
