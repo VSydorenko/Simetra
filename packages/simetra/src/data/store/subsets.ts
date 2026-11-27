@@ -718,7 +718,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             ? new Promise<void>(() => {})
             : session.sleep(pause)
           return slept.then(() => {
-            s.targetState = slotChanged(s.targetState, { kind: "pause-ended" })
+            // Мутація самотесту: кінець паузи губить наступника, поставленого в ній.
+            s.targetState = slotChanged(s.targetState, {
+              kind: "pause-ended",
+              ...(ctx.defects.has("pause-drops-trailing")
+                ? { dropsTrailing: true }
+                : {}),
+            })
             return token.valid ? retry("M8") : undefined
           })
         },

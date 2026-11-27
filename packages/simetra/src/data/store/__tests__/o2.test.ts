@@ -487,6 +487,32 @@ describe("O2 self-check", () => {
     ).toBeUndefined()
   })
 
+  it("judges a queue behind the retry pause as a deadline, not as a queue (#496)", () => {
+    // Наступник, поставлений у паузі повтору, чекає її кінця: старт до строку
+    // заборонений ядром, тож борг «черга» хибний, а борг «строк» лишається.
+    const states = [
+      state(view(1), {
+        requirements: [composition],
+        queued: [{ kind: "load" }],
+        due: 100,
+        dueCause: "retry",
+      }),
+    ]
+    const early = createO2()
+    early.step(input({ states }))
+    expect(early.step(input({ states, now: 10 }))).toBeUndefined()
+    const late = createO2()
+    late.step(input({ states }))
+    expect(late.step(input({ states, now: 100 }))).toMatch(
+      /no read by its deadline/
+    )
+    const read100 = createO2()
+    read100.step(input({ states }))
+    expect(
+      read100.step(input({ states, now: 100, events: [read(1, 0)] }))
+    ).toBeUndefined()
+  })
+
   describe("a requirement disappears only with proof of its kind", () => {
     const before = [state(view(1), { requirements: [composition], due: 5 })]
     const gone = [...alive, state(view(1))]
