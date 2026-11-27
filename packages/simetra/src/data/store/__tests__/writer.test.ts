@@ -167,6 +167,28 @@ describe("Writer", () => {
     expect(lineView.getSnapshot().section?.lines ?? []).toEqual([])
   })
 
+  // Ефективна видимість запису цілі рахує підписників (план SK-3, задача 3):
+  // кожна зміна `listeners` доходить до запису, інакше відписаний вигляд з
+  // вимогою складу лишався б «видимим» і не показував `needsRefresh`.
+  it("an unconfirmed composition shows needsRefresh once its last subscriber leaves", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 2)
+    const handle = core.view(keys(1))
+    const first = watch(handle)
+    await settle()
+    fake.hold = (read) => isKeys(read)
+    write(core, (w) =>
+      w.markViews(TASK, { unconfirmedSince: core.readEpoch() })
+    )
+    expect(handle.getSnapshot().needsRefresh).toBe(false)
+    first.unsubscribe()
+    expect(handle.getSnapshot().needsRefresh).toBe(true)
+    const second = watch(handle)
+    expect(handle.getSnapshot().needsRefresh).toBe(false)
+    second.unsubscribe()
+    expect(handle.getSnapshot().needsRefresh).toBe(true)
+  })
+
   it("markViews with a spec marks only that view", async () => {
     const { core, fake } = setup()
     seed(fake, 1, 2)
