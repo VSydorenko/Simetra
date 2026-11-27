@@ -18,11 +18,11 @@ import { describe, expect, it } from "vitest"
  *     `patchRows`, `removeKeys`, виклик замикання `Write`) — лише гачок кроку 5
  *     і помічники та замикання, досяжні тільки з нього.
  * (3) `sweep` — лише гачок кроку 8.
- * (4) `settleRequirement`, `liftRequirement`, `confirm` і присвоєння полів
- *     стану вигляду, які шов веде (`refreshedAt`, `okReadEpoch`, `failures`,
- *     `failedAt`, `loaded`, `status`, `error`, `needsRefresh`, `hasNewRows`) —
- *     лише в єдиному `settleTarget` (другий шов, друга копія правила збоїв чи
- *     відновлення `status` — червоні). Законні записи поза швом (гідратація,
+ * (4) Перехід запису цілі «політ осів» (`settleFlight`: строк, доказ,
+ *     зняття вимоги, правило збоїв — план SK-3, Р-SK3-7) і присвоєння ознак
+ *     реєстру, які шов веде (`loaded`, `status`, `error`, `needsRefresh`,
+ *     `hasNewRows`) — лише в єдиному `settleTarget` (другий шов, друга копія
+ *     правила збоїв чи відновлення `status` — червоні). Законні записи поза швом (гідратація,
  *     старт, межа відкинутих, `Writer.markViews`, замикання запису читача) —
  *     у переліку винятків, точних до функції й поля. Не тримається: що саме
  *     пише такий виняток — перелік судить місце, не значення.
@@ -100,8 +100,12 @@ interface Anchors {
     iface: string
     fields: readonly string[]
     seam: string
-    /** Помічники шва: їхні виклики — лише в шві чи в них самих. */
-    helpers: readonly string[]
+    /**
+     * Помічники шва: їхні виклики — лише в шві чи в них самих. Ім'я — функція
+     * файлу `file`; пара `[файл, ім'я]` — функція іншого модуля (перехід
+     * запису цілі).
+     */
+    helpers: readonly (string | readonly [string, string])[]
   }
   readonly pass: { file: string; names: readonly string[] }
   /** Точки Р-SK2-1: `[файл, функція]`. */
@@ -211,8 +215,10 @@ function analyze(
   )
   const helperSymbols = new Set(
     named(
-      ...A.subset.helpers.map(
-        (n) => [n, functionSymbol(A.subset.file, n)] as const
+      ...A.subset.helpers.map((h) =>
+        typeof h === "string"
+          ? ([h, functionSymbol(A.subset.file, h)] as const)
+          : ([h[1], functionSymbol(h[0], h[1])] as const)
       )
     )
   )
@@ -717,19 +723,11 @@ const REAL: Anchors = {
   subset: {
     file: at("subsets.ts"),
     iface: "Subset",
-    fields: [
-      "refreshedAt",
-      "okReadEpoch",
-      "failures",
-      "failedAt",
-      "loaded",
-      "status",
-      "error",
-      "needsRefresh",
-      "hasNewRows",
-    ],
+    // Строк, доказ і зняття вимоги — у записі цілі (план SK-3, задача 3):
+    // їх пише лише перехід `settleFlight`, а його кличе лише шов.
+    fields: ["loaded", "status", "error", "needsRefresh", "hasNewRows"],
     seam: "settleTarget",
-    helpers: ["settleRequirement", "liftRequirement"],
+    helpers: [[at("sync/target-state.ts"), "settleFlight"]],
   },
   pass: {
     file: at("sync/settle-pass.ts"),
@@ -1300,6 +1298,50 @@ export const reset = (s: Subset) => { s.failures = 0 }
 `,
       })
     ).toEqual(["/v/h.ts::reset field:failures"])
+  })
+
+  it("a seam helper from another module (the record transition) is called only in the seam", () => {
+    const transition = {
+      "/v/target-state.ts": `export interface TargetState { failures: number }
+export function settleFlight(s: TargetState): TargetState { return s }
+`,
+    }
+    const anchors: Anchors = {
+      ...SELF,
+      subset: {
+        ...SELF.subset,
+        helpers: [
+          ...SELF.subset.helpers,
+          ["/v/target-state.ts", "settleFlight"],
+        ],
+      },
+    }
+    const run = (extra: Record<string, string>) => {
+      const sources = { ...WORLD, ...transition, ...extra }
+      return render(
+        analyze(inlineProgram(sources), Object.keys(sources), anchors, (f) => f)
+          .findings
+      )
+    }
+    expect(run({})).toEqual([])
+    expect(
+      run({
+        "/v/subsets.ts": WORLD["/v/subsets.ts"]!.replace(
+          "  settleRequirement(s)\n}",
+          "  settleRequirement(s)\n  settleFlight({ failures: 0 })\n}"
+        ).replace(
+          'import { settlePass } from "./settle-pass.ts"',
+          'import { settlePass } from "./settle-pass.ts"\nimport { settleFlight } from "./target-state.ts"'
+        ),
+      })
+    ).toEqual([])
+    expect(
+      run({
+        "/v/a.ts": `import { settleFlight } from "./target-state.ts"
+export const sneak = () => settleFlight({ failures: 0 })
+`,
+      })
+    ).toEqual(["/v/a.ts::sneak seam"])
   })
 
   it("settle(lease, …) is red wherever it is declared", () => {

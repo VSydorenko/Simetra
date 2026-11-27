@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { coreInternals } from "../core"
 import { failurePause, viewDueAt } from "../subsets"
+import { settleFlight } from "../sync/target-state"
 import { DEFAULT_CORE_LIMITS, type ViewSpec } from "../types"
 import { TASK, isKeys, key, seed, settle, setup, watch } from "./core-support"
 
@@ -35,20 +36,20 @@ const keyReads = (h: Awaited<ReturnType<typeof loaded>>) =>
 describe("failure state of a view", () => {
   it("keeps the marks of a view until its re-read settles", async () => {
     const h = await loaded()
-    const { refreshedAt } = h.subset
+    const { refreshedAt } = h.subset.targetState
     vi.advanceTimersByTime(5_000)
     h.fake.hold = (read) => isKeys(read)
     void h.core.revalidate(TASK, { visibleOnly: true })
     await settle()
     expect(h.fake.pending).toHaveLength(1)
-    expect(h.subset.refreshedAt).toBe(refreshedAt)
-    expect(h.subset.failures).toBe(0)
-    expect(h.subset.failedAt).toBeUndefined()
+    expect(h.subset.targetState.refreshedAt).toBe(refreshedAt)
+    expect(h.subset.targetState.failures).toBe(0)
+    expect(h.subset.targetState.failedAt).toBeUndefined()
   })
 
   it("marks a failed re-read at its start, counts it and keeps refreshedAt", async () => {
     const h = await loaded()
-    const { refreshedAt } = h.subset
+    const { refreshedAt } = h.subset.targetState
     vi.advanceTimersByTime(5_000)
     h.fake.hold = (read) => isKeys(read)
     const done = h.core.revalidate(TASK, { visibleOnly: true })
@@ -57,9 +58,9 @@ describe("failure state of a view", () => {
     vi.advanceTimersByTime(3_000)
     h.fake.take().fail("command.internal")
     await done
-    expect(h.subset.failures).toBe(1)
-    expect(h.subset.failedAt).toBe(startedAt)
-    expect(h.subset.refreshedAt).toBe(refreshedAt)
+    expect(h.subset.targetState.failures).toBe(1)
+    expect(h.subset.targetState.failedAt).toBe(startedAt)
+    expect(h.subset.targetState.refreshedAt).toBe(refreshedAt)
     expect(h.handle.getSnapshot().status).toBe("error")
   })
 
@@ -70,11 +71,11 @@ describe("failure state of a view", () => {
     await settle()
     h.fake.take().fail("command.internal")
     await failed
-    expect(h.subset.failures).toBe(1)
+    expect(h.subset.targetState.failures).toBe(1)
     h.fake.hold = undefined
     await h.core.revalidate(TASK, { visibleOnly: true })
-    expect(h.subset.failures).toBe(0)
-    expect(h.subset.failedAt).toBeUndefined()
+    expect(h.subset.targetState.failures).toBe(0)
+    expect(h.subset.targetState.failedAt).toBeUndefined()
     expect(h.handle.getSnapshot().status).toBe("ready")
   })
 
@@ -87,8 +88,8 @@ describe("failure state of a view", () => {
     vi.advanceTimersByTime(1_000)
     h.fake.take().fail("command.internal")
     await settle()
-    expect(h.subset.failures).toBe(1)
-    expect(h.subset.failedAt).toBe(startedAt)
+    expect(h.subset.targetState.failures).toBe(1)
+    expect(h.subset.targetState.failedAt).toBe(startedAt)
   })
 
   it("grows the pause with the failures up to the interval", () => {
@@ -99,10 +100,23 @@ describe("failure state of a view", () => {
 
   it("has one due time: the pause after a failure, else refreshedAt + interval", async () => {
     const h = await loaded()
-    expect(viewDueAt(h.subset, I)).toBe(h.subset.refreshedAt! + I)
-    h.subset.failures = 2
-    h.subset.failedAt = 100
-    expect(viewDueAt(h.subset, I)).toBe(100 + failurePause(2, I))
+    expect(viewDueAt(h.subset.targetState, I)).toBe(
+      h.subset.targetState.refreshedAt! + I
+    )
+    // Два збої поспіль, останній стартував у 100: лише переходом запису.
+    const failed = {
+      outcome: "failed",
+      flight: "reread",
+      evidence: undefined,
+      own: true,
+      startedAt: 100,
+      loaded: true,
+    } as const
+    h.subset.targetState = settleFlight(
+      settleFlight(h.subset.targetState, failed),
+      failed
+    )
+    expect(viewDueAt(h.subset.targetState, I)).toBe(100 + failurePause(2, I))
   })
 })
 

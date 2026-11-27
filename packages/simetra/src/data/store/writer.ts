@@ -26,6 +26,7 @@ import {
   type ReaderHost,
   type Write,
   type WithSource,
+  type WriteReport,
 } from "./readers"
 import {
   dropKeys,
@@ -45,13 +46,20 @@ import {
 } from "./source"
 import {
   EPOCH_UNAVAILABLE,
-  queueTrailing,
   required,
   settleTarget,
   viewDueAt,
   type Subset,
   type SubsetRegistry,
 } from "./subsets"
+import {
+  changeVisibility,
+  inFlight as targetInFlight,
+  isVisible as targetVisible,
+  requirementOf,
+  slotChanged,
+  startFlight,
+} from "./sync/target-state"
 import {
   isPermit,
   rereadOutcomeOf,
@@ -148,7 +156,7 @@ type BoundWriter = WithSource<WriterContext, BoundSource>
 /** The longest wait for a re-read the journal settles a mutation by (§7.2 step 4). */
 export const REREAD_TIMEOUT_MS = 5_000
 
-const isVisible = (s: Subset) => s.visible ?? s.listeners.size > 0
+const isVisible = (s: Subset) => targetVisible(s.targetState)
 
 /** Held, not purged subsets of the object. */
 function subsetsOf(ctx: WriterContext, o: ObjectState): Subset[] {
@@ -239,13 +247,16 @@ function forget(
     // (#465). Пауза повтору відкинутого — ще той самий політ.
     if (
       (own || target) &&
-      s.flight !== undefined &&
-      (s.answerPending || s.retryAt !== undefined) &&
+      s.targetState.flight !== undefined &&
+      (s.targetState.answerPending || s.targetState.retryAt !== undefined) &&
       !ctx.defects.has("purge-keeps-flights")
     ) {
-      s.gen++
       // Наступне завантаження після purge — `mount` (спека §5.3).
-      queueTrailing(s, { reason: "mount" })
+      s.targetState = startFlight(s.targetState, {
+        kind: "load",
+        cause: { reason: "mount" },
+        supersede: true,
+      })
     }
   }
 }
@@ -309,7 +320,7 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
     !o.rows.holdsChannel(channelOf(o.entry), channel) &&
     ctx.pendingWrites(o.name) === 0 &&
     subsetsOf(ctx, o).every((s) =>
-      ctx.session.epochs.channelProven(channel, s.okReadEpoch ?? -1)
+      ctx.session.epochs.channelProven(channel, s.targetState.okReadEpoch ?? -1)
     )
   const forgetChannel = (channel: string) => {
     ctx.session.epochs.forget(channel)
@@ -536,9 +547,10 @@ export function setVisible(
 ) {
   const s = ctx.registry.find(spec)
   if (s === undefined) return
-  s.visible = visible
+  s.targetState = changeVisibility(s.targetState, { visible })
   // Знімок показує непідтверджений склад залежно від видимості (§8.4, п. 7).
-  if (s.unconfirmedSince !== undefined) s.dirty = true
+  if (requirementOf(s.targetState, "composition-unconfirmed") !== undefined)
+    s.dirty = true
 }
 
 // ------------------------------------------------------------ revalidate
@@ -1083,8 +1095,11 @@ export function singleFlight(
         s,
         pending === undefined ? options : mergeOptions(pending, options)
       )
-      s.rereadTail ??= tailPass(ctx, o, s, options.why)
-      return s.rereadTail
+      if (s.targetState.rereadTail === undefined) {
+        const tail = tailPass(ctx, o, s, options.why)
+        s.targetState = slotChanged(s.targetState, { kind: "tail", tail })
+      }
+      return s.targetState.rereadTail!
     })
   const fresh = reads.filter(([s]) => !inFlight(s))
   return {
@@ -1116,15 +1131,15 @@ const unavailable = (s: Subset) =>
   s.status === "error" && s.error === EPOCH_UNAVAILABLE
 
 /** The own load or a system re-read of the view is in flight. */
-const inFlight = (s: Subset) =>
-  s.flight !== undefined || s.rereadEpochs.length > 0
+const inFlight = (s: Subset) => targetInFlight(s.targetState)
 
 // Строк вигляду; дефект самотесту «без паузи» не бачить збоїв вигляду.
 const dueOf = (ctx: WriterContext, s: Subset, ageMs?: number) =>
   viewDueAt(
-    ctx.defects.has("scheduler-no-pause") ? { ...s, failures: 0 } : s,
+    s.targetState,
     ctx.limits.revalidateIntervalMs,
-    ageMs
+    ageMs,
+    ctx.defects.has("scheduler-no-pause")
   )
 
 function eligible(ctx: WriterContext, s: Subset, options: Eligibility) {
@@ -1142,7 +1157,8 @@ function eligible(ctx: WriterContext, s: Subset, options: Eligibility) {
       ctx.defects.has("min-age-ignored") ||
       (ctx.defects.has("min-age-ignored-sections") &&
         s.form.spec.kind === "section") ||
-      (s.refreshedAt !== undefined && ctx.defects.has("min-age-all-young")
+      (s.targetState.refreshedAt !== undefined &&
+      ctx.defects.has("min-age-all-young")
         ? false
         : ctx.now() >= dueOf(ctx, s, minAgeMs))) &&
     (s.form.spec.kind !== "section" ||
@@ -1251,15 +1267,21 @@ async function tailPass(
     // Закриття гасить `alive` (`close()` реєстру) і будить очікувачів:
     // окремої перевірки закриття цикл не має.
     while ((inFlight(s) || s.checkQueued) && s.alive && !s.purged) {
-      await new Promise<void>((resolve) =>
-        (s.flight !== undefined || !inFlight(s)
-          ? s.waiters
-          : s.rereadWaiters
-        ).push(resolve)
-      )
+      await new Promise<void>((resolve) => {
+        if (s.targetState.flight !== undefined || !inFlight(s))
+          s.waiters.push(resolve)
+        else
+          s.targetState = slotChanged(s.targetState, {
+            kind: "waiter",
+            waiter: resolve,
+          })
+      })
     }
   } finally {
-    s.rereadTail = undefined
+    s.targetState = slotChanged(s.targetState, {
+      kind: "tail",
+      tail: undefined,
+    })
   }
   const options = tailOptions.get(s) ?? { visibleOnly: false, why }
   tailOptions.delete(s)
@@ -1293,7 +1315,8 @@ export async function revalidateHydrated(
 ): Promise<void> {
   const reads = admitViews(ctx, [s], why)
   if (reads.length === 0) return
-  if (!s.alive || s.purged || !s.loaded || s.flight !== undefined) return
+  if (!s.alive || s.purged || !s.loaded || s.targetState.flight !== undefined)
+    return
   if (s.form.spec.kind === "section" && s.listeners.size === 0) return
   await revalidateViews(ctx, s.form.object, reads)
 }
@@ -1371,6 +1394,8 @@ interface RereadEntry extends SettleEntry {
   readonly s: Subset
   readonly number: number
   readonly read?: GatedRead
+  /** Звіт запису кроку 5 для кроку 7. */
+  readonly report?: WriteReport
   readonly verdict: { again?: ReadWhy; discarded: boolean }
 }
 
@@ -1407,7 +1432,16 @@ export async function revalidateViews(
   const numbers = new Map<Subset, number>()
   for (const [s, { why }] of reads) {
     s.rereads++
-    s.rereadEpochs.push(promised)
+    {
+      const { site, ...cause } = why
+      void site
+      // Старт перечитування відкладеної перевірки шапки не споживає (як `main`).
+      s.targetState = startFlight(s.targetState, {
+        kind: "reread",
+        epoch: promised,
+        cause,
+      })
+    }
     numbers.set(s, ctx.attempts.start("reread", attemptTarget(s), why))
   }
   // Одна оренда на прохід: усі відповіді пише один `commit` нижче.
@@ -1426,7 +1460,7 @@ export async function revalidateViews(
         kind: "reread",
         token,
         purgeBarrier,
-        loadsAtStart: { gen: s.gen, flight: s.flight },
+        loadsAtStart: { gen: s.targetState.gen, flight: s.targetState.flight },
       })
       return readAgain(ctx, s, flight).then(
         (read): RereadEntry => ({
@@ -1435,6 +1469,7 @@ export async function revalidateViews(
           number,
           read,
           verdict: { discarded: false },
+          report: {},
         }),
         (error: unknown): RereadEntry => ({
           flight,
@@ -1447,8 +1482,10 @@ export async function revalidateViews(
     })
   )
   for (const s of targets) {
-    const at = s.rereadEpochs.indexOf(promised)
-    if (at >= 0) s.rereadEpochs.splice(at, 1)
+    s.targetState = slotChanged(s.targetState, {
+      kind: "reread-ended",
+      epoch: promised,
+    })
   }
   // Вигляди, чию відповідь пропущено, бо їхнє завантаження осіло раніше.
   const skipped: Subset[] = []
@@ -1468,7 +1505,10 @@ export async function revalidateViews(
       if (!s.alive) return "evicted"
       if (s.purged) return "after-purge"
       const atStart = required(flight.loadsAtStart, "its loads at start")
-      if (atStart.gen !== s.gen || atStart.flight !== s.flight) {
+      if (
+        atStart.gen !== s.targetState.gen ||
+        atStart.flight !== s.targetState.flight
+      ) {
         skipped.push(s)
         return "evicted"
       }
@@ -1503,7 +1543,7 @@ export async function revalidateViews(
         s.error = EPOCH_UNAVAILABLE
       } else verdict.discarded = true
     },
-    apply: ({ read }, scope) => required(read, "its answer").write(scope),
+    apply: (e, scope) => required(e.read, "its answer").write(scope, e.report),
     applyFailed: (_e, error) => ctx.log({ kind: "listener-failed", error }),
     // Сторінку вікна скинув purge: прохід нічого не писав, тож повтор R17;
     // строк і доказ не рухаються, збої не скидаються, вимога не знімається.
@@ -1518,6 +1558,7 @@ export async function revalidateViews(
       // ніхто інший не прочитає; на прихованій вкладці його відкладає шлюз.
       const again = settleTarget(entry.s, flight, outcome, failure, {
         readFailed: entry.failure !== undefined,
+        ...(entry.report === undefined ? {} : { report: entry.report }),
       })
       if (outcome === "applied" && again)
         entry.verdict.again = repeatOf(flight, "R18")
@@ -1539,8 +1580,13 @@ export async function revalidateViews(
   })
   // Прохід осів: хвіст явного `revalidate` може стартувати.
   for (const s of targets) {
-    if (s.rereadEpochs.length === 0) {
-      for (const resolve of s.rereadWaiters.splice(0)) resolve()
+    if (s.targetState.rereadEpochs.length === 0) {
+      const waiters = s.targetState.rereadWaiters
+      s.targetState = slotChanged(s.targetState, {
+        kind: "waiter",
+        waiter: undefined,
+      })
+      for (const resolve of waiters) resolve()
     }
   }
   // Пропущена відповідь — теж точка осідання (§8.4, п. 7): завантаження, що
@@ -1598,7 +1644,7 @@ export async function revalidateViews(
           verdict.again !== undefined &&
           s.alive &&
           !s.purged &&
-          s.flight === undefined
+          s.targetState.flight === undefined
       )
       .flatMap(({ s, verdict }) => admitViews(ctx, [s], verdict.again!))
   )
@@ -1800,15 +1846,19 @@ export function holdersOf(ctx: WriterContext, object: ObjectName): Subset[] {
  */
 export function invalidateLoads(views: Iterable<Subset>, before: number) {
   for (const s of views) {
-    if (!s.alive || s.purged || s.loaded || s.flight === undefined) continue
-    if ((s.flightEpoch ?? before) >= before) continue
+    const state = s.targetState
+    if (!s.alive || s.purged || s.loaded || state.flight === undefined) continue
+    if ((state.flightEpoch ?? before) >= before) continue
     // Той самий предикат, що в `forget` (#465): політ, чия остання спроба вже
     // осіла (збійне перше завантаження), стоїть до свого `finally`, але рядків
     // не принесе — перезапуск був би зайвим читанням. Пауза повтору
     // відкинутого — ще той самий політ.
-    if (!(s.answerPending || s.retryAt !== undefined)) continue
-    s.gen++
-    queueTrailing(s, { reason: "requirement", requirement: "access-narrowed" })
+    if (!(state.answerPending || state.retryAt !== undefined)) continue
+    s.targetState = startFlight(state, {
+      kind: "load",
+      cause: { reason: "requirement", requirement: "access-narrowed" },
+      supersede: true,
+    })
   }
 }
 

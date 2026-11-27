@@ -273,7 +273,7 @@ describe("resume()", () => {
     t.core.view(list).subscribe(() => {})
     await settle()
     const subset = coreInternals(t.core).registry.find(list)!
-    const marked = subset.refreshedAt
+    const marked = subset.targetState.refreshedAt
     vi.advanceTimersByTime(20_000)
     t.wire.hold = true
     t.runtime.resume()
@@ -294,7 +294,7 @@ describe("resume()", () => {
     expect(t.reads()).toBe(1)
     // Відкинута відповідь відмітки не дала.
     expect(marked).toBeDefined()
-    expect(subset.refreshedAt).toBe(marked)
+    expect(subset.targetState.refreshedAt).toBe(marked)
     // Повтор у польоті: `resume()` вигляд у польоті не бере (§6.3, Р7), тож
     // дубля читання немає.
     t.calls.length = 0

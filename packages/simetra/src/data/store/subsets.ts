@@ -19,6 +19,7 @@ import {
   type GatedRead,
   type ReaderTarget,
   type StoreOps,
+  type WriteReport,
 } from "./readers"
 import {
   EMPTY_WINDOW,
@@ -43,9 +44,20 @@ import {
   type SettleEntry,
   type SettleHooks,
 } from "./sync/settle-pass"
+import {
+  changeVisibility,
+  createTargetState,
+  dropRequirementForDefect,
+  isVisible,
+  promisedFrom,
+  requirementOf,
+  settleFlight,
+  slotChanged,
+  startFlight,
+  type TargetState,
+} from "./sync/target-state"
 import type {
   AdmissionCondition,
-  ReadCause,
   ReadTarget,
   ReadWhy,
   SettleOutcome,
@@ -140,68 +152,18 @@ export interface Subset extends ReaderTarget {
   readonly preloadTimers: Set<Timer>
   releaseTimer: Timer | undefined
   alive: boolean
-  /** Generation of loads: a load writes only while it is current. */
-  gen: number
-  /** The generation of the load in flight. */
-  flight: number | undefined
-  /** The start epoch of the last attempt of the load in flight. */
-  flightEpoch: number | undefined
-  /** The cause of the call that started the load in flight (diagnostics only, `sync()`). */
-  flightCause: ReadCause | undefined
-  /**
-   * The wake-up of the pause before the retry of a discarded load (accounting
-   * only, `sync()`): the flight stays set meanwhile, but nothing is in flight.
-   */
-  retryAt: number | undefined
-  /**
-   * An attempt of the load in flight has not settled yet, so its answer may
-   * still write rows; after the last attempt settles the flight stays set
-   * until its `finally`, but carries nothing.
-   */
-  answerPending: boolean
-  /** The start epochs of the system re-reads (`revalidate`) in flight. */
-  rereadEpochs: number[]
-  /**
-   * The next load queued after the one in flight, with the cause of the call
-   * that queued it (the first one of a merged queue, Р4); the cause is the
-   * origin of that read, never an input of a decision.
-   */
-  trailing: ReadCause | undefined
   /** At least one load finished (or a card showed its stored row). */
   settled: boolean
   /** A load succeeded: a later read is `refreshing`, not `loading` (§6.5). */
   loaded: boolean
-  /**
-   * The start time of the last read that settled successfully (P4-B spec §6.7);
-   * a view never read (a hydrated one, a card shown from the store) has none
-   * and no due time.
-   */
-  refreshedAt: number | undefined
-  /**
-   * The start epoch of the last read that settled successfully: the proof of
-   * the composition after a gap (`staleComposition`, P4-B spec §8.4);
-   * `refreshedAt` only schedules.
-   */
-  okReadEpoch: number | undefined
   /** The system re-reads started for this view; the model test counts them. */
   rereads: number
-  /**
-   * Failed reads of a loaded view in a row (a system re-read or `refresh()`);
-   * a success resets it. A discarded answer is not a failure (P4-B spec §6.7).
-   */
-  failures: number
-  /** The start time of the last failed read; `refreshedAt` stays untouched. */
-  failedAt: number | undefined
-  /** The tail pass of an explicit `revalidate` waiting for the view in flight. */
-  rereadTail: Promise<void> | undefined
-  /** Resolved when a system re-read of the view settles. */
-  rereadWaiters: Array<() => void>
   status: "loading" | "ready" | "refreshing" | "error"
   error: CommandError | DataError | undefined
   /**
    * The user's refresh is due (the new-rows banner of a system re-read,
    * §6.5; a failed key read of the receiver). The snapshot's `needsRefresh`
-   * also shows an unconfirmed composition (`unconfirmedSince`, §8.4) of an
+   * also shows an unconfirmed composition (the requirement of the record, §8.4) of an
    * invisible view or of any view on a hidden tab: that part is derived, not
    * stored here.
    */
@@ -211,25 +173,14 @@ export interface Subset extends ReaderTarget {
   dirty: boolean
   snapshot: ViewSnapshot | undefined
   refViews: Map<Key, RowView>
-  /** The header revision at the start of the last card or section read. */
-  readRevision: number | undefined
-  /** The session epoch at the start of the last card or section read. */
-  readStart: number | undefined
   checkQueued: boolean
   /** The queued check comes from a hold without a listener (`preload`). */
   checkHeld: boolean
-  /**
-   * A re-read check found a load in flight: check again when it ends, under
-   * the inventory row of the first `check` that deferred it (Р4).
-   */
-  recheck: ReadWhy | undefined
   /**
    * The key (card) or owner (section) was purged (§6.5): the view shows
    * `purged` and reads nothing until released.
    */
   purged: boolean
-  /** Set by `setVisible`; unset — visible while subscribed. */
-  visible: boolean | undefined
   /**
    * Taken from a core snapshot and not yet subscribed: the snapshot holds the
    * subset until the first subscription or `endHydration` (spec §6.6).
@@ -315,25 +266,17 @@ export const failurePause = (failures: number, intervalMs: number): number =>
  * row, a hydrated view is read by the reconciliation of the hydration.
  */
 export const viewDueAt = (
-  s: Subset,
+  state: TargetState,
   intervalMs: number,
-  ageMs: number = intervalMs
+  ageMs: number = intervalMs,
+  /** Лише дефект самотесту `scheduler-no-pause`: строк не бачить збоїв. */
+  ignoreFailures = false
 ): number =>
-  s.failures > 0 && s.failedAt !== undefined
-    ? s.failedAt + failurePause(s.failures, intervalMs)
-    : s.refreshedAt === undefined
+  !ignoreFailures && state.failures > 0 && state.failedAt !== undefined
+    ? state.failedAt + failurePause(state.failures, intervalMs)
+    : state.refreshedAt === undefined
       ? Number.POSITIVE_INFINITY
-      : s.refreshedAt + ageMs
-
-/**
- * Lifts the view requirement «composition not confirmed since e» (P4-B spec
- * §8.4, item 7): only a read that confirms the whole view (its load or a
- * system re-read) started at epoch `readEpoch >= e` lifts it.
- */
-function liftRequirement(s: Subset, readEpoch: number): void {
-  if (s.unconfirmedSince !== undefined && readEpoch >= s.unconfirmedSince)
-    s.unconfirmedSince = undefined
-}
+      : state.refreshedAt + ageMs
 
 /**
  * The view requirement stands and waits for a read nobody else promises
@@ -360,33 +303,19 @@ export function requirementHold(
   | "absent"
   | Extract<AdmissionCondition, "target-invisible" | "promised" | "paused">
   | undefined {
-  const since = s.unconfirmedSince
+  const state = s.targetState
+  const since = requirementOf(state, "composition-unconfirmed")?.since
   if (since === undefined) return "absent"
-  if (!(s.visible ?? s.listeners.size > 0)) return "target-invisible"
-  if (s.rereadEpochs.some((at) => at >= since)) return "promised"
-  if (s.flight !== undefined && (s.flightEpoch ?? -1) >= since)
-    return "promised"
-  // Хвіст `revalidate` і завантаження-наступник стартують після осідання
-  // поточного читання, тобто з e чи пізніше: вимогу знімуть вони, повтор був
-  // би другим читанням того самого.
-  if (s.rereadTail !== undefined || s.trailing !== undefined) return "promised"
+  if (!isVisible(state)) return "target-invisible"
+  // Читання зі стартом не раніше e летить, або хвіст `revalidate` чи
+  // завантаження-наступник стартують після осідання поточного читання, тобто
+  // з e чи пізніше: вимогу знімуть вони, повтор був би другим читанням того
+  // самого.
+  if (promisedFrom(state, since)) return "promised"
   // Збій читання повторює пауза збоїв (планувальник), не негайне коло.
   // Межу відкинутих і вкладку судить шлюз у мить читання (M7, R13, R18;
   // Р-SK1-7, Р-SK1-8).
-  return s.failures > 0 ? "paused" : undefined
-}
-
-/**
- * The settle point of a read that confirms the whole view (its load or a
- * system re-read; P4-B spec §8.4, item 7): lifts the requirement when the
- * read started at its epoch or later; else, when it is pending, the caller
- * repeats the read (`true`). On a hidden tab the gate defers the repeat:
- * the snapshot derives `needsRefresh` from the requirement, and `resume()`
- * reads it.
- */
-function settleRequirement(s: Subset, readEpoch: number): boolean {
-  liftRequirement(s, readEpoch)
-  return requirementPending(s)
+  return state.failures > 0 ? "paused" : undefined
 }
 
 /**
@@ -395,8 +324,8 @@ function settleRequirement(s: Subset, readEpoch: number): boolean {
  * збоїв і відновлення `status` колись уже розійшлись у двох копіях. Правила —
  * клітинки виду польоту (`rulesOf`), а не гілки за точкою. Повертає, чи треба
  * повторити читання (вимога лишилась чи сторінка відхилена); яким повтором —
- * вирішує шлях. Усі присвоєння `refreshedAt`, `okReadEpoch`, `failures`,
- * `failedAt` і зняття вимоги — лише тут.
+ * вирішує шлях. Перехід «політ осів» (`settleFlight`: строк, доказ, зняття
+ * вимоги) кличе лише він.
  *
  * Завантаження підтверджує весь вигляд: знімає вимогу, а коли вона лишилась,
  * бо читання стартувало раніше за e, і її ніхто інший не прочитає, — той самий
@@ -415,20 +344,49 @@ export function settleTarget(
     readonly readFailed: boolean
     /** Потрібна лише сторінці: системне перечитування вкладку не судить. */
     readonly tabHidden?: () => boolean
+    /** Звіт запису кроку 5 (епоха читання ТЧ, яку взяло сховище). */
+    readonly report?: WriteReport
   }
 ): boolean {
   const rules = rulesOf(flight)
+  // Поля запису цілі (вимоги, доказ, строк) пише перехід «політ осів»; тут —
+  // лише ознаки реєстру (`loaded`, `status`, `error`, банери).
+  // Час старту потрібен лише тому осіданню, що рухає строк чи паузу збоїв.
+  const counts = (applied: boolean) =>
+    applied
+      ? rules.successMovesDeadline
+      : context.readFailed &&
+        (rules.failureCounts === "always" ||
+          (rules.failureCounts === "if-loaded" && s.loaded))
+  const settle = (applied: boolean) =>
+    settleFlight(s.targetState, {
+      outcome: applied ? "applied" : "failed",
+      flight: required(flight.kind, "its kind"),
+      evidence: applied
+        ? {
+            kind: "session-start",
+            epoch: required(flight.epoch, "its start epoch"),
+          }
+        : undefined,
+      own: true,
+      startedAt: counts(applied)
+        ? required(flight.startedAt, "its start time")
+        : (flight.startedAt ?? 0),
+      loaded: s.loaded,
+      applyFailed: !context.readFailed,
+      ...(context.report?.sectionRead === undefined
+        ? {}
+        : { sectionRead: context.report.sectionRead }),
+    })
   if (outcome === "applied") {
-    const epoch = required(flight.epoch, "its start epoch")
-    if (rules.successMovesDeadline) {
-      // `loaded` ставить лише завантаження: системне перечитування його не
-      // чіпає (R12 перечитує й ТЧ, що не завантажилась).
-      if (rules.confirms === "view-with-composition") s.loaded = true
-      s.refreshedAt = required(flight.startedAt, "its start time")
-      s.okReadEpoch = epoch
-      s.failures = 0
-      s.failedAt = undefined
-    }
+    // `loaded` ставить лише завантаження: системне перечитування його не
+    // чіпає (R12 перечитує й ТЧ, що не завантажилась).
+    if (
+      rules.successMovesDeadline &&
+      rules.confirms === "view-with-composition"
+    )
+      s.loaded = true
+    s.targetState = settle(true)
     // Підтверджене завантаженням — весь вигляд готовий; сторінка й системне
     // читання лише виправляють помилку, яку лишила попередниця.
     if (rules.confirms === "view-with-composition" || s.status === "error") {
@@ -439,11 +397,14 @@ export function settleTarget(
       s.needsRefresh = false
       s.hasNewRows = false
     }
-    if (rules.confirms !== "own-page") return settleRequirement(s, epoch)
+    // Вимогу, що лишилась (читання стартувало раніше за e) і яку ніхто інший
+    // не прочитає, той самий політ читає ще раз; на прихованій вкладці
+    // повтор відкладає шлюз, а знімок виводить `needsRefresh` з вимоги.
+    if (rules.confirms !== "own-page") return requirementPending(s)
     if (
-      s.unconfirmedSince === undefined ||
+      requirementOf(s.targetState, "composition-unconfirmed") === undefined ||
       !s.answerRejected ||
-      !(s.visible ?? s.listeners.size > 0)
+      !isVisible(s.targetState)
     )
       return false
     // Прихована вкладка й тут — гілка невидимого (§12, Р8): без запиту;
@@ -455,26 +416,11 @@ export function settleTarget(
   if (outcome === "failed" && failure !== undefined) {
     // Паузу збоїв рахує лише збій самого читання (для завантаження — вже
     // завантаженого вигляду): дефект застосування її не веде.
-    if (
-      context.readFailed &&
-      (rules.failureCounts === "always" ||
-        (rules.failureCounts === "if-loaded" && s.loaded))
-    ) {
-      s.failures++
-      s.failedAt = required(flight.startedAt, "its start time")
-    }
+    s.targetState = settle(false)
     s.status = "error"
     s.error = errorOf(failure.error)
   }
   return false
-}
-
-/**
- * Queues the next load of `s` under `cause` (рядок M6); a queued one keeps
- * its own: the queue remembers the first call that put it (Р4).
- */
-export function queueTrailing(s: Subset, cause: ReadCause): void {
-  s.trailing ??= cause
 }
 
 // Дочитування картки чи ТЧ, яке запускає підписка чи `preload` (рядок M3), і
@@ -516,6 +462,8 @@ export const errorOf = (error: unknown): CommandError | DataError => {
 interface ViewEntry extends SettleEntry {
   readonly number: number
   readonly read?: GatedRead
+  /** Звіт запису кроку 5 для кроку 7 (завантаження). */
+  readonly report?: WriteReport
   readonly verdict: { again: boolean; discarded: boolean }
 }
 
@@ -617,6 +565,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         const again = settleTarget(s, f, outcome, failure, {
           readFailed: entry.failure !== undefined,
           tabHidden: ctx.tabHidden,
+          ...(entry.report === undefined ? {} : { report: entry.report }),
         })
         if (outcome === "applied") verdict.again = again
       },
@@ -643,6 +592,14 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     for (const resolve of s.waiters.splice(0)) resolve()
   }
 
+  // Число підписників — вхід ефективної видимості запису: одна точка на
+  // кожну зміну `listeners`.
+  function subscribersChanged(s: Subset) {
+    s.targetState = changeVisibility(s.targetState, {
+      subscribers: s.listeners.size,
+    })
+  }
+
   function load(s: Subset, why: ReadWhy) {
     if (!s.alive || s.purged) return
     const target = {
@@ -654,19 +611,20 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     // `trailing` і до будь-якого запису стану.
     const admitted = admitView(why, target)
     if (!isPermit(admitted)) return
-    if (s.flight !== undefined) {
-      queueTrailing(s, why)
+    // Політ стоїть: запит зливається в чергу (рядок M6), черга пам'ятає
+    // перший виклик, що її поставив (Р4).
+    if (s.targetState.flight !== undefined) {
+      s.targetState = startFlight(s.targetState, { kind: "load", cause: why })
       return
     }
-    const gen = ++s.gen
-    s.flight = gen
     {
       const { site, ...cause } = why
       void site
-      s.flightCause = cause
+      s.targetState = startFlight(s.targetState, { kind: "load", cause })
     }
+    const gen = s.targetState.gen
     // Токен покоління: недійсний після звільнення й нового запиту (§6.1).
-    const token = session.childToken(() => s.alive && s.gen === gen)
+    const token = session.childToken(() => s.alive && s.targetState.gen === gen)
     const what = `view ${s.form.specKey}`
     const header = headerKey(s)
     session.commit(
@@ -688,7 +646,6 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       const { why } = permit
       const lease = ctx.source.lease()
       const number = ctx.attempts.start("load", target, why)
-      s.answerPending = true
       const flight = permit.flight({
         attempt: number,
         caller: s,
@@ -697,17 +654,24 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         token,
       })
       const readEpoch = required(flight.epoch, "its start epoch")
-      s.flightEpoch = readEpoch
-      if (header !== undefined) {
-        s.readRevision = rowViews.revision(s.form.object.name, header)
-        s.readStart = readEpoch
-      }
+      // Спроба польоту, що стоїть: її відповідь ще може писати рядки. Доказ
+      // шапки — на старті спроби, як на `main` (рядок 20; знімає задача 9).
+      s.targetState = startFlight(s.targetState, {
+        kind: "load",
+        cause: why,
+        epoch: readEpoch,
+        retry: true,
+        proofAtStart: true,
+        ...(header === undefined
+          ? {}
+          : { headerRevision: rowViews.revision(s.form.object.name, header) }),
+      })
       const verdict = { again: false, discarded: false }
       const settleLoad = (entry: ViewEntry) => {
         try {
           settleView(s, target, what, entry, {
-            apply: ({ read }, scope) =>
-              required(read, "its answer").write(scope),
+            apply: (e, scope) =>
+              required(e.read, "its answer").write(scope, e.report),
             finish: () => {
               s.dirty = true
             },
@@ -716,12 +680,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           // Остання спроба осіла: політ лишається до свого `finally`, але
           // рядків не принесе (#465); прохід синхронний, тож `purge` не
           // втискається між областю запису й цим скиданням.
-          s.answerPending = false
+          s.targetState = slotChanged(s.targetState, { kind: "answered" })
         }
       }
       return readForm(ctx, s, readEpoch, token, flight).then(
         (read) => {
-          settleLoad({ flight, number, read, verdict })
+          settleLoad({ flight, number, read, verdict, report: {} })
           // Вимога стала, поки летіло читання (M7): повтор тієї самої дії.
           if (verdict.again && token.valid) return retry("M7")
           if (!verdict.discarded || !token.valid) return
@@ -745,47 +709,55 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           if (rulesOf(flight).discardedAnswer !== "pause-then-retry") return
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
-          s.retryAt = ctx.now() + pause
+          s.targetState = slotChanged(s.targetState, {
+            kind: "paused",
+            retryAt: ctx.now() + pause,
+          })
           // Мутація самотесту: пауза не кінчається.
           const slept = ctx.defects.has("retry-sleeps-forever")
             ? new Promise<void>(() => {})
             : session.sleep(pause)
           return slept.then(() => {
-            s.retryAt = undefined
+            s.targetState = slotChanged(s.targetState, { kind: "pause-ended" })
             return token.valid ? retry("M8") : undefined
           })
         },
         (error: unknown) => {
-          settleLoad({ flight, number, verdict, failure: { error } })
+          settleLoad({
+            flight,
+            number,
+            verdict,
+            failure: { error },
+            report: {},
+          })
         }
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
     void attempt(admitted).finally(() => {
-      if (s.flight !== gen) return
-      s.flight = undefined
-      s.flightCause = undefined
-      s.retryAt = undefined
+      if (s.targetState.flight !== gen) return
+      // Кінець ланцюга: місце вільне; черга й відкладена перевірка — забрані
+      // (наступне завантаження — лише живої цілі), їх запускає код нижче.
+      const queued = s.targetState.trailing
+      const rechecked = s.targetState.recheck
+      s.targetState = slotChanged(s.targetState, {
+        kind: "freed",
+        alive: s.alive,
+      })
       // Вигляд у польоті — не ціль планувальника: `commit` відповіді був до
       // цього рядка, тож перепланування потрібне й тут.
       ctx.touchSchedule()
       s.settled = true
       resolveWaiters(s)
-      const queued = s.trailing
       // Закриття гасить `alive` (`close()` реєстру), а `closed` наступного
       // завантаження судить шлюз у `load`.
-      if (queued !== undefined && s.alive) {
-        s.trailing = undefined
-        load(s, { ...queued, site: "M6" })
-      }
+      if (queued !== undefined && s.alive) load(s, { ...queued, site: "M6" })
       // Шапка змінилась під час польоту: перевірка, відкладена до кінця
       // читання, не губиться (захист ревізією — від повторів). Її ставив і
       // `preload` без слухачів (`hide` власника в польоті першого
       // завантаження ТЧ), тож слухачі тут не умова: інакше ТЧ лишається
       // порожньою й `ready` до монтування.
-      const rechecked = s.recheck
       if (rechecked !== undefined) {
-        s.recheck = undefined
         if (
           s.alive &&
           (s.listeners.size > 0 || !ctx.defects.has("recheck-needs-listeners"))
@@ -818,7 +790,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     // Лише завершене й не перезапущене читання: до першого завантаження
     // (чи після його відмови) це було б другим читанням того самого.
     if (keys.length === 0)
-      return direction === "after" && s.loaded && s.flight === undefined
+      return direction === "after" &&
+        s.loaded &&
+        s.targetState.flight === undefined
         ? { cursor: undefined }
         : undefined
     if (direction === "after") keys.reverse()
@@ -909,7 +883,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             // Мутація самотесту: осідання сторінки знімає чужу вимогу «склад не
             // підтверджено», яку може зняти лише читання всього вигляду.
             if (ctx.defects.has("page-drops-requirement"))
-              s.unconfirmedSince = undefined
+              s.targetState = dropRequirementForDefect(
+                s.targetState,
+                "composition-unconfirmed"
+              )
           },
           finish: () => {
             s.dirty = true
@@ -1009,7 +986,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     // перше завантаження було в польоті під час `hide`.
     if (
       !ctx.defects.has("section-ignores-hide") &&
-      hiddenAfter(o, spec.owner, s.sectionRead ?? -1)
+      hiddenAfter(o, spec.owner, s.targetState.sectionRead ?? -1)
     )
       return true
     const lines = o.sections.get(spec.owner, spec.section)
@@ -1033,7 +1010,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     const spec = s.form.spec
     if (spec.kind !== "section") return false
     const o = s.form.object
-    const start = s.readStart ?? -1
+    const start = s.targetState.readStart ?? -1
     return (
       hiddenAfter(o, spec.owner, start) ||
       session.epochs.evictedSince(keyId(o.name, spec.owner), start)
@@ -1050,8 +1027,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   function check(s: Subset, held: boolean, why: ReadWhy) {
     if (!s.alive || s.purged) return
     if (!held && s.listeners.size === 0) return
-    if (s.flight !== undefined) {
-      s.recheck ??= why
+    if (s.targetState.flight !== undefined) {
+      s.targetState = slotChanged(s.targetState, { kind: "recheck", why })
       return
     }
     if (behindHeader(s)) load(s, why)
@@ -1067,8 +1044,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     const stale = s.form.spec.kind === "card" ? cardStale(s) : sectionStale(s)
     if (!stale) return false
     return (
-      rowViews.revision(s.form.object.name, header) !== s.readRevision ||
-      hiddenSinceRead(s)
+      rowViews.revision(s.form.object.name, header) !==
+        s.targetState.readRevision || hiddenSinceRead(s)
     )
   }
 
@@ -1078,7 +1055,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
    * `preload` too: a stale section (`sectionStale`) is re-read once observed.
    */
   function start(s: Subset, mounted: boolean) {
-    if (s.gen > 0 || s.settled) {
+    if (s.targetState.gen > 0 || s.settled) {
       if (mounted) check(s, false, CHECK_ON_MOUNT)
       else if (s.form.spec.kind === "section") check(s, true, CHECK_ON_MOUNT)
       return
@@ -1184,23 +1161,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       preloadTimers: new Set(),
       releaseTimer: undefined,
       alive: true,
-      gen: 0,
-      flight: undefined,
-      flightEpoch: undefined,
-      flightCause: undefined,
-      retryAt: undefined,
-      answerPending: false,
-      rereadEpochs: [],
-      trailing: undefined,
+      targetState: createTargetState(),
       settled: false,
       loaded: false,
-      refreshedAt: undefined,
-      okReadEpoch: undefined,
       rereads: 0,
-      failures: 0,
-      failedAt: undefined,
-      rereadTail: undefined,
-      rereadWaiters: [],
       owned: new Set(),
       included: new Map(),
       layout: form.spec.kind === "card" ? [form.spec.key] : [],
@@ -1225,17 +1189,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       // зайвого кадру з рівним знімком.
       snapshot: form.spec.kind === "card" ? undefined : LOADING,
       refViews: new Map(),
-      readRevision: undefined,
-      readStart: undefined,
-      sectionRead: undefined,
       checkQueued: false,
       checkHeld: false,
-      recheck: undefined,
       purged: false,
-      visible: undefined,
       hydrated: false,
       headerState: undefined,
-      unconfirmedSince: undefined,
       answerRejected: false,
     }
     subsets.set(form.specKey, s)
@@ -1257,11 +1215,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   // вона стоїть, склад не підтверджено в будь-якого вигляду, видимого чи ні.
   // Похідна від епох і вимоги, без власного стану.
   function staleComposition(s: Subset): boolean {
-    if (s.unconfirmedSince !== undefined) return true
+    if (requirementOf(s.targetState, "composition-unconfirmed") !== undefined)
+      return true
     const { epochs } = session
     if (!epochs.gapped()) return false
     const id = s.form.object.entry.id
-    const read = s.okReadEpoch ?? -1
+    const read = s.targetState.okReadEpoch ?? -1
     const unproven = (channel: string) => {
       let object = channelObjects.get(channel)
       if (object === undefined && !channelObjects.has(channel)) {
@@ -1343,8 +1302,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       // ознака: її знімає те саме читання, що знімає вимогу.
       needsRefresh:
         s.needsRefresh ||
-        (s.unconfirmedSince !== undefined &&
-          (!(s.visible ?? s.listeners.size > 0) || ctx.tabHidden())),
+        (requirementOf(s.targetState, "composition-unconfirmed") !==
+          undefined &&
+          (!isVisible(s.targetState) || ctx.tabHidden())),
       ...(ctx.isStale(o.name) ? { isStale: true } : {}),
       ...(staleComposition(s) ? { staleComposition: true } : {}),
       ...(section === undefined ? {} : { section }),
@@ -1406,7 +1366,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       } finally {
         // Хвіст `revalidate` чекав цю перевірку як продовження польоту: без
         // нового читання його будимо тут (#312), зокрема й після винятку.
-        if (s.flight === undefined) resolveWaiters(s)
+        if (s.targetState.flight === undefined) resolveWaiters(s)
       }
     })
   }
@@ -1458,8 +1418,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         const s = acquire(form)
         const entry = { fn: listener }
         s.listeners.add(entry)
+        subscribersChanged(s)
         // Знімок показує непідтверджений склад залежно від видимості.
-        if (s.unconfirmedSince !== undefined) s.dirty = true
+        if (
+          requirementOf(s.targetState, "composition-unconfirmed") !== undefined
+        )
+          s.dirty = true
         if (s.releaseTimer !== undefined) clearTimeout(s.releaseTimer)
         s.releaseTimer = undefined
         // Перша підписка знімає утримання `preload` і знімка гідратації.
@@ -1475,7 +1439,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           if (done) return
           done = true
           s.listeners.delete(entry)
-          if (s.unconfirmedSince !== undefined) s.dirty = true
+          subscribersChanged(s)
+          if (
+            requirementOf(s.targetState, "composition-unconfirmed") !==
+            undefined
+          )
+            s.dirty = true
           ctx.touchSchedule()
           if (s.alive && idle(s) && !isClosed()) scheduleRelease(s)
         }
@@ -1592,9 +1561,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       }
       if (spec.kind === "section") {
         // Читання ТЧ, що пройшло до знімка, свіже на мить гідратації: `hide`
-        // власника лише після неї вимагає перечитування.
-        s.sectionRead = state.at
-        s.readStart = state.at
+        // власника лише після неї вимагає перечитування. Запис — новий:
+        // гідратація відмовляє ядру, що вже тримає вигляди (`hydrate`).
+        s.targetState = createTargetState({
+          sectionRead: state.at,
+          readStart: state.at,
+        })
         s.headerState = state.ownerState
       }
       s.loaded = true
@@ -1640,6 +1612,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       for (const s of subsets.values()) {
         s.alive = false
         s.listeners.clear()
+        subscribersChanged(s)
         cancelTimers(s)
         resolveWaiters(s)
         s.snapshot = undefined
