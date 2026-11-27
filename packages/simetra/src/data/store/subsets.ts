@@ -752,6 +752,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             : session.sleep(pause)
           return slept.then(() => {
             s.retryAt = undefined
+            // Мутація самотесту: кінець паузи губить наступника, поставленого в ній.
+            if (ctx.defects.has("pause-drops-trailing")) s.trailing = undefined
             return token.valid ? retry("M8") : undefined
           })
         },
