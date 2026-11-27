@@ -2558,7 +2558,16 @@ export function createCore(options: {
         flights.push({ kind: "reread", epoch })
       for (let n = 0; n < s.paging.size; n++) flights.push({ kind: "page" })
       const queued: SyncQueued[] = []
-      if (s.trailing !== undefined)
+      // Завантаження-наступник, поставлене в паузі повтору відкинутого (його
+      // ставить `purge`, #496), чекає кінця паузи, а не осідання польоту:
+      // пауза — строк (`due`), і наступник стартує з її кінцем. Показане
+      // чергою за польотом, воно виглядало б читанням, що мусить початися
+      // на найближчому осіданні.
+      if (
+        s.trailing !== undefined &&
+        (s.retryAt === undefined ||
+          defects.has("sync-queues-trailing-in-pause"))
+      )
         queued.push({ kind: "load", cause: s.trailing })
       const tail = tailCause(s)
       if (s.rereadTail !== undefined)
