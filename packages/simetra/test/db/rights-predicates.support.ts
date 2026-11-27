@@ -60,7 +60,7 @@ const OPEN_FILE = "catalogs/OpenNotice/OpenNotice.meta.json"
  * Доповнення моделі сигналів: роль виміру на `Task`, глобальна роль читання
  * `Announcement` і роль «кожен користувач» на нескоупленому `Notice`.
  */
-function predicateLayer(): Layer {
+export function predicateLayer(): Layer {
   return {
     [NOTICE_FILE]: catalog(NOTICE_ID, "Notice", "notice", {
       scope: "none",
@@ -158,7 +158,10 @@ function documentEntries(objects: readonly CatalogEntry[]): CatalogEntry[] {
  * `c1` — A лише з `OrgMember` (замикання включень без `SignalReader`);
  * `g2` — глобальна роль читання `Announcement`.
  */
-async function seedPredicates(client: pg.Client, ids: Seed): Promise<void> {
+export async function seedPredicates(
+  client: pg.Client,
+  ids: Seed
+): Promise<void> {
   const create = async (
     key: string,
     table: string,
@@ -273,7 +276,7 @@ async function seedPredicates(client: pg.Client, ids: Seed): Promise<void> {
   }
 }
 
-const USERS = [
+export const USERS = [
   "m1",
   "m4",
   "m5",
