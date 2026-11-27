@@ -19,6 +19,7 @@ import {
   startFlight,
   type Requirement,
   type SettleInput,
+  type SlotChange,
   type TargetState,
 } from "../sync/target-state"
 import { SETTLE_OUTCOMES, type SettleOutcome } from "../sync/vocabulary"
@@ -361,7 +362,7 @@ describe("TargetState: політ осів — доказ, строк, місц�
     expect(settled).toMatchObject({ flight: 1, answerPending: true })
     const answered = slotChanged(settled, { kind: "answered" })
     expect(answered).toMatchObject({ flight: 1, answerPending: false })
-    const end = slotChanged(answered, { kind: "freed" })
+    const end = slotChanged(answered, { kind: "freed", alive: true })
     expect(end).toMatchObject({
       flight: undefined,
       flightCause: undefined,
@@ -396,14 +397,20 @@ describe("TargetState: політ осів — доказ, строк, місц�
     const why = { reason: "retry", site: "R16" } as const
     let s = startFlight(loading(), { kind: "load", epoch: 11, cause })
     s = slotChanged(s, { kind: "recheck", why })
-    s = slotChanged(s, { kind: "freed" })
-    expect(s).toMatchObject({ flight: undefined, trailing: cause })
-    expect(
-      slotChanged(s, { kind: "queue-taken", trailing: true })
-    ).toMatchObject({ trailing: undefined, recheck: undefined })
-    expect(
-      slotChanged(s, { kind: "queue-taken", trailing: false })
-    ).toMatchObject({ trailing: cause, recheck: undefined })
+    s = slotChanged(s, { kind: "paused", retryAt: 7 })
+    expect(slotChanged(s, { kind: "freed", alive: true })).toMatchObject({
+      flight: undefined,
+      flightCause: undefined,
+      retryAt: undefined,
+      trailing: undefined,
+      recheck: undefined,
+    })
+    expect(slotChanged(s, { kind: "freed", alive: false })).toMatchObject({
+      flight: undefined,
+      retryAt: undefined,
+      trailing: cause,
+      recheck: undefined,
+    })
   })
 
   it("епоху перечитування знімає прихід відповідей, а не осідання; місце завантаження стоїть", () => {
@@ -459,7 +466,7 @@ describe("TargetState: політ осів — доказ, строк, місц�
 
   it("місце польоту займають без епохи: епоху старту дає перша спроба", () => {
     const first = attempt(loading(), 10)
-    const freed = slotChanged(first, { kind: "freed" })
+    const freed = slotChanged(first, { kind: "freed", alive: true })
     const next = startFlight(freed, { kind: "load", cause })
     expect(next).toMatchObject({ gen: 2, flight: 2, flightEpoch: 10 })
     expect(attempt(next, 12).flightEpoch).toBe(12)
@@ -478,29 +485,55 @@ describe("TargetState: політ осів — доказ, строк, місц�
     s = slotChanged(s, { kind: "tail", tail })
     s = slotChanged(s, { kind: "tail", tail: Promise.resolve() })
     expect(s.rereadTail).toBe(tail)
-    expect(slotChanged(s, { kind: "tail-ended" }).rereadTail).toBeUndefined()
+    expect(
+      slotChanged(s, { kind: "tail", tail: undefined }).rereadTail
+    ).toBeUndefined()
     const waiter = () => undefined
     s = slotChanged(s, { kind: "waiter", waiter })
     s = slotChanged(s, { kind: "waiter", waiter })
     expect(s.rereadWaiters).toEqual([waiter, waiter])
-    expect(slotChanged(s, { kind: "waiters-resolved" }).rereadWaiters).toEqual(
-      []
-    )
+    expect(
+      slotChanged(s, { kind: "waiter", waiter: undefined }).rereadWaiters
+    ).toEqual([])
   })
 
-  it("перехід місця польоту ревізії не рухає й вимог не знімає", () => {
-    const s = addRequirement(attempt(loading(), 10), composition(1))
-    for (const change of [
+  it("перехід місця польоту змінює лише поля місця й черги: не вимоги, не докази, не ревізію", () => {
+    let s = addRequirement(attempt(loading(), 10), composition(1))
+    s = settleFlight(s, settle({ evidence: started(10), sectionRead: 10 }))
+    s = startFlight(s, { kind: "reread", epoch: 1, cause })
+    s = slotChanged(s, { kind: "paused", retryAt: 5 })
+    const slot = new Set([
+      "flight",
+      "flightCause",
+      "flightRevision",
+      "retryAt",
+      "recheck",
+      "trailing",
+      "rereadEpochs",
+      "answerPending",
+      "rereadTail",
+      "rereadWaiters",
+    ])
+    const changes: readonly SlotChange[] = [
+      { kind: "freed", alive: true },
+      { kind: "reread-ended", epoch: 1 },
       { kind: "answered" },
       { kind: "paused", retryAt: 1 },
       { kind: "pause-ended" },
-      { kind: "freed" },
-      { kind: "queue-taken", trailing: true },
-      { kind: "reread-ended", epoch: 1 },
-    ] as const) {
+      { kind: "recheck", why: { reason: "retry", site: "R16" } },
+      { kind: "tail", tail: Promise.resolve() },
+      { kind: "waiter", waiter: () => undefined },
+    ]
+    for (const change of changes) {
       const next = slotChanged(s, change)
-      expect(next.revision, change.kind).toBe(s.revision)
-      expect(next.requirements, change.kind).toEqual(s.requirements)
+      const moved = (Object.keys(s) as (keyof TargetState)[]).filter(
+        (k) => next[k] !== s[k]
+      )
+      expect(moved.length, change.kind).toBeGreaterThan(0)
+      expect(
+        moved.filter((k) => !slot.has(k)),
+        change.kind
+      ).toEqual([])
     }
   })
 
@@ -579,7 +612,10 @@ describe("TargetState: політ стартував", () => {
       cause,
     })
     const queued = startFlight(one, { kind: "load", epoch: 2, cause })
-    const idle = slotChanged(settleFlight(queued, settle()), { kind: "freed" })
+    const idle = slotChanged(settleFlight(queued, settle()), {
+      kind: "freed",
+      alive: true,
+    })
     const next = startFlight(idle, { kind: "load", epoch: 5, cause })
     expect(next).toMatchObject({
       gen: 2,

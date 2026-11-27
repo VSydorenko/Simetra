@@ -474,54 +474,48 @@ export function settleFlight(
 // ---------------------------------------------------------------------------
 
 /**
- * Зміна місця й черги польоту в ті моменти, у які їх робить `main`, окремо
- * від старту й осідання спроби (рішення архітекторки 26.11, F1): ланцюг
- * спроб завантаження тримає місце через повтори M7 і M8 і звільняє його в
- * кінці, а прохід перечитування знімає свою епоху, щойно прийшли всі
- * відповіді, ще до осідання.
+ * Вхід переходу «місце польоту змінилось» (рішення архітекторки 27.11): закрите
+ * об'єднання видів, кожен — у мить, коли його робить `main`, окремо від старту
+ * й осідання спроби. Ланцюг спроб завантаження тримає місце через повтори M7 і
+ * M8 і звільняє його в кінці; прохід перечитування знімає свою епоху, щойно
+ * прийшли всі відповіді, ще до осідання.
  */
 export type SlotChange =
+  /**
+   * Ланцюг спроб скінчився: місце польоту вільне, пауза знята, відкладена
+   * перевірка забрана; наступне завантаження з черги забирає лише жива ціль.
+   */
+  | { readonly kind: "freed"; readonly alive: boolean }
+  /** Прийшли всі відповіді проходу перечитування, що стартував у `epoch`. */
+  | { readonly kind: "reread-ended"; readonly epoch: number }
   /** Остання спроба осіла: місце польоту стоїть, але відповіді вже не несе. */
   | { readonly kind: "answered" }
   /** Відкинуте завантаження чекає повтору M8 до `retryAt` (облік `sync()`). */
   | { readonly kind: "paused"; readonly retryAt: number }
   /** Пауза скінчилась: далі повтор, якщо його допустить шлюз. */
   | { readonly kind: "pause-ended" }
-  /** Ланцюг спроб скінчився: місце польоту вільне. */
-  | { readonly kind: "freed" }
-  /**
-   * Кінець ланцюга забрав чергу: відкладену перевірку завжди, наступне
-   * завантаження — лише живої цілі (`trailing`).
-   */
-  | { readonly kind: "queue-taken"; readonly trailing: boolean }
-  /** Прийшли всі відповіді проходу перечитування, що стартував у `epoch`. */
-  | { readonly kind: "reread-ended"; readonly epoch: number }
   /** Перевірка шапки знайшла політ: вона чекає його кінця (перша лишається). */
   | { readonly kind: "recheck"; readonly why: ReadWhy }
-  /** Хвіст явного перечитування чекає цілі в польоті (перший лишається). */
-  | { readonly kind: "tail"; readonly tail: Promise<void> }
-  /** Хвіст дочекався. */
-  | { readonly kind: "tail-ended" }
-  /** Хтось чекає осідання системного перечитування. */
-  | { readonly kind: "waiter"; readonly waiter: () => void }
-  /** Ті, хто чекав перечитування, розбуджені. */
-  | { readonly kind: "waiters-resolved" }
+  /**
+   * Хвіст явного перечитування чекає цілі в польоті (перший лишається);
+   * `undefined` — хвіст дочекався.
+   */
+  | { readonly kind: "tail"; readonly tail: Promise<void> | undefined }
+  /**
+   * Хтось чекає осідання системного перечитування; `undefined` — ті, хто
+   * чекав, розбуджені.
+   */
+  | { readonly kind: "waiter"; readonly waiter: (() => void) | undefined }
 
 /**
- * Місце польоту змінилось. Входів похідних свіжості перехід не змінює, тож
- * ревізії не рухає; вимог не знімає й доказу не пише.
+ * Місце польоту змінилось. Змінює лише поля місця й черги польоту: вимог не
+ * знімає, доказу не пише, ревізії не рухає.
  */
 export function slotChanged(
   state: TargetState,
   change: SlotChange
 ): TargetState {
   switch (change.kind) {
-    case "answered":
-      return { ...state, answerPending: false }
-    case "paused":
-      return { ...state, retryAt: change.retryAt }
-    case "pause-ended":
-      return { ...state, retryAt: undefined }
     case "freed":
       // Епоха старту лишається, як на `main`: її читають лише поруч із
       // зайнятим місцем, а наступне завантаження до першої спроби — ні.
@@ -531,12 +525,8 @@ export function slotChanged(
         flightCause: undefined,
         flightRevision: undefined,
         retryAt: undefined,
-      }
-    case "queue-taken":
-      return {
-        ...state,
         recheck: undefined,
-        ...(change.trailing ? { trailing: undefined } : {}),
+        ...(change.alive ? { trailing: undefined } : {}),
       }
     case "reread-ended": {
       const at = state.rereadEpochs.indexOf(change.epoch)
@@ -547,23 +537,29 @@ export function slotChanged(
             rereadEpochs: state.rereadEpochs.filter((_, i) => i !== at),
           }
     }
+    case "answered":
+      return { ...state, answerPending: false }
+    case "paused":
+      return { ...state, retryAt: change.retryAt }
+    case "pause-ended":
+      return { ...state, retryAt: undefined }
     case "recheck":
       return state.recheck === undefined
         ? { ...state, recheck: change.why }
         : state
     case "tail":
+      if (change.tail === undefined) return { ...state, rereadTail: undefined }
       return state.rereadTail === undefined
         ? { ...state, rereadTail: change.tail }
         : state
-    case "tail-ended":
-      return { ...state, rereadTail: undefined }
     case "waiter":
       return {
         ...state,
-        rereadWaiters: [...state.rereadWaiters, change.waiter],
+        rereadWaiters:
+          change.waiter === undefined
+            ? []
+            : [...state.rereadWaiters, change.waiter],
       }
-    case "waiters-resolved":
-      return { ...state, rereadWaiters: [] }
   }
 }
 
