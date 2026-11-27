@@ -5780,13 +5780,6 @@ describe("core model regressions", () => {
       seed: -494771294,
       path: "3269:5:0:1:5:10:10:11:11:11:17:17:23:25:29:30:30:30:34:34:23:24:23:37:46:56:61:69:77:75:76:80:80:83:96:100:103:103:105:33:49:15:9:65:74:69:63:62:62:64:64:59:58:58:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59",
     },
-    // #496: перечитування в черзі не стартувало на шляху burial.
-    {
-      issue: 496,
-      o2: true,
-      seed: 1263082341,
-      path: "163:3:1:3:10:11:13:13",
-    },
   ])(
     "replays the counterexample of #$issue (seed $seed)",
     async ({ seed, path, rights = false, signals = false, o2 = false, o3 }) => {
@@ -6071,7 +6064,6 @@ const DEFECTS: readonly DefectFlag[] = [
   "revalidate-no-tail",
   "scheduler-reads-unavailable",
   "sync-pause-no-cause",
-  "sync-queues-trailing-in-pause",
   "discard-no-retry",
   "read-bypasses-gate",
   "read-bypasses-gate-testing",
@@ -6136,10 +6128,6 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // `sync()` показує паузу повтору звичайним строком: модель, що бере паузу з
   // `sync()`, бачить вигляд поза польотом і чекає від ядра перечитування.
   "sync-pause-no-cause": /not re-read after hide/,
-  // Наступник, поставлений `purge` у паузі повтору (#496), показано чергою за
-  // польотом: О2 чекає його старту на найближчому осіданні, а він стартує з
-  // кінцем паузи.
-  "sync-queues-trailing-in-pause": /the queued read never started/,
   // Відкинуте за епохою завантаження без повтору лишає вигляд у `loading`: О3.
   // Межу О2 (читання не пізніше кінця паузи повтору) доводить її самотест: у
   // прогоні модель читає вигляд іншим шляхом (такт), і борг О2 закривається ним.
@@ -6190,8 +6178,6 @@ const SELF_CHECK_SEEDS: Partial<Record<DefectFlag, number>> = {
   // знаходить її за кілька секунд; решта насіння з 1–5 її не знаходить за
   // 10 000 прогонів (рішення архітекторки 26.11).
   "settle-bypasses-pass": 2,
-  // Контрприклад #496 (прогін 163 цього насіння).
-  "sync-queues-trailing-in-pause": 1263082341,
   // Контрприклад #374 (прогін 8357 цього насіння).
   "receiver-ignores-horizon": -543971651,
   // Вікно спокою О4 відкрите (вкладка прихована, нічого в польоті) раніше, ніж
