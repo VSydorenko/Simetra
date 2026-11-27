@@ -330,6 +330,25 @@ describe("TargetState: політ осів — доказ, строк, місц�
       ...over,
     })
 
+  it("кінець паузи лишає наступника, поставленого в ній; губить його лише дефект самотесту", () => {
+    const paused = slotChanged(attempt(loading(), 10), {
+      kind: "paused",
+      retryAt: 400,
+    })
+    const queued = startFlight(paused, {
+      kind: "load",
+      cause: { reason: "user" },
+    })
+    expect(queued.trailing).toEqual({ reason: "user" })
+    expect(slotChanged(queued, { kind: "pause-ended" })).toMatchObject({
+      retryAt: undefined,
+      trailing: { reason: "user" },
+    })
+    expect(
+      slotChanged(queued, { kind: "pause-ended", dropsTrailing: true })
+    ).toMatchObject({ retryAt: undefined, trailing: undefined })
+  })
+
   it("відкинуте завантаження з паузою тримає політ, повтор і кінець ланцюга знімають", () => {
     const discarded = settleFlight(attempt(loading(), 10), discardedInput())
     expect(discarded).toMatchObject({ flight: 1, retryAt: undefined })

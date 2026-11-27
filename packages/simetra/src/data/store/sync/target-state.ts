@@ -492,8 +492,12 @@ export type SlotChange =
   | { readonly kind: "answered" }
   /** Відкинуте завантаження чекає повтору M8 до `retryAt` (облік `sync()`). */
   | { readonly kind: "paused"; readonly retryAt: number }
-  /** Пауза скінчилась: далі повтор, якщо його допустить шлюз. */
-  | { readonly kind: "pause-ended" }
+  /**
+   * Пауза скінчилась: далі повтор, якщо його допустить шлюз. `dropsTrailing` —
+   * лише дефект самотесту `pause-drops-trailing` (`defects.ts`): кінець паузи
+   * губить наступника, поставленого в ній.
+   */
+  | { readonly kind: "pause-ended"; readonly dropsTrailing?: true }
   /** Перевірка шапки знайшла політ: вона чекає його кінця (перша лишається). */
   | { readonly kind: "recheck"; readonly why: ReadWhy }
   /**
@@ -542,7 +546,11 @@ export function slotChanged(
     case "paused":
       return { ...state, retryAt: change.retryAt }
     case "pause-ended":
-      return { ...state, retryAt: undefined }
+      return {
+        ...state,
+        retryAt: undefined,
+        ...(change.dropsTrailing === true ? { trailing: undefined } : {}),
+      }
     case "recheck":
       return state.recheck === undefined
         ? { ...state, recheck: change.why }
