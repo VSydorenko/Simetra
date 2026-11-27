@@ -47,12 +47,14 @@ import {
 import {
   changeVisibility,
   createTargetState,
+  derivedNeedsRefresh,
   dropRequirementForDefect,
   isVisible,
   promisedFrom,
   requirementOf,
   settleFlight,
   slotChanged,
+  staleComposition,
   startFlight,
   type TargetState,
 } from "./sync/target-state"
@@ -1217,16 +1219,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   // Склад вигляду після розриву (§8.4): кожен утримуваний канал його об'єкта
   // доведено читанням, що успішно осіло й почалось не раніше приєднання після
   // останнього розриву; відпущений з записом — точково (`channelProven`).
-  // Вимога «склад не підтверджено з e» (§8.4, п. 7) — той самий факт: поки
-  // вона стоїть, склад не підтверджено в будь-якого вигляду, видимого чи ні.
-  // Похідна від епох і вимоги, без власного стану.
-  function staleComposition(s: Subset): boolean {
-    if (requirementOf(s.targetState, "composition-unconfirmed") !== undefined)
-      return true
+  // Запит епох сесії для похідної запису `staleComposition`: вимогу складу
+  // судить вона сама, без власного стану тут.
+  function channelUnproven(s: Subset, read: number): boolean {
     const { epochs } = session
     if (!epochs.gapped()) return false
     const id = s.form.object.entry.id
-    const read = s.targetState.okReadEpoch ?? -1
     const unproven = (channel: string) => {
       let object = channelObjects.get(channel)
       if (object === undefined && !channelObjects.has(channel)) {
@@ -1307,12 +1305,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       // п. 7): до того знімок це показує. Це вивід із вимоги, не збережена
       // ознака: її знімає те саме читання, що знімає вимогу.
       needsRefresh:
-        s.needsRefresh ||
-        (requirementOf(s.targetState, "composition-unconfirmed") !==
-          undefined &&
-          (!isVisible(s.targetState) || ctx.tabHidden())),
+        s.needsRefresh || derivedNeedsRefresh(s.targetState, ctx.tabHidden()),
       ...(ctx.isStale(o.name) ? { isStale: true } : {}),
-      ...(staleComposition(s) ? { staleComposition: true } : {}),
+      ...(staleComposition(s.targetState, (read) => channelUnproven(s, read))
+        ? { staleComposition: true }
+        : {}),
       ...(section === undefined ? {} : { section }),
       ...(spec.kind === "full" || spec.kind === "window"
         ? { strategy: s.strategy, truncated: s.truncated, atEnd: s.atEnd }
