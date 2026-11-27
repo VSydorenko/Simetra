@@ -59,6 +59,11 @@ const ALLOWED: Record<string, string> = {
   // за правилом епох, а в наслідок він лягає з епохою через `heldEpoch`.
   "sync/flight.ts rereadOutcomeOf row-value":
     "the requester's copy of an already written row",
+  // Вхід переходу `settleFlight` — доказ `session-start`, не запис стану:
+  // `Evidence` несе `versionEpoch` лише варіантом `row-version`, а страж
+  // ловить літерал через контекстний тип-об'єднання (рішення архітекторки
+  // 27.11, SK-3 Б).
+  "subsets.ts settle row-value": "a transition input, not a state write",
   // Локальна мапа рядків відповіді, не стан: у сховище вони йдуть через `put`.
   "writer.ts readFullAgain row-value got.set": "a local map of answer rows",
 }
