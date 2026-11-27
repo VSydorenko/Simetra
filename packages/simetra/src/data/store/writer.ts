@@ -54,9 +54,9 @@ import {
 } from "./subsets"
 import {
   changeVisibility,
+  derivedInputChanged,
   inFlight as targetInFlight,
   isVisible as targetVisible,
-  requirementOf,
   slotChanged,
   startFlight,
 } from "./sync/target-state"
@@ -237,7 +237,7 @@ function forget(
     if (included !== undefined)
       s.included.set(o.name, without(included, dropped))
     if (own && s.form.include.length > 0) releaseTargets(ctx, scope, s)
-    s.dirty = true
+    s.targetState = derivedInputChanged(s.targetState, "affected")
     // Читання сторінок вікна в польоті могло нести рядки, яких на мить
     // `purge` у сховищі не було: їхню відповідь відкинуто, наступну
     // сторінку читає дія користувача чи край списку.
@@ -459,7 +459,8 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
         touchMarked(o, (e) => channel === undefined || of(e) === channel)
         // Склад вигляду (`staleComposition`) обчислює знімок: порожній
         // вигляд рядків для `touch` не має.
-        for (const s of subsetsOf(ctx, o)) s.dirty = true
+        for (const s of subsetsOf(ctx, o))
+          s.targetState = derivedInputChanged(s.targetState, "channel")
       }
     },
 
@@ -473,7 +474,8 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       const of = channelOf(o.entry)
       o.rows.markChannel(scope, of, channel, at)
       touchMarked(o, (e) => of(e) === channel)
-      for (const s of subsetsOf(ctx, o)) s.dirty = true
+      for (const s of subsetsOf(ctx, o))
+        s.targetState = derivedInputChanged(s.targetState, "channel")
     },
 
     releaseChannel(channel) {
@@ -483,7 +485,8 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       const o = objectOfChannel(channel)
       if (o === undefined) return forgetChannel(channel)
       // Відпущений канал судить вигляд точково: склад міг змінитися.
-      for (const s of subsetsOf(ctx, o)) s.dirty = true
+      for (const s of subsetsOf(ctx, o))
+        s.targetState = derivedInputChanged(s.targetState, "channel")
       if (forgettable(o, channel)) forgetChannel(channel)
     },
 
@@ -495,7 +498,9 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
         if (o !== undefined && !forgettable(o, channel)) continue
         forgetChannel(channel)
         // Забутий канал вигляду більше не судить.
-        if (o !== undefined) for (const s of subsetsOf(ctx, o)) s.dirty = true
+        if (o !== undefined)
+          for (const s of subsetsOf(ctx, o))
+            s.targetState = derivedInputChanged(s.targetState, "channel")
       }
     },
 
@@ -515,7 +520,7 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
         if (flags.unconfirmedSince !== undefined)
           requireConfirmation(s, flags.unconfirmedSince)
         if (flags.hasNewRows !== undefined) s.hasNewRows = flags.hasNewRows
-        s.dirty = true
+        s.targetState = derivedInputChanged(s.targetState, "registry-flag")
       }
     },
   }
@@ -547,10 +552,9 @@ export function setVisible(
 ) {
   const s = ctx.registry.find(spec)
   if (s === undefined) return
+  // Знімок показує непідтверджений склад залежно від видимості (§8.4, п. 7):
+  // ревізію рухає перехід, лише коли ефективна видимість змінилась.
   s.targetState = changeVisibility(s.targetState, { visible })
-  // Знімок показує непідтверджений склад залежно від видимості (§8.4, п. 7).
-  if (requirementOf(s.targetState, "composition-unconfirmed") !== undefined)
-    s.dirty = true
 }
 
 // ------------------------------------------------------------ revalidate
@@ -1564,10 +1568,10 @@ export async function revalidateViews(
         entry.verdict.again = repeatOf(flight, "R18")
     },
     sweep: (scope) => ctx.ops.sweep(scope),
-    // Вигляд, що дійшов до відповіді, перемальовується: `dirty` ставить
+    // Вигляд, що дійшов до відповіді, перемальовується: ревізію рухає
     // область запису для кожного, хто пройшов кроки 1–2.
     finish: ({ s }) => {
-      s.dirty = true
+      s.targetState = derivedInputChanged(s.targetState, "registry-flag")
     },
     settled: (e, outcome, detail) =>
       ctx.attempts.settle(
@@ -1604,7 +1608,7 @@ export async function revalidateViews(
           if (!s.alive || s.purged) continue
           s.status = "error"
           s.error = EPOCH_UNAVAILABLE
-          s.dirty = true
+          s.targetState = derivedInputChanged(s.targetState, "registry-flag")
         }
       },
       token,

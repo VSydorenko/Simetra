@@ -46,7 +46,11 @@ import {
   type Permit,
 } from "./sync/flight"
 import { settlePass, type SettleEntry } from "./sync/settle-pass"
-import { isVisible, requirementOf } from "./sync/target-state"
+import {
+  derivedInputChanged,
+  isVisible,
+  requirementOf,
+} from "./sync/target-state"
 import type {
   AdmissionCondition,
   DueCause,
@@ -1866,11 +1870,12 @@ export function createCore(options: {
   }
 
   // Знімок виводить `needsRefresh` з вимоги й видимості вкладки (§8.4,
-  // п. 7): перехід вкладки його змінює й без запису.
+  // п. 7): перехід вкладки його змінює й без запису. Ціль без вимоги складу
+  // перехід «вхід похідних змінився» пропускає: її похідні від вкладки не
+  // залежать.
   function touchRequirements() {
     for (const s of registry.subsets())
-      if (requirementOf(s.targetState, "composition-unconfirmed") !== undefined)
-        s.dirty = true
+      s.targetState = derivedInputChanged(s.targetState, "tab-hidden")
   }
 
   // Одна умова з точками осідання (§8.4, п. 7): вимога стоїть, вигляд видимий,

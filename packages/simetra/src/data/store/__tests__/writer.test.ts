@@ -189,6 +189,32 @@ describe("Writer", () => {
     expect(handle.getSnapshot().needsRefresh).toBe(true)
   })
 
+  // Р-SK3-6: підписка й `setVisible`, що не змінюють ефективної видимості,
+  // ревізії не рухають; знімок той самий, що й на `main` після перебудови.
+  it("an unconfirmed composition keeps its snapshot when the effective visibility stays", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 2)
+    const handle = core.view(keys(1))
+    const first = watch(handle)
+    await settle()
+    fake.hold = (read) => isKeys(read)
+    write(core, (w) =>
+      w.markViews(TASK, { unconfirmedSince: core.readEpoch() })
+    )
+    const shown = handle.getSnapshot()
+    expect(shown.needsRefresh).toBe(false)
+    const second = watch(handle)
+    expect(handle.getSnapshot()).toBe(shown)
+    core.setVisible(keys(1), true)
+    expect(handle.getSnapshot()).toBe(shown)
+    second.unsubscribe()
+    expect(handle.getSnapshot()).toBe(shown)
+    core.setVisible(keys(1), false)
+    expect(handle.getSnapshot().needsRefresh).toBe(true)
+    first.unsubscribe()
+    expect(handle.getSnapshot().needsRefresh).toBe(true)
+  })
+
   it("markViews with a spec marks only that view", async () => {
     const { core, fake } = setup()
     seed(fake, 1, 2)

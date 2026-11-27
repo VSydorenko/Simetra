@@ -47,6 +47,7 @@ import {
 import {
   changeVisibility,
   createTargetState,
+  derivedInputChanged,
   derivedNeedsRefresh,
   dropRequirementForDefect,
   isVisible,
@@ -172,8 +173,9 @@ export interface Subset extends ReaderTarget {
   needsRefresh: boolean
   hasNewRows: boolean
   waiters: Array<() => void>
-  dirty: boolean
   snapshot: ViewSnapshot | undefined
+  /** The record revision the cached `snapshot` was built at (Р-SK3-6). */
+  snapshotRevision: number | undefined
   refViews: Map<Key, RowView>
   checkQueued: boolean
   /** The queued check comes from a hold without a listener (`preload`). */
@@ -229,8 +231,8 @@ export interface SubsetRegistry {
    */
   load(s: Subset, why: ReadWhy): void
   /**
-   * After a `commit`: marks the affected subsets dirty and returns the
-   * subscribed ones whose snapshot changed.
+   * After a `commit`: moves the revision of the affected subsets and returns
+   * the subscribed ones whose snapshot changed.
    */
   afterCommit(closing: boolean): Subset[]
   /** Cancels every timer, resolves waiters and forgets every subset and handle. */
@@ -632,7 +634,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     session.commit(
       () => {
         s.status = hasData(s) || s.loaded ? "refreshing" : "loading"
-        s.dirty = true
+        s.targetState = derivedInputChanged(s.targetState, "registry-flag")
       },
       token,
       what
@@ -675,7 +677,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             apply: (e, scope) =>
               required(e.read, "its answer").write(scope, e.report),
             finish: () => {
-              s.dirty = true
+              s.targetState = derivedInputChanged(
+                s.targetState,
+                "registry-flag"
+              )
             },
           })
         } finally {
@@ -699,7 +704,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               () => {
                 s.status = "error"
                 s.error = EPOCH_UNAVAILABLE
-                s.dirty = true
+                s.targetState = derivedInputChanged(
+                  s.targetState,
+                  "registry-flag"
+                )
               },
               token,
               what
@@ -897,7 +905,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               )
           },
           finish: () => {
-            s.dirty = true
+            s.targetState = derivedInputChanged(s.targetState, "registry-flag")
             // Відкинуте читання чи повтор за вимогою ще піде: позначка
             // тримає дублікати.
             if (!verdict.discarded && !verdict.again) release()
@@ -1079,7 +1087,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           s.owned = diffOwn(ops, scope, s.form.object, s.owned, [spec.key])
           s.loaded = true
           s.status = "ready"
-          s.dirty = true
+          s.targetState = derivedInputChanged(s.targetState, "registry-flag")
         },
         token,
         `view ${s.form.specKey}`
@@ -1192,7 +1200,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       window: form.spec.kind === "window" ? EMPTY_WINDOW : undefined,
       paging: new Map(),
       waiters: [],
-      dirty: true,
+      snapshotRevision: undefined,
       // Знімок без утримання — той самий LOADING: перша підписка не дає
       // зайвого кадру з рівним знімком.
       snapshot: form.spec.kind === "card" ? undefined : LOADING,
@@ -1324,10 +1332,14 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     })
   }
 
+  // Кеш знімка тримає ревізію запису, з якою його побудовано (Р-SK3-6).
+  const snapshotFresh = (s: Subset) =>
+    s.snapshotRevision === s.targetState.revision
+
   function snapshotOf(s: Subset): ViewSnapshot {
-    if (s.dirty || s.snapshot === undefined) {
+    if (!snapshotFresh(s) || s.snapshot === undefined) {
       s.snapshot = computeSnapshot(s)
-      s.dirty = false
+      s.snapshotRevision = s.targetState.revision
     }
     return s.snapshot
   }
@@ -1421,12 +1433,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         const s = acquire(form)
         const entry = { fn: listener }
         s.listeners.add(entry)
+        // Знімок показує непідтверджений склад залежно від видимості: ревізію
+        // рухає перехід видимості, лише коли ефективна видимість змінилась.
         subscribersChanged(s)
-        // Знімок показує непідтверджений склад залежно від видимості.
-        if (
-          requirementOf(s.targetState, "composition-unconfirmed") !== undefined
-        )
-          s.dirty = true
         if (s.releaseTimer !== undefined) clearTimeout(s.releaseTimer)
         s.releaseTimer = undefined
         // Перша підписка знімає утримання `preload` і знімка гідратації.
@@ -1443,11 +1452,6 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           done = true
           s.listeners.delete(entry)
           subscribersChanged(s)
-          if (
-            requirementOf(s.targetState, "composition-unconfirmed") !==
-            undefined
-          )
-            s.dirty = true
           ctx.touchSchedule()
           if (s.alive && idle(s) && !isClosed()) scheduleRelease(s)
         }
@@ -1575,8 +1579,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       s.loaded = true
       s.settled = true
       s.status = "ready"
+      // Запис ТЧ щойно створено заново (ревізія 0): кеш знімка скинуто разом
+      // із ревізією його побудови, тож знімок будується наново.
       s.snapshot = undefined
-      s.dirty = true
+      s.snapshotRevision = undefined
       s.hydrated = true
     },
 
@@ -1591,8 +1597,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     afterCommit(closing) {
       const notify: Subset[] = []
       for (const s of subsets.values()) {
-        if (!closing && !s.dirty && !affected(s)) continue
-        s.dirty = true
+        if (!closing && snapshotFresh(s) && !affected(s)) continue
+        // Уже застарілий кеш ревізії не потребує: повторний рух нічого не
+        // змінив би.
+        if (snapshotFresh(s))
+          s.targetState = derivedInputChanged(s.targetState, "affected")
         if (s.listeners.size === 0) continue
         const before = s.snapshot
         if (snapshotOf(s) !== before) notify.push(s)

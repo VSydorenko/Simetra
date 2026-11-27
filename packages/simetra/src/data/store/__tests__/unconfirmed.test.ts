@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { coreInternals } from "../core"
+import { derivedInputChanged } from "../sync/target-state"
 import { DEFAULT_CORE_LIMITS, type Key, type ViewSpec } from "../types"
 import {
   TASK,
@@ -324,7 +325,7 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
       (sub) => sub.form.spec.kind === "window"
     )!
     s.window = { ...s.window!, atStart: false }
-    s.dirty = true
+    s.targetState = derivedInputChanged(s.targetState, "affected")
     expect(keysIn(handle.getSnapshot())).toEqual([key(3), key(4)])
     const bury = [await divergence(h, key(2)), await divergence(h, key(5))]
     h.fake.hold = isPage

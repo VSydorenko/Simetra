@@ -58,7 +58,7 @@ const FIELDS = {
       "listeners",
       "rereads",
       "needsRefresh",
-      "dirty",
+      "snapshotRevision",
       "checkQueued",
       "checkHeld",
       "hydrated",
