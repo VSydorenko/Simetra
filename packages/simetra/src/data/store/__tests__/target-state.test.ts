@@ -759,10 +759,14 @@ describe("TargetState: вимоги, видимість, ревізія", () => 
         kind: "load",
         epoch: 2,
         cause: { reason: "user" },
-        waiter: () => undefined,
       }
     )
-    const r = releaseTarget(changeVisibility(s, { subscribers: 1 }))
+    const r = releaseTarget(
+      changeVisibility(
+        slotChanged(s, { kind: "waiter", waiter: () => undefined }),
+        { subscribers: 1 }
+      )
+    )
     expect(r).toMatchObject({
       trailing: undefined,
       subscribers: 0,
@@ -826,15 +830,11 @@ describe("TargetState: дрібні гарантії переходів", () => 
   const why = { reason: "retry", site: "R18" } as const
 
   it("ціль відпущено чистить хвіст, перевірку, паузу, чекачів", () => {
-    let s = startFlight(createTargetState(), {
-      kind: "load",
-      epoch: 1,
-      cause,
-      recheck: why,
-      tail: Promise.resolve(),
-      waiter: () => undefined,
-    })
-    s = { ...s, retryAt: 5 }
+    let s = startFlight(createTargetState(), { kind: "load", epoch: 1, cause })
+    s = slotChanged(s, { kind: "recheck", why })
+    s = slotChanged(s, { kind: "tail", tail: Promise.resolve() })
+    s = slotChanged(s, { kind: "waiter", waiter: () => undefined })
+    s = slotChanged(s, { kind: "paused", retryAt: 5 })
     const r = releaseTarget(s)
     expect(r).toMatchObject({
       rereadTail: undefined,
@@ -852,17 +852,11 @@ describe("TargetState: дрібні гарантії переходів", () => 
   })
 
   it("перечитування відкладеної перевірки не споживає; перша відкладена зберігається", () => {
-    let s = startFlight(createTargetState(), {
-      kind: "load",
-      epoch: 1,
-      cause,
-      recheck: why,
-    })
-    s = startFlight(s, {
-      kind: "load",
-      epoch: 2,
-      cause,
-      recheck: { reason: "retry", site: "R16" },
+    let s = startFlight(createTargetState(), { kind: "load", epoch: 1, cause })
+    s = slotChanged(s, { kind: "recheck", why })
+    s = slotChanged(s, {
+      kind: "recheck",
+      why: { reason: "retry", site: "R16" },
     })
     expect(s.recheck).toEqual(why)
     expect(startFlight(s, { kind: "reread", epoch: 3, cause }).recheck).toEqual(
@@ -872,17 +866,9 @@ describe("TargetState: дрібні гарантії переходів", () => 
       startFlight(createTargetState(), { kind: "reread", epoch: 3, cause })
         .recheck
     ).toBeUndefined()
-    expect(
-      startFlight(s, {
-        kind: "reread",
-        epoch: 3,
-        cause,
-        recheck: { reason: "retry", site: "R16" },
-      }).recheck
-    ).toEqual(why)
   })
 
-  it("ownerHeaderRead і sectionRead йдуть уперед; sectionRead лише для ТЧ", () => {
+  it("ownerHeaderRead іде вперед; без звіту ТЧ sectionRead не пишеться", () => {
     let s = settleFlight(
       createTargetState(),
       settle({ evidence: started(20), carriedHeader: true, headerRevision: 1 })

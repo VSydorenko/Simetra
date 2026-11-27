@@ -216,12 +216,6 @@ export interface FlightStart {
   readonly cause: ReadCause
   /** Ревізія шапки на старті (завантаження картки чи ТЧ). */
   readonly headerRevision?: number
-  /** Перевірка, яку відкладає цей політ (`reread`: далі — після осідання). */
-  readonly recheck?: ReadWhy
-  /** Хвіст явного перечитування, що чекає цього польоту. */
-  readonly tail?: Promise<void>
-  /** Той, хто чекає осідання системного перечитування. */
-  readonly waiter?: () => void
   /**
    * Спроба польоту, що стоїть (перша спроба завантаження, повтори M7 і M8):
    * нова епоха старту й ревізія шапки, пауза знята, відповідь очікується;
@@ -253,27 +247,15 @@ export function startFlight(
   state: TargetState,
   start: FlightStart
 ): TargetState {
-  let withWaiters = state
-  if (start.recheck !== undefined)
-    withWaiters = slotChanged(withWaiters, {
-      kind: "recheck",
-      why: start.recheck,
-    })
-  if (start.tail !== undefined)
-    withWaiters = { ...withWaiters, rereadTail: start.tail }
-  if (start.waiter !== undefined)
-    withWaiters = slotChanged(withWaiters, {
-      kind: "waiter",
-      waiter: start.waiter,
-    })
+  // Перевірку, хвіст і чекачів перечитування веде «місце польоту змінилось».
   switch (start.kind) {
     case "page":
-      return withWaiters
+      return state
     case "reread":
       if (start.epoch === undefined)
         throw new Error("a system re-read starts at an epoch")
       return {
-        ...withWaiters,
+        ...state,
         // Відкладену перевірку перечитування не споживає, як на `main`: вона
         // чекає кінця завантаження в польоті (рішення архітекторки 27.11).
         rereadEpochs: [...state.rereadEpochs, start.epoch],
@@ -283,13 +265,13 @@ export function startFlight(
     case "keys": {
       if (start.supersede === true)
         return {
-          ...withWaiters,
+          ...state,
           gen: state.gen + 1,
           trailing: state.trailing ?? start.cause,
         }
       if (start.retry === true && state.flight !== undefined)
         return {
-          ...withWaiters,
+          ...state,
           flightEpoch: start.epoch,
           flightRevision: start.headerRevision,
           retryAt: undefined,
@@ -300,12 +282,12 @@ export function startFlight(
         }
       if (state.flight !== undefined)
         return {
-          ...withWaiters,
+          ...state,
           trailing: state.trailing ?? start.cause,
         }
       const gen = state.gen + 1
       return {
-        ...withWaiters,
+        ...state,
         gen,
         flight: gen,
         flightEpoch: start.epoch ?? state.flightEpoch,
