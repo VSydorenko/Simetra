@@ -29,14 +29,30 @@ import { describe, expect, it } from "vitest"
  * (5) `settle(lease, …)` не існує.
  * (6) Кожна точка Р-SK2-1 знайдена й досягає проходу.
  * (7) Запис цілі (план SK-3, Р-SK3-7): значення `TargetState` будує лише
- *     `sync/target-state.ts`. Поза ним червоні об'єктний літерал із
- *     контекстним типом запису, spread значення запису (і без контексту),
- *     виклик `createTargetState` поза ініціалізатором поля нового власника,
- *     аргумент переходу, що не є значенням запису. Поле запису власника
- *     присвоюється лише прямим результатом виклику переходу — функції файлу
- *     запису з першим параметром і результатом-записом. Поля запису —
- *     `readonly`. Не тримається: `Object.assign` чи приведення типу — їх
- *     відкидає `readonly` типу, а не страж.
+ *     `sync/target-state.ts`. Поза ним червоні:
+ *     - `literal` — об'єктний літерал із контекстним типом запису;
+ *     - `spread` — spread значення запису (і без контексту);
+ *     - `create` — виклик `createTargetState` поза ініціалізатором поля
+ *       нового власника;
+ *     - `argument` — аргумент переходу, що не є значенням запису;
+ *     - `assign` — поле запису власника отримує щось, крім прямого результату
+ *       переходу (функції файлу запису з першим параметром і результатом-
+ *       записом): `=` іншим значенням, складені `??=`, `||=`, `&&=`, ціль
+ *       деструктуризації чи `for…of`, властивість поля власника в об'єктному
+ *       літералі (`Object.assign(s, { targetState })`, літерал нового
+ *       власника) зі значенням, що не є переходом чи конструктором;
+ *     - `widen` — значення запису потрапляє в тип, що не є записом: `as`,
+ *       анотація змінної чи параметра, присвоєння, `unknown` чи `any`, аргумент
+ *       `Object.assign`/`Object.defineProperty(ies)`/`Reflect.set`/
+ *       `Reflect.defineProperty` (у такому типі поле вже не `readonly`).
+ *     Поля запису — `readonly`, але tsc відкидає лише прямий запис
+ *     `s.targetState.failures = 0`; `Object.assign` і приведення типу він
+ *     пропускає, тож їх тримає правило `widen`, а не тип. Не тримається:
+ *     підроблене значення запису з типу, що вже не має ознак запису
+ *     (`JSON.parse(…) as TargetState`, помічник, що повертає `unknown` як
+ *     запис), — це приведення до запису, не з нього; зміна на місці через
+ *     функцію поза переліком мутаторів, узагальнений параметр якої виводить
+ *     тип запису.
  */
 
 const DATA = join(import.meta.dirname, "..", "..")
@@ -701,12 +717,86 @@ function analyze(
     ts.isBinaryExpression(n) &&
     isAssignOp(n.operatorToken.kind) &&
     isOwnerField(n.left)
+  // Глобальні функції, що змінюють об'єкт-аргумент на місці: їхній
+  // узагальнений параметр виводить тип запису, тож контекстний тип запис
+  // не розширює, а зміна йде повз `readonly`.
+  const MUTATORS = new Set([
+    "Object.assign",
+    "Object.defineProperty",
+    "Object.defineProperties",
+    "Reflect.set",
+    "Reflect.defineProperty",
+  ])
+  const isMutatorArgument = (n: ts.Expression): boolean => {
+    const call = n.parent
+    return (
+      ts.isCallExpression(call) &&
+      call.arguments.includes(n) &&
+      ts.isPropertyAccessExpression(call.expression) &&
+      ts.isIdentifier(call.expression.expression) &&
+      MUTATORS.has(
+        `${call.expression.expression.text}.${call.expression.name.text}`
+      )
+    )
+  }
+  // Ціль присвоєння в будь-якій формі: ліва частина присвоєння (теж у
+  // шаблоні деструктуризації), `for…of`/`for…in`, `++`/`--` (у типізації
+  // TypeScript відповідник не публічний).
+  const isAssignmentTarget = (n: ts.Node): boolean => {
+    let child: ts.Node = n
+    let p = n.parent
+    while (
+      ts.isParenthesizedExpression(p) ||
+      (ts.isPropertyAssignment(p) && p.initializer === child) ||
+      ts.isSpreadElement(p) ||
+      ts.isSpreadAssignment(p) ||
+      ts.isArrayLiteralExpression(p) ||
+      ts.isObjectLiteralExpression(p)
+    ) {
+      child = p
+      p = p.parent
+    }
+    if (
+      ts.isBinaryExpression(p) &&
+      isAssignOp(p.operatorToken.kind) &&
+      p.left === child
+    )
+      return true
+    if (
+      (ts.isForOfStatement(p) || ts.isForInStatement(p)) &&
+      p.initializer === child
+    )
+      return true
+    return (
+      (ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) &&
+      child === n &&
+      (p.operator === ts.SyntaxKind.PlusPlusToken ||
+        p.operator === ts.SyntaxKind.MinusMinusToken)
+    )
+  }
+  // Ліва частина присвоєння полю власника: її судить правило «assign».
+  const isOwnerAssignLeft = (n: ts.Expression): boolean => {
+    let child: ts.Node = n
+    let p = n.parent
+    while (ts.isParenthesizedExpression(p)) {
+      child = p
+      p = p.parent
+    }
+    return isOwnerAssign(p) && p.left === child
+  }
   // Присвоєння полю власника судить правило «assign»: другої знахідки немає.
   const assignedToOwner = (n: ts.Expression): boolean => {
     let p = n.parent
     while (ts.isParenthesizedExpression(p)) p = p.parent
     return isOwnerAssign(p) && unwrap(p.right) === n
   }
+  // Літерал — увесь новий власник: його тип — інтерфейс власника чи його
+  // нащадок (`Subset extends ReaderTarget`), а не `Partial` чи інший
+  // відображений тип, що лише несе поле запису.
+  const isOwnerType = (t: ts.Type): boolean =>
+    resolve(t.getSymbol()) === ownerIface ||
+    (t.isClassOrInterface() && checker.getBaseTypes(t).some(isOwnerType))
+  const ownerFieldName = A.record.owner.field
   // Ініціалізатор поля запису в літералі нового власника: запис народжується
   // разом із власником, а не замінює живий.
   const isOwnerInitializer = (call: ts.Node): boolean => {
@@ -718,12 +808,6 @@ function analyze(
       !ts.isObjectLiteralExpression(p.parent)
     )
       return false
-    // Літерал — увесь новий власник: його тип — інтерфейс власника чи його
-    // нащадок (`Subset extends ReaderTarget`), а не `Partial` чи інший
-    // відображений тип, що лише несе поле запису.
-    const isOwnerType = (t: ts.Type): boolean =>
-      resolve(t.getSymbol()) === ownerIface ||
-      (t.isClassOrInterface() && checker.getBaseTypes(t).some(isOwnerType))
     const type = checker.getContextualType(p.parent)
     const decl = type?.getProperty(p.name.text)?.declarations?.[0]
     return (
@@ -785,6 +869,46 @@ function analyze(
         )
           allowedUse("record")
         else recordFinding(n, "assign")
+      }
+      // Поле власника як ціль присвоєння в будь-якій іншій формі:
+      // деструктуризація, `for…of`, інкремент.
+      if (
+        (ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) &&
+        isOwnerField(n) &&
+        isAssignmentTarget(n) &&
+        !isOwnerAssignLeft(n)
+      )
+        recordFinding(n, "assign")
+      // Властивість поля власника в об'єктному літералі (`Object.assign(s,
+      // { targetState })`, літерал нового власника): значення — лише
+      // результат переходу чи конструктор запису (його місце судить правило
+      // «create»).
+      if (
+        (ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n)) &&
+        ts.isObjectLiteralExpression(n.parent) &&
+        n.name.getText() === ownerFieldName
+      ) {
+        const value = ts.isPropertyAssignment(n)
+          ? unwrap(n.initializer)
+          : n.name
+        const fresh =
+          ts.isCallExpression(value) &&
+          (isTransition(value) || calleeOf(value) === createSymbol)
+        if (isRecord(checker.getTypeAtLocation(value)) && !fresh)
+          recordFinding(n, "assign")
+      }
+      // Значення запису потрапляє в тип, що не є записом (`as`, анотація
+      // змінної, параметр, аргумент `Object.assign`, присвоєння): поле в
+      // такому типі вже не `readonly`, і змінити запис на місці може будь-хто.
+      if (
+        ts.isExpression(n) &&
+        !ts.isParenthesizedExpression(n) &&
+        !ts.isObjectLiteralExpression(n) &&
+        isRecord(checker.getTypeAtLocation(n))
+      ) {
+        const into = checker.getContextualType(n)
+        if ((into !== undefined && !isRecord(into)) || isMutatorArgument(n))
+          recordFinding(n, "widen")
       }
       ts.forEachChild(n, visit)
     }
@@ -886,6 +1010,12 @@ function render(findings: readonly Finding[]): string[] {
   }
   return [...counts].map(([key, n]) => (n === 1 ? key : `${key} ×${n}`)).sort()
 }
+
+/** Знахідки, яких немає в переліку винятків (ключ точний, з ` ×N`). */
+const unexcused = (
+  found: readonly string[],
+  exceptions: Readonly<Record<string, string>>
+) => found.filter((f) => !(f in exceptions))
 
 // ------------------------------------------------------------ реальний код
 
@@ -1047,7 +1177,7 @@ describe("settle guard on the store", () => {
 
   it("flags only the listed exceptions, each with a reason", () => {
     const found = render(result.findings)
-    expect(found.filter((f) => !(f in EXCEPTIONS))).toEqual([])
+    expect(unexcused(found, EXCEPTIONS)).toEqual([])
     expect(Object.keys(EXCEPTIONS).filter((k) => !found.includes(k))).toEqual(
       []
     )
@@ -1623,6 +1753,10 @@ export const sneak = (s: Subset) => settleFlight(s.targetState)
   })
 })
 
+// Без lib у самотесті `Object.assign` — власне оголошення з тим самим підписом.
+const ASSIGN = `declare const Object: { assign<T, U>(target: T, source: U): T & U }
+`
+
 describe("settle guard self-test: the record is built only by its transitions", () => {
   const pre = `import type { Subset } from "./subsets.ts"
 import { createTargetState, slotChanged, type TargetState } from "./target-state.ts"
@@ -1704,6 +1838,83 @@ export function fresh(): TargetState { return { failures: 0, flight: undefined }
     expect(bad(`  s.targetState = (slotChanged(s.targetState, 2))`)).toEqual([])
   })
 
+  it("the owner field as a target of any other assignment form", () => {
+    expect(
+      bad(`  const old = s.targetState\n  ;({ t: s.targetState } = { t: old })`)
+    ).toEqual(["/v/a.ts::bad record:assign"])
+    expect(
+      bad(`  const old = s.targetState\n  ;[s.targetState] = [old]`)
+    ).toEqual(["/v/a.ts::bad record:assign"])
+    expect(
+      bad(
+        `  const all: TargetState[] = [s.targetState]\n  for (s.targetState of all) void 0`
+      )
+    ).toEqual(["/v/a.ts::bad record:assign"])
+    expect(bad(`  const old = s.targetState\n  s.targetState ||= old`)).toEqual(
+      ["/v/a.ts::bad record:assign"]
+    )
+  })
+
+  it("the owner field in an object literal with a record that is not a transition result", () => {
+    expect(
+      flagged({
+        "/v/a.ts": `${pre}${ASSIGN}export function bad(s: Subset) {
+  const old = s.targetState
+  Object.assign(s, { targetState: old })
+}
+`,
+      })
+    ).toEqual(["/v/a.ts::bad record:assign"])
+    expect(
+      bad(
+        `  const targetState = s.targetState\n  const copy: Subset = { ...s, targetState }\n  void copy`
+      )
+    ).toEqual(["/v/a.ts::bad record:assign"])
+    expect(
+      bad(
+        `  const n: Subset = { ...s, targetState: slotChanged(s.targetState, 1) }\n  void n`
+      )
+    ).toEqual([])
+  })
+
+  it("a record value that flows into a type that is not the record", () => {
+    const widen = ["/v/a.ts::bad record:widen"]
+    expect(
+      flagged({
+        "/v/a.ts": `${pre}${ASSIGN}export function bad(s: Subset) {
+  Object.assign(s.targetState, { failures: 0 })
+}
+`,
+      })
+    ).toEqual(widen)
+    expect(
+      bad(`  ;(s.targetState as { failures: number }).failures = 0`)
+    ).toEqual(widen)
+    expect(
+      bad(`  const m: { failures: number } = s.targetState\n  m.failures = 0`)
+    ).toEqual(widen)
+    expect(
+      bad(
+        `  const reset = (m: { failures: number }) => { m.failures = 0 }\n  reset(s.targetState)`
+      )
+    ).toEqual(widen)
+    expect(
+      bad(
+        `  let m: { failures: number } = { failures: 1 }\n  m = s.targetState\n  m.failures = 0`
+      )
+    ).toEqual(widen)
+    expect(bad(`  const u: unknown = s.targetState\n  void u`)).toEqual(widen)
+    expect(bad(`  const a: any = s.targetState\n  a.failures = 0`)).toEqual(
+      widen
+    )
+    // Запис у позиції запису — не розширення.
+    expect(
+      bad(
+        `  const keep: TargetState = s.targetState\n  const read = (t: TargetState) => t.failures\n  void read(keep)`
+      )
+    ).toEqual([])
+  })
+
   it("a missing record anchor is reported", () => {
     const renamed = {
       ...WORLD,
@@ -1734,5 +1945,64 @@ export function fresh(): TargetState { return { failures: 0, flight: undefined }
     })
     expect(r.mutableRecordFields).toEqual(["failures"])
     expect(selfTest({}).mutableRecordFields).toEqual([])
+  })
+})
+
+// Мутація стража Р-SK3-14 (рішення архітекторки 28.11) — його самотест: по
+// одному червоному випадку на кожну заборонену форму правила (7) і один
+// зелений для іменованого винятку `adopt`.
+describe("settle guard self-test: mutation Р-SK3-14, one case per forbidden form", () => {
+  const pre = `import type { Subset } from "./subsets.ts"
+import { createTargetState, slotChanged, type TargetState } from "./target-state.ts"
+`
+  const run = (body: string) =>
+    flagged({
+      "/v/a.ts": `${pre}export function adopt(s: Subset) {\n${body}\n}\n`,
+    })
+
+  it("a TargetState literal is red", () => {
+    expect(
+      run(
+        `  const t: TargetState = { failures: 0, flight: undefined }\n  void t`
+      )
+    ).toEqual(["/v/a.ts::adopt record:literal"])
+  })
+
+  it("a spread of the record is red", () => {
+    expect(run(`  const copy = { ...s.targetState }\n  void copy`)).toEqual([
+      "/v/a.ts::adopt record:spread",
+    ])
+  })
+
+  it("createTargetState outside the record file and a new owner is red", () => {
+    expect(run(`  const t = createTargetState()\n  void t`)).toEqual([
+      "/v/a.ts::adopt record:create",
+    ])
+  })
+
+  it("the owner field assigned with something other than a transition result is red", () => {
+    expect(
+      run(
+        `  const old = s.targetState\n  s.targetState = slotChanged(old, 1)\n  s.targetState = old`
+      )
+    ).toEqual(["/v/a.ts::adopt record:assign"])
+  })
+
+  it("the named exception adopt is green, and only for exactly one finding", () => {
+    const exceptions = {
+      "/v/a.ts::adopt record:assign":
+        "гідратація створює запис з нуля: переходу з попереднього стану немає",
+    }
+    expect(
+      unexcused(run(`  s.targetState = createTargetState()`), exceptions)
+    ).toEqual([])
+    expect(
+      unexcused(
+        run(
+          `  s.targetState = createTargetState()\n  s.targetState = createTargetState()`
+        ),
+        exceptions
+      )
+    ).toEqual(["/v/a.ts::adopt record:assign ×2"])
   })
 })
