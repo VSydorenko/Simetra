@@ -57,6 +57,7 @@ import {
   slotChanged,
   staleComposition,
   startFlight,
+  type SettleInput,
   type TargetState,
 } from "./sync/target-state"
 import type {
@@ -362,26 +363,27 @@ export function settleTarget(
       : context.readFailed &&
         (rules.failureCounts === "always" ||
           (rules.failureCounts === "if-loaded" && s.loaded))
-  const settle = (applied: boolean) =>
-    settleFlight(s.targetState, {
-      outcome: applied ? "applied" : "failed",
-      flight: required(flight.kind, "its kind"),
-      evidence: applied
-        ? {
-            kind: "session-start",
-            epoch: required(flight.epoch, "its start epoch"),
-          }
-        : undefined,
-      own: true,
-      startedAt: counts(applied)
-        ? required(flight.startedAt, "its start time")
-        : (flight.startedAt ?? 0),
-      loaded: s.loaded,
-      applyFailed: !context.readFailed,
-      ...(context.report?.sectionRead === undefined
-        ? {}
-        : { sectionRead: context.report.sectionRead }),
-    })
+  // Вхід переходу, а не сам перехід: поле запису присвоюється лише прямим
+  // результатом виклику переходу (страж Р-SK3-7).
+  const settle = (applied: boolean): SettleInput => ({
+    outcome: applied ? "applied" : "failed",
+    flight: required(flight.kind, "its kind"),
+    evidence: applied
+      ? {
+          kind: "session-start",
+          epoch: required(flight.epoch, "its start epoch"),
+        }
+      : undefined,
+    own: true,
+    startedAt: counts(applied)
+      ? required(flight.startedAt, "its start time")
+      : (flight.startedAt ?? 0),
+    loaded: s.loaded,
+    applyFailed: !context.readFailed,
+    ...(context.report?.sectionRead === undefined
+      ? {}
+      : { sectionRead: context.report.sectionRead }),
+  })
   if (outcome === "applied") {
     // `loaded` ставить лише завантаження: системне перечитування його не
     // чіпає (R12 перечитує й ТЧ, що не завантажилась).
@@ -390,7 +392,7 @@ export function settleTarget(
       rules.confirms === "view-with-composition"
     )
       s.loaded = true
-    s.targetState = settle(true)
+    s.targetState = settleFlight(s.targetState, settle(true))
     // Підтверджене завантаженням — весь вигляд готовий; сторінка й системне
     // читання лише виправляють помилку, яку лишила попередниця.
     if (rules.confirms === "view-with-composition" || s.status === "error") {
@@ -420,7 +422,7 @@ export function settleTarget(
   if (outcome === "failed" && failure !== undefined) {
     // Паузу збоїв рахує лише збій самого читання (для завантаження — вже
     // завантаженого вигляду): дефект застосування її не веде.
-    s.targetState = settle(false)
+    s.targetState = settleFlight(s.targetState, settle(false))
     s.status = "error"
     s.error = errorOf(failure.error)
   }

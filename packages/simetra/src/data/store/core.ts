@@ -2586,7 +2586,7 @@ export function createCore(options: {
       // Вигляд ТЧ без підписника не читається за будь-якого `setVisible` (§5.3).
       const readable =
         isVisible(state) &&
-        (s.form.spec.kind !== "section" || s.listeners.size > 0)
+        (s.form.spec.kind !== "section" || state.subscribers > 0)
       const inRetry = scheduled.get(object)?.retry?.views.has(s) === true
       // Вимогу складу судить те саме місце, що й `main` (`requirementPending`),
       // а вкладку — шлюз (Р-SK1-8), у тому самому порядку: спершу «вимоги
