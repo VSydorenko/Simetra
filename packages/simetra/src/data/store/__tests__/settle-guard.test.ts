@@ -644,6 +644,7 @@ function analyze(
   )
   const ownerFieldDecl =
     ownerField === undefined ? undefined : declOf(ownerField)
+  const ownerIface = interfaceSymbol(A.record.owner.file, A.record.owner.iface)
   const mutableRecordFields = (recordDecl?.members ?? [])
     .filter(
       (m) =>
@@ -695,9 +696,10 @@ function analyze(
       declOf(resolve(symbol)!) === ownerFieldDecl
     )
   }
+  // Будь-яка форма присвоєння (`&&=`, `??=` теж): дозволене лише `=`.
   const isOwnerAssign = (n: ts.Node): n is ts.BinaryExpression =>
     ts.isBinaryExpression(n) &&
-    n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+    isAssignOp(n.operatorToken.kind) &&
     isOwnerField(n.left)
   // Присвоєння полю власника судить правило «assign»: другої знахідки немає.
   const assignedToOwner = (n: ts.Expression): boolean => {
@@ -716,9 +718,20 @@ function analyze(
       !ts.isObjectLiteralExpression(p.parent)
     )
       return false
-    const decl = checker.getContextualType(p.parent)?.getProperty(p.name.text)
-      ?.declarations?.[0]
-    return decl !== undefined && decl === ownerFieldDecl
+    // Літерал — увесь новий власник: його тип — інтерфейс власника чи його
+    // нащадок (`Subset extends ReaderTarget`), а не `Partial` чи інший
+    // відображений тип, що лише несе поле запису.
+    const isOwnerType = (t: ts.Type): boolean =>
+      resolve(t.getSymbol()) === ownerIface ||
+      (t.isClassOrInterface() && checker.getBaseTypes(t).some(isOwnerType))
+    const type = checker.getContextualType(p.parent)
+    const decl = type?.getProperty(p.name.text)?.declarations?.[0]
+    return (
+      type !== undefined &&
+      isOwnerType(type) &&
+      decl !== undefined &&
+      decl === ownerFieldDecl
+    )
   }
   const recordFinding = (n: ts.Node, what: string) =>
     findings.push({
@@ -765,7 +778,11 @@ function analyze(
       }
       if (isOwnerAssign(n)) {
         const right = unwrap(n.right)
-        if (ts.isCallExpression(right) && isTransition(right))
+        if (
+          n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          ts.isCallExpression(right) &&
+          isTransition(right)
+        )
           allowedUse("record")
         else recordFinding(n, "assign")
       }
@@ -1656,12 +1673,29 @@ export function fresh(): TargetState { return { failures: 0, flight: undefined }
     expect(bad(`  s["targetState"] = createTargetState()`)).toEqual([
       "/v/a.ts::bad record:assign",
     ])
+    expect(
+      bad(`  const saved = s.targetState\n  s.targetState &&= saved`)
+    ).toEqual(["/v/a.ts::bad record:assign"])
+    expect(
+      bad(
+        `  const prev = s.targetState\n  s.targetState ??= slotChanged(prev, 1)`
+      )
+    ).toEqual(["/v/a.ts::bad record:assign"])
   })
 
   it("the constructor outside the initializer of a new owner", () => {
     expect(
       bad(
         `  const t = createTargetState()\n  s.targetState = slotChanged(t, 1)`
+      )
+    ).toEqual(["/v/a.ts::bad record:create"])
+  })
+
+  it("the constructor in a literal that is not a whole new owner", () => {
+    expect(
+      bad(
+        // Без lib у самотесті `Partial` — власний відображений тип.
+        `  type Part<T> = { [K in keyof T]?: T[K] }\n  const p: Part<Subset> = { targetState: createTargetState() }\n  void p`
       )
     ).toEqual(["/v/a.ts::bad record:create"])
   })
