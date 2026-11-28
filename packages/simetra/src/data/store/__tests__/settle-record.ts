@@ -1,5 +1,6 @@
 import { coreInternals } from "../core"
 import type { Subset } from "../subsets"
+import { requirementOf } from "../sync/target-state"
 import type { Key, ViewHandle } from "../types"
 import { TASK, type CoreHarness } from "./core-support"
 
@@ -13,8 +14,9 @@ import { TASK, type CoreHarness } from "./core-support"
  * `settleRequirement`), не підміняються: тест не мусить червоніти від
  * легітимної зміни місця виклику.
  *
- * Що не записується (і чому): `s.dirty` — його читає лише `afterCommit` після
- * області запису, порядок усередині області не поведінка; числові значення
+ * Що не записується (і чому): ревізія запису (`targetState.revision`) — її
+ * читають лише кеш знімка й `afterCommit` після області запису, порядок
+ * усередині області не поведінка; числові значення
  * часу й епох — лише «задано» (вони залежать від годинника прогону);
  * однакове присвоєння не міняє значення й не є подією.
  */
@@ -28,23 +30,28 @@ function fieldsOf(s: Subset): Record<string, string> {
     error:
       s.error === undefined ? "-" : String((s.error as { code?: string }).code),
     loaded: String(s.loaded),
-    refreshedAt: NUMBER_SET(s.refreshedAt),
-    okReadEpoch: NUMBER_SET(s.okReadEpoch),
-    failures: String(s.failures),
-    failedAt: NUMBER_SET(s.failedAt),
+    refreshedAt: NUMBER_SET(s.targetState.refreshedAt),
+    okReadEpoch: NUMBER_SET(s.targetState.okReadEpoch),
+    failures: String(s.targetState.failures),
+    failedAt: NUMBER_SET(s.targetState.failedAt),
     needsRefresh: String(s.needsRefresh),
     hasNewRows: String(s.hasNewRows),
     answerRejected: String(s.answerRejected),
-    unconfirmedSince: NUMBER_SET(s.unconfirmedSince),
+    unconfirmedSince: NUMBER_SET(
+      requirementOf(s.targetState, "composition-unconfirmed")?.since
+    ),
     paging: [...s.paging.keys()].sort().join("+") || "-",
-    retryAt: NUMBER_SET(s.retryAt),
-    flight: NUMBER_SET(s.flight),
-    rereadEpochs: String(s.rereadEpochs.length),
-    rereadWaiters: String(s.rereadWaiters.length),
+    retryAt: NUMBER_SET(s.targetState.retryAt),
+    flight: NUMBER_SET(s.targetState.flight),
+    rereadEpochs: String(s.targetState.rereadEpochs.length),
+    rereadWaiters: String(s.targetState.rereadWaiters.length),
     waiters: String(s.waiters.length),
     alive: String(s.alive),
     purged: String(s.purged),
-    trailing: s.trailing === undefined ? "-" : s.trailing.reason,
+    trailing:
+      s.targetState.trailing === undefined
+        ? "-"
+        : s.targetState.trailing.reason,
   }
 }
 

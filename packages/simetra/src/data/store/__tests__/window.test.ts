@@ -8,6 +8,7 @@ import { createCore, inspectCore } from "../core"
 import { createFakeSource } from "../testing/fake-source"
 import { DEFAULT_CORE_LIMITS, type ViewSnapshot, type ViewSpec } from "../types"
 import { DISCARD_PAUSE_MS } from "../session"
+import { derivedInputChanged } from "../sync/target-state"
 import { reversedOrder } from "../window"
 import {
   OBJECTS,
@@ -161,7 +162,7 @@ describe("window", () => {
     s.window = { ...w, pages: [last], atStart: false }
     s.layout = [...last.keys]
     s.layoutSet = new Set(s.layout)
-    s.dirty = true
+    s.targetState = derivedInputChanged(s.targetState, "affected")
     expect(keysIn(handle.getSnapshot())).toEqual(range(11, 15))
     handle.subscribe(() => {
       if (!handle.getSnapshot().atStart) handle.loadBefore()
@@ -432,7 +433,7 @@ describe("window", () => {
     s.window = { ...w, pages: [second], atStart: false }
     s.layout = [...second.keys]
     s.layoutSet = new Set(s.layout)
-    s.dirty = true
+    s.targetState = derivedInputChanged(s.targetState, "affected")
     expect(handle.getSnapshot().atStart).toBe(false)
 
     handle.loadBefore()
@@ -558,7 +559,7 @@ describe("window", () => {
     }
     s.layout = tail
     s.layoutSet = new Set(tail)
-    s.dirty = true
+    s.targetState = derivedInputChanged(s.targetState, "affected")
     handle.loadBefore()
     await settle()
     expect(keysIn(handle.getSnapshot())).toEqual(first)

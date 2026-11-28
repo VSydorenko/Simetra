@@ -563,7 +563,7 @@ describe("the snapshot barrier", () => {
     // Відкинута бар'єром ТЧ не рухає `sectionRead`, і змонтований вигляд
     // читає її ще раз, уже після знімка.
     expect(
-      coreInternals(core).registry.find(section(1))?.sectionRead
+      coreInternals(core).registry.find(section(1))?.targetState.sectionRead
     ).toBeUndefined()
     expect(fake.log.filter(isSection)).toHaveLength(reads + 1)
   })

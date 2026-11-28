@@ -9,6 +9,7 @@ import {
   type CoreSource,
 } from "../source"
 import { DISCARD_PAUSE_MS, DISCARDS_MAX } from "../session"
+import { invalidateLoads } from "../writer"
 import { computeRowView } from "../snapshot"
 import type { ServerRow, ViewSpec } from "../types"
 import {
@@ -991,6 +992,60 @@ describe("core: the epoch switch", () => {
     await settle()
     expect(started).toMatchObject([
       { kind: "load", reason: "mount", site: "M6" },
+    ])
+  })
+
+  // Самотест мутації #496 на рівні шляху: прапорець `pause-drops-trailing`
+  // губить у кінці паузи наступника, якого поставив `purge` у ній, — тоді
+  // `mount` (M6) не стартує (без прапорця стартує, тест вище).
+  it("the defect pause-drops-trailing loses the mount the purge queued in the pause", async () => {
+    const h = await proven()
+    h.inspect.defects.add("pause-drops-trailing")
+    h.fake.epoch = EA
+    seed(h.fake, 3, 3)
+    watch(h.core.view(keysView(3)))
+    await drain(h)
+    expect(h.inspect.versionEpochs().discards).toBe(1)
+    const started: unknown[] = []
+    h.inspect.watchAttempts((event) => {
+      if (event.phase === "started") started.push(event)
+    })
+    h.core.commit((w) => w.purge(TASK, { keys: [key(3)] }), h.core.token())
+    vi.advanceTimersByTime(DISCARD_PAUSE_MS)
+    await settle()
+    expect(started).toEqual([])
+  })
+
+  // Половина `retryAt` предиката `invalidateLoads` (#465, доправлення): перше
+  // завантаження, відкинуте за епохою, у паузі повтору — ще той самий політ,
+  // тож звуження прав перезапускає його як `access-narrowed` (M6), а не дає
+  // повтору M8 принести відповідь, старшу за звуження.
+  it("a narrowing in the pause of a discarded first load re-runs it as access-narrowed, not as the retry", async () => {
+    const h = await proven()
+    h.fake.epoch = EA
+    seed(h.fake, 3, 3)
+    const spec = keysView(3)
+    watch(h.core.view(spec))
+    await drain(h)
+    expect(h.inspect.versionEpochs().discards).toBe(1)
+    const s = coreInternals(h.core).registry.find(spec)!
+    expect(s.loaded).toBe(false)
+    expect(s.targetState.retryAt).toBeDefined()
+    expect(s.targetState.answerPending).toBe(false)
+    const started: unknown[] = []
+    h.inspect.watchAttempts((event) => {
+      if (event.phase === "started") started.push(event)
+    })
+    invalidateLoads([s], h.core.readEpoch() + 1_000)
+    vi.advanceTimersByTime(DISCARD_PAUSE_MS)
+    await settle()
+    expect(started).toMatchObject([
+      {
+        kind: "load",
+        reason: "requirement",
+        requirement: "access-narrowed",
+        site: "M6",
+      },
     ])
   })
 

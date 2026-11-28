@@ -46,6 +46,11 @@ import {
   type Permit,
 } from "./sync/flight"
 import { settlePass, type SettleEntry } from "./sync/settle-pass"
+import {
+  derivedInputChanged,
+  isVisible,
+  requirementOf,
+} from "./sync/target-state"
 import type {
   AdmissionCondition,
   DueCause,
@@ -1831,7 +1836,10 @@ export function createCore(options: {
 
   function overHydratedRows(s: Subset): boolean {
     if (s.form.spec.kind === "section")
-      return s.sectionRead !== undefined && s.sectionRead < hydrationEpoch
+      return (
+        s.targetState.sectionRead !== undefined &&
+        s.targetState.sectionRead < hydrationEpoch
+      )
     const stale = (o: ObjectState, keys: Iterable<Key>) => {
       for (const key of keys) {
         const e = o.rows.get(key)
@@ -1862,10 +1870,12 @@ export function createCore(options: {
   }
 
   // Знімок виводить `needsRefresh` з вимоги й видимості вкладки (§8.4,
-  // п. 7): перехід вкладки його змінює й без запису.
+  // п. 7): перехід вкладки його змінює й без запису. Ціль без вимоги складу
+  // перехід «вхід похідних змінився» пропускає: її похідні від вкладки не
+  // залежать.
   function touchRequirements() {
     for (const s of registry.subsets())
-      if (s.unconfirmedSince !== undefined) s.dirty = true
+      s.targetState = derivedInputChanged(s.targetState, "tab-hidden")
   }
 
   // Одна умова з точками осідання (§8.4, п. 7): вимога стоїть, вигляд видимий,
@@ -1896,13 +1906,13 @@ export function createCore(options: {
     if (hydration !== "ended") return
     if (defects.has("late-hydrated-not-reread")) return
     // `stale-object` судить шлюз (R14) у `revalidateHydrated`.
-    if (!(s.visible ?? s.listeners.size > 0)) return
+    if (!isVisible(s.targetState)) return
     if (defects.has("hydrated-row-not-reread") && !heldBySnapshot.has(s)) return
     if (!overHydratedRows(s)) return
     // Читання, що стартувало після гідратації, уже в польоті (звірка чи `revalidate`):
     // його відповідь зробить рядки довіреними; власне завантаження ловить
     // `revalidateHydrated` (`flight`).
-    if (s.rereadEpochs.some((at) => at >= hydrationEpoch)) return
+    if (s.targetState.rereadEpochs.some((at) => at >= hydrationEpoch)) return
     revalidateHydrated(writerContext, s, {
       reason: "requirement",
       requirement: "hydration-trust",
@@ -2531,11 +2541,13 @@ export function createCore(options: {
     for (const s of registry.subsets()) {
       if (!s.alive) continue
       const object = s.form.object.name
+      const state = s.targetState
       const requirements: SyncRequirement[] = []
-      if (s.unconfirmedSince !== undefined)
+      const composition = requirementOf(state, "composition-unconfirmed")
+      if (composition !== undefined)
         requirements.push({
           kind: "composition-unconfirmed",
-          epoch: s.unconfirmedSince,
+          epoch: composition.since,
         })
       if (wave?.objects.has(object) === true)
         requirements.push({ kind: "channel-rejoin" })
@@ -2548,41 +2560,45 @@ export function createCore(options: {
       const flights: SyncFlight[] = []
       // У паузі повтору відкинутого завантаження читання немає: це строк, а не
       // політ.
-      if (s.flight !== undefined && s.retryAt === undefined)
+      if (state.flight !== undefined && state.retryAt === undefined)
         flights.push({
           kind: "load",
-          ...(s.flightEpoch === undefined ? {} : { epoch: s.flightEpoch }),
-          ...(s.flightCause === undefined ? {} : { cause: s.flightCause }),
+          ...(state.flightEpoch === undefined
+            ? {}
+            : { epoch: state.flightEpoch }),
+          ...(state.flightCause === undefined
+            ? {}
+            : { cause: state.flightCause }),
         })
-      for (const epoch of s.rereadEpochs)
+      for (const epoch of state.rereadEpochs)
         flights.push({ kind: "reread", epoch })
       for (let n = 0; n < s.paging.size; n++) flights.push({ kind: "page" })
       const queued: SyncQueued[] = []
-      if (s.trailing !== undefined)
-        queued.push({ kind: "load", cause: s.trailing })
+      if (state.trailing !== undefined)
+        queued.push({ kind: "load", cause: state.trailing })
       const tail = tailCause(s)
-      if (s.rereadTail !== undefined)
+      if (state.rereadTail !== undefined)
         queued.push(
           tail === undefined
             ? { kind: "reread" }
             : { kind: "reread", cause: causeOf(tail) }
         )
-      const isVisible = s.visible ?? s.listeners.size > 0
       // Вигляд ТЧ без підписника не читається за будь-якого `setVisible` (§5.3).
       const readable =
-        isVisible && (s.form.spec.kind !== "section" || s.listeners.size > 0)
+        isVisible(state) &&
+        (s.form.spec.kind !== "section" || state.subscribers > 0)
       const inRetry = scheduled.get(object)?.retry?.views.has(s) === true
       // Вимогу складу судить те саме місце, що й `main` (`requirementPending`),
       // а вкладку — шлюз (Р-SK1-8), у тому самому порядку: спершу «вимоги
       // немає», тоді вкладка, тоді решта.
-      const composition = requirementHold(s)
+      const hold = requirementHold(s)
       const conditionOf = (r: SyncRequirement): SyncDeferral | undefined => {
         if (r.kind === "composition-unconfirmed")
-          return composition === "absent"
+          return hold === "absent"
             ? undefined
             : gate.tabHidden()
               ? "tab-hidden"
-              : composition
+              : hold
         // До `endHydration` довіру після гідратації не читає ніхто: її
         // читання — сам виклик (умова `hydrating`, рішення архітекторки).
         if (r.kind === "hydration-trust" && hydration === "hydrated")
@@ -2607,12 +2623,12 @@ export function createCore(options: {
             queued,
           },
           {
-            proof: s.okReadEpoch,
+            proof: state.okReadEpoch,
             // У паузі повтору вигляд у польоті: таймери об'єкта читають його лише
             // хвостом після польоту, тож його строк — кінець паузи.
-            due: s.retryAt ?? timerDue(s),
+            due: state.retryAt ?? timerDue(s),
             dueCause:
-              s.retryAt !== undefined && !defects.has("sync-pause-no-cause")
+              state.retryAt !== undefined && !defects.has("sync-pause-no-cause")
                 ? "retry"
                 : undefined,
           }
@@ -2698,7 +2714,7 @@ export function createCore(options: {
                 // об'єкта (вони читають вигляд у польоті лише хвостом).
                 ...holders
                   .filter((s) => s.owned.has(key))
-                  .map((s) => s.retryAt ?? timerDue(s))
+                  .map((s) => s.targetState.retryAt ?? timerDue(s))
               ),
             }
           ),

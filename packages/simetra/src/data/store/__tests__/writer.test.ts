@@ -13,6 +13,7 @@ import {
   type ViewSnapshot,
   type Writer,
 } from "../types"
+import { invalidateLoads } from "../writer"
 import {
   OBJECTS,
   ORG,
@@ -164,6 +165,55 @@ describe("Writer", () => {
     )
     expect(sectionsOf(core, 1)).toBeUndefined()
     expect(lineView.getSnapshot().section?.lines ?? []).toEqual([])
+  })
+
+  // Ефективна видимість запису цілі рахує підписників (план SK-3, задача 3):
+  // кожна зміна `listeners` доходить до запису, інакше відписаний вигляд з
+  // вимогою складу лишався б «видимим» і не показував `needsRefresh`.
+  it("an unconfirmed composition shows needsRefresh once its last subscriber leaves", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 2)
+    const handle = core.view(keys(1))
+    const first = watch(handle)
+    await settle()
+    fake.hold = (read) => isKeys(read)
+    write(core, (w) =>
+      w.markViews(TASK, { unconfirmedSince: core.readEpoch() })
+    )
+    expect(handle.getSnapshot().needsRefresh).toBe(false)
+    first.unsubscribe()
+    expect(handle.getSnapshot().needsRefresh).toBe(true)
+    const second = watch(handle)
+    expect(handle.getSnapshot().needsRefresh).toBe(false)
+    second.unsubscribe()
+    expect(handle.getSnapshot().needsRefresh).toBe(true)
+  })
+
+  // Р-SK3-6: підписка й `setVisible`, що не змінюють ефективної видимості,
+  // дають знімок, рівний знімку `main` після перебудови. Тест судить рівність
+  // знімків, а не нерухомість ревізії: нерухомість ловить характеризація.
+  it("an unconfirmed composition keeps its snapshot when the effective visibility stays", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 2)
+    const handle = core.view(keys(1))
+    const first = watch(handle)
+    await settle()
+    fake.hold = (read) => isKeys(read)
+    write(core, (w) =>
+      w.markViews(TASK, { unconfirmedSince: core.readEpoch() })
+    )
+    const shown = handle.getSnapshot()
+    expect(shown.needsRefresh).toBe(false)
+    const second = watch(handle)
+    expect(handle.getSnapshot()).toBe(shown)
+    core.setVisible(keys(1), true)
+    expect(handle.getSnapshot()).toBe(shown)
+    second.unsubscribe()
+    expect(handle.getSnapshot()).toBe(shown)
+    core.setVisible(keys(1), false)
+    expect(handle.getSnapshot().needsRefresh).toBe(true)
+    first.unsubscribe()
+    expect(handle.getSnapshot().needsRefresh).toBe(true)
   })
 
   it("markViews with a spec marks only that view", async () => {
@@ -533,6 +583,56 @@ describe("purge", () => {
       expect(fake.pending).toHaveLength(0)
       expect(readsOf(fake, TASK).filter(isPage)).toHaveLength(1)
       expect(keysIn(handle.getSnapshot())).toEqual(rows)
+    }
+  )
+
+  // Доправлення #465 (рішення архітекторки 26.11): звуження прав у тому самому
+  // проміжку «осідання → `finally`» не перезапускає перше завантаження, яке
+  // впало, — його відповідь рядків уже не принесе. Перше завантаження, чия
+  // відповідь ще летить, звуження перезапускає, як і раніше (П12).
+  it.each([
+    { when: "after its failed answer settled", pages: 1, status: "error" },
+    { when: "while its answer is pending", pages: 2, status: "ready" },
+  ] as const)(
+    "invalidateLoads re-runs a first load only $when (#465)",
+    async ({ when, pages, status }) => {
+      const { core, fake, inspect } = setup()
+      seed(fake, 1, 2)
+      fake.hold = (read) => isPage(read)
+      const handle = core.view({ kind: "full", object: TASK })
+      watch(handle)
+      await settle()
+      const page = fake.take()
+      const narrow = () =>
+        invalidateLoads(
+          [...coreInternals(core).registry.subsets()],
+          core.readEpoch() + 1_000
+        )
+      const flying: boolean[] = []
+      if (when === "while its answer is pending") narrow()
+      else
+        inspect.watchAttempts((event) => {
+          if (event.phase !== "settled" || event.outcome !== "failed") return
+          queueMicrotask(() => {
+            flying.push(
+              inspect
+                .sync()
+                .some(
+                  (x) =>
+                    x.target.kind === "view" &&
+                    x.flights.some((f) => f.kind === "load")
+                )
+            )
+            narrow()
+          })
+        })
+      fake.hold = undefined
+      page.fail("command.unavailable")
+      await settle()
+      if (when === "after its failed answer settled")
+        expect(flying).toEqual([true])
+      expect(readsOf(fake, TASK).filter(isPage)).toHaveLength(pages)
+      expect(handle.getSnapshot().status).toBe(status)
     }
   )
 

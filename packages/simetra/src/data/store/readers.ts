@@ -20,6 +20,11 @@ import type { Scope, Session } from "./session"
 import type { Flight } from "./sync/flight"
 import type { Subset } from "./subsets"
 import {
+  addRequirement,
+  requirementOf,
+  type TargetState,
+} from "./sync/target-state"
+import {
   readKeys,
   readOne,
   readRows,
@@ -151,29 +156,19 @@ export interface ReaderTarget {
    */
   readonly paging: Map<"after" | "before", number>
   /**
-   * The start epoch of the last section read the session accepted (section
-   * form only): a `hide` of the owner after it makes the subset stale.
+   * The freshness record of the target (sync kernel spec §5.6): requirements,
+   * proof, flights, deadline and visibility. Only a transition of
+   * `sync/target-state.ts` produces a new value; the owner stores it.
    */
-  sectionRead: number | undefined
+  targetState: TargetState
   /**
    * Section form only: the owner state a snapshot brought for a header the
    * store does not hold; any accepted read of the section drops it.
    */
   headerState: RowState | undefined
   /**
-   * The composition is not confirmed by a read that started before this
-   * epoch (P4-B spec §8.4, item 7): a create or a delete the server has may
-   * be missing. A freshness mechanism raises it — the rejoin wave and the
-   * signal receiver for every view of the object, П15 (§6.2) for a view
-   * whose answer the store cut (a row rejected for a key tombstone or a
-   * `removed` mark newer than the read). Only a successful load or system
-   * re-read of the view that started at this epoch or later lifts it; a
-   * page read does not (it confirms only its page). Visibility decides only
-   * when that read happens.
-   */
-  unconfirmedSince: number | undefined
-  /**
-   * The answer being applied rejected a row and raised `unconfirmedSince`
+   * The answer being applied rejected a row and raised the requirement
+   * «composition not confirmed»
    * (П15). Its reader sets it, a page flight resets it before the write and
    * repeats on it: a page confirms only itself, so only its own rejection
    * repeats it; two pages rejected at the same epoch both see the fact, not a
@@ -182,8 +177,17 @@ export interface ReaderTarget {
   answerRejected: boolean
 }
 
-/** Writes a read result inside one `commit`. */
-export type Write = (scope: Scope) => void
+/**
+ * What a write tells its settle point (step 7): the epoch of the section read
+ * the store took — a `hide` of the owner after it makes the subset stale. A
+ * section rejected by the rights snapshot barrier reports none.
+ */
+export interface WriteReport {
+  sectionRead?: number
+}
+
+/** Writes a read result inside one `commit`; `report` collects what step 7 records. */
+export type Write = (scope: Scope, report?: WriteReport) => void
 
 /**
  * The answer of one flight before the session judged it: the epochs of its
@@ -579,7 +583,11 @@ function rejectedSince(
  * (§8.4, item 7): never lowers a newer one.
  */
 export function requireConfirmation(s: ReaderTarget, since: number) {
-  s.unconfirmedSince = Math.max(s.unconfirmedSince ?? 0, since)
+  const stands = requirementOf(s.targetState, "composition-unconfirmed")
+  s.targetState = addRequirement(s.targetState, {
+    kind: "composition-unconfirmed",
+    since: Math.max(stands?.since ?? 0, since),
+  })
 }
 
 /** П15: the answer being applied cut the composition. */
@@ -1034,12 +1042,13 @@ async function readSection(
     owner: spec.owner,
   })
   const lines = result.rows.map((values) => lineOf(section, values))
-  return (scope) => {
+  return (scope, report) => {
     // Читання прийнято (шлюз епохи пройдено), навіть коли сховище відкине
     // рядки: свіжість ТЧ-підмножини міряється епохою цього читання. Крім
-    // відмови бар'єра знімка прав: таку ТЧ вигляд ще читатиме (нижче).
-    const before = s.sectionRead
-    s.sectionRead = readEpoch
+    // відмови бар'єра знімка прав: таку ТЧ вигляд ще читатиме (нижче). Епоху
+    // записує осідання (крок 7) зі звіту; звіт стоїть і тоді, коли запис далі
+    // впаде, як на `main`.
+    if (report !== undefined) report.sectionRead = readEpoch
     s.headerState = undefined
     // Невидимий власник — рядків ТЧ не показуємо.
     if (result.ownerVersion === undefined) {
@@ -1073,7 +1082,8 @@ async function readSection(
     )
     // ТЧ, відкинута бар'єром знімка, не рухає `sectionRead`: її змонтований
     // вигляд читає її ще раз, уже після знімка (§6.2 правило 4).
-    if (barred === "barred") s.sectionRead = before
+    if (barred === "barred" && report !== undefined)
+      report.sectionRead = undefined
   }
 }
 

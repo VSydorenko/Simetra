@@ -5333,6 +5333,9 @@ describe("core model", () => {
 // не продовжується у фоні в наступному тесті.
 describe("the time budget of a property", () => {
   const SMALL_BUDGET_MS = 3_000
+  // Закріплений сид: самотест бюджету ганяє справжню модель, а режим сидів
+  // воріт — лише закріплені (випадковий сид знайшов червоний #496).
+  const TIME_BUDGET_SEED = 20261127
   let started = 0
   let finished = 0
   const counted = fc.asyncProperty(
@@ -5354,6 +5357,7 @@ describe("the time budget of a property", () => {
     async () => {
       await expect(
         fc.assert(counted, {
+          seed: TIME_BUDGET_SEED,
           numRuns: 1_000_000,
           ...interruptWithin(SMALL_BUDGET_MS),
         })

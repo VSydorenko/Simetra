@@ -7,16 +7,19 @@ import {
   createTargetState,
   derivedInputChanged,
   derivedNeedsRefresh,
+  dropRequirementForDefect,
   inFlight,
   isVisible,
   promisedFrom,
   releaseTarget,
   requirementOf,
   settleFlight,
+  slotChanged,
   staleComposition,
   startFlight,
   type Requirement,
   type SettleInput,
+  type SlotChange,
   type TargetState,
 } from "../sync/target-state"
 import { SETTLE_OUTCOMES, type SettleOutcome } from "../sync/vocabulary"
@@ -46,8 +49,6 @@ const settle = (over: Partial<SettleInput> = {}): SettleInput => ({
   flight: "load",
   evidence: started(10),
   own: true,
-  gen: 1,
-  epoch: 10,
   startedAt: 100,
   loaded: true,
   ...over,
@@ -218,13 +219,13 @@ describe("TargetState: політ осів — доказ, строк, місц�
     }
   })
 
-  it("застосоване завантаження пише доказ і строк; пізніше осіле раніше стартоване не зсуває назад", () => {
+  it("застосоване завантаження пише доказ і строк; пізніше осіле раніше стартоване не зсуває назад доказу шапки", () => {
     const first = settleFlight(
       createTargetState(),
       settle({
         evidence: started(20),
         headerRevision: 7,
-        section: true,
+        sectionRead: 20,
         startedAt: 200,
       })
     )
@@ -240,16 +241,39 @@ describe("TargetState: політ осів — доказ, строк, місц�
       settle({
         evidence: started(15),
         headerRevision: 3,
-        section: true,
+        sectionRead: 15,
         startedAt: 210,
       })
     )
+    // Доказ складу й звіт запису ТЧ — останнього застосованого, як на `main`
+    // (рішення архітекторки 26.11, F3, F4): вони можуть піти назад.
     expect(later).toMatchObject({
-      okReadEpoch: 20,
+      okReadEpoch: 15,
       readStart: 20,
       readRevision: 7,
-      sectionRead: 20,
+      sectionRead: 15,
     })
+  })
+
+  it("звіт запису ТЧ пишеться й за збою застосування; без звіту sectionRead не рухається", () => {
+    const failed = settleFlight(
+      createTargetState(),
+      settle({
+        outcome: "failed",
+        evidence: undefined,
+        applyFailed: true,
+        sectionRead: 12,
+      })
+    )
+    expect(failed.sectionRead).toBe(12)
+    expect(failed.okReadEpoch).toBeUndefined()
+    expect(settleFlight(failed, settle({ flight: "reread" })).sectionRead).toBe(
+      12
+    )
+    expect(
+      settleFlight(failed, settle({ flight: "reread", sectionRead: 14 }))
+        .sectionRead
+    ).toBe(14)
   })
 
   it("перечитування не пише readRevision", () => {
@@ -295,17 +319,45 @@ describe("TargetState: політ осів — доказ, строк, місц�
   const discardedInput = (over: Partial<SettleInput> = {}) =>
     settle({ outcome: "discarded-by-epoch", evidence: undefined, ...over })
 
+  // Місце польоту (рішення архітекторки 26.11, F1): осідання його не звільняє;
+  // моменти `main` — перехід «місце польоту змінилось».
+  const attempt = (s: TargetState, epoch: number, over = {}) =>
+    startFlight(s, {
+      kind: "load",
+      epoch,
+      cause: { reason: "retry" },
+      retry: true,
+      ...over,
+    })
+
+  it("кінець паузи лишає наступника, поставленого в ній; губить його лише дефект самотесту", () => {
+    const paused = slotChanged(attempt(loading(), 10), {
+      kind: "paused",
+      retryAt: 400,
+    })
+    const queued = startFlight(paused, {
+      kind: "load",
+      cause: { reason: "user" },
+    })
+    expect(queued.trailing).toEqual({ reason: "user" })
+    expect(slotChanged(queued, { kind: "pause-ended" })).toMatchObject({
+      retryAt: undefined,
+      trailing: { reason: "user" },
+    })
+    expect(
+      slotChanged(queued, { kind: "pause-ended", dropsTrailing: true })
+    ).toMatchObject({ retryAt: undefined, trailing: undefined })
+  })
+
   it("відкинуте завантаження з паузою тримає політ, повтор і кінець ланцюга знімають", () => {
-    const paused = settleFlight(loading(), discardedInput({ retryAt: 400 }))
+    const discarded = settleFlight(attempt(loading(), 10), discardedInput())
+    expect(discarded).toMatchObject({ flight: 1, retryAt: undefined })
+    const paused = slotChanged(discarded, { kind: "paused", retryAt: 400 })
     expect(paused).toMatchObject({ flight: 1, retryAt: 400 })
     expect(inFlight(paused)).toBe(true)
-    const retried = startFlight(paused, {
-      kind: "load",
-      epoch: 20,
-      cause: { reason: "retry" },
-      headerRevision: 9,
-      retry: true,
-    })
+    const woke = slotChanged(paused, { kind: "pause-ended" })
+    expect(woke).toMatchObject({ flight: 1, retryAt: undefined })
+    const retried = attempt(paused, 20, { headerRevision: 9 })
     expect(retried).toMatchObject({
       gen: 1,
       flight: 1,
@@ -314,6 +366,7 @@ describe("TargetState: політ осів — доказ, строк, місц�
       flightCause: cause,
       retryAt: undefined,
       trailing: undefined,
+      answerPending: true,
     })
     const queued = startFlight(paused, {
       kind: "load",
@@ -324,69 +377,195 @@ describe("TargetState: політ осів — доказ, строк, місц�
       startFlight(queued, { kind: "load", epoch: 22, cause, retry: true })
         .trailing
     ).toEqual({ reason: "user" })
-    const end = settleFlight(retried, settle())
-    expect(end).toMatchObject({ flight: undefined, retryAt: undefined })
+    const settled = settleFlight(retried, settle())
+    expect(settled).toMatchObject({ flight: 1, answerPending: true })
+    const answered = slotChanged(settled, { kind: "answered" })
+    expect(answered).toMatchObject({ flight: 1, answerPending: false })
+    const end = slotChanged(answered, { kind: "freed", alive: true })
+    expect(end).toMatchObject({
+      flight: undefined,
+      flightCause: undefined,
+      retryAt: undefined,
+      flightEpoch: 20,
+    })
+    expect(inFlight(end)).toBe(false)
   })
 
-  it("відкинуте завантаження без паузи (поза межею) звільняє місце польоту", () => {
-    const next = settleFlight(loading(), discardedInput())
-    expect(next).toMatchObject({ flight: undefined, retryAt: undefined })
-    expect(inFlight(next)).toBe(false)
-  })
-
-  it("збій і наслідки завантаження без паузи звільняють місце й знімають паузу", () => {
-    for (const outcome of [
-      "failed",
-      "evicted",
-      "after-purge",
-      "closed",
-    ] as const) {
-      const paused = settleFlight(loading(), discardedInput({ retryAt: 400 }))
-      const next = settleFlight(
-        paused,
-        settle({ outcome, evidence: undefined })
-      )
-      expect(next, outcome).toMatchObject({
-        flight: undefined,
-        retryAt: undefined,
-      })
-    }
-  })
-
-  it("пауза завантаження — лише його: сторінка й перечитування її не чіпають", () => {
-    const paused = settleFlight(loading(), discardedInput({ retryAt: 400 }))
-    for (const flight of ["page", "reread"] as const)
+  it("жоден наслідок осідання місця польоту не звільняє й паузи не ставить", () => {
+    for (const flight of ["load", "page", "reread", "keys", "service"] as const)
       for (const outcome of SETTLE_OUTCOMES) {
+        const paused = slotChanged(attempt(loading(), 10), {
+          kind: "paused",
+          retryAt: 400,
+        })
         const next = settleFlight(
           paused,
           settle({
             flight,
             outcome,
-            evidence: started(10),
-            retryAt: outcome === "discarded-by-epoch" ? 999 : undefined,
+            evidence: outcome === "applied" ? started(10) : undefined,
           })
         )
-        expect(next.retryAt, `${flight} ${outcome}`).toBe(400)
         expect(next.flight, `${flight} ${outcome}`).toBe(1)
+        expect(next.retryAt, `${flight} ${outcome}`).toBe(400)
+        expect(next.rereadEpochs, `${flight} ${outcome}`).toEqual([])
       }
   })
 
-  it("відкинуте перечитування не гасить польоту завантаження", () => {
+  it("кінець ланцюга: черга живої цілі забирається, мертвої — лишається; перевірка — завжди", () => {
+    const why = { reason: "retry", site: "R16" } as const
+    let s = startFlight(loading(), { kind: "load", epoch: 11, cause })
+    s = slotChanged(s, { kind: "recheck", why })
+    s = slotChanged(s, { kind: "paused", retryAt: 7 })
+    expect(slotChanged(s, { kind: "freed", alive: true })).toMatchObject({
+      flight: undefined,
+      flightCause: undefined,
+      retryAt: undefined,
+      trailing: undefined,
+      recheck: undefined,
+    })
+    expect(slotChanged(s, { kind: "freed", alive: false })).toMatchObject({
+      flight: undefined,
+      retryAt: undefined,
+      trailing: cause,
+      recheck: undefined,
+    })
+  })
+
+  it("епоху перечитування знімає прихід відповідей, а не осідання; місце завантаження стоїть", () => {
     let s = loading()
     s = startFlight(s, { kind: "reread", epoch: 10, cause })
-    s = settleFlight(s, discardedInput({ flight: "reread", retryAt: 300 }))
-    expect(s.rereadEpochs).toEqual([])
-    expect(s.retryAt).toBeUndefined()
-    expect(inFlight(s)).toBe(true)
+    s = startFlight(s, { kind: "reread", epoch: 10, cause })
+    s = settleFlight(s, discardedInput({ flight: "reread" }))
+    expect(s.rereadEpochs).toEqual([10, 10])
+    s = slotChanged(s, { kind: "reread-ended", epoch: 10 })
+    expect(s.rereadEpochs).toEqual([10])
+    expect(slotChanged(s, { kind: "reread-ended", epoch: 99 })).toBe(s)
+    expect(inFlight(slotChanged(s, { kind: "reread-ended", epoch: 10 }))).toBe(
+      true
+    )
+  })
+
+  it("заступлення: покоління зростає, запит стає в чергу, місце стоїть", () => {
+    const flying = attempt(loading(), 10)
+    const next = startFlight(flying, {
+      kind: "load",
+      cause: { reason: "mount" },
+      supersede: true,
+    })
+    expect(next).toMatchObject({
+      gen: 2,
+      flight: 1,
+      trailing: { reason: "mount" },
+      answerPending: true,
+    })
+    expect(
+      startFlight(next, {
+        kind: "load",
+        cause: { reason: "user" },
+        supersede: true,
+      })
+    ).toMatchObject({ gen: 3, flight: 1, trailing: { reason: "mount" } })
+  })
+
+  it("доказ на старті спроби (рядок 20 main) — лише з proofAtStart і ревізією шапки", () => {
+    const base = loading()
+    expect(attempt(base, 10, { headerRevision: 4 })).toMatchObject({
+      readRevision: undefined,
+      readStart: undefined,
+    })
+    expect(attempt(base, 10, { proofAtStart: true })).toMatchObject({
+      readRevision: undefined,
+      readStart: undefined,
+    })
+    expect(
+      attempt(base, 10, { headerRevision: 4, proofAtStart: true })
+    ).toMatchObject({ readRevision: 4, readStart: 10 })
+  })
+
+  it("місце польоту займають без епохи: епоху старту дає перша спроба", () => {
+    const first = attempt(loading(), 10)
+    const freed = slotChanged(first, { kind: "freed", alive: true })
+    const next = startFlight(freed, { kind: "load", cause })
+    expect(next).toMatchObject({ gen: 2, flight: 2, flightEpoch: 10 })
+    expect(attempt(next, 12).flightEpoch).toBe(12)
+    expect(() =>
+      startFlight(createTargetState(), { kind: "reread", cause })
+    ).toThrow("epoch")
+  })
+
+  it("перевірка й хвіст: перші лишаються; чекачі розбуджуються разом", () => {
+    const one = { reason: "retry", site: "R16" } as const
+    const two = { reason: "retry", site: "R18" } as const
+    let s = slotChanged(createTargetState(), { kind: "recheck", why: one })
+    s = slotChanged(s, { kind: "recheck", why: two })
+    expect(s.recheck).toEqual(one)
+    const tail = Promise.resolve()
+    s = slotChanged(s, { kind: "tail", tail })
+    s = slotChanged(s, { kind: "tail", tail: Promise.resolve() })
+    expect(s.rereadTail).toBe(tail)
+    expect(
+      slotChanged(s, { kind: "tail", tail: undefined }).rereadTail
+    ).toBeUndefined()
+    const waiter = () => undefined
+    s = slotChanged(s, { kind: "waiter", waiter })
+    s = slotChanged(s, { kind: "waiter", waiter })
+    expect(s.rereadWaiters).toEqual([waiter, waiter])
+    expect(
+      slotChanged(s, { kind: "waiter", waiter: undefined }).rereadWaiters
+    ).toEqual([])
+  })
+
+  it("перехід місця польоту змінює лише поля місця й черги: не вимоги, не докази, не ревізію", () => {
+    let s = addRequirement(attempt(loading(), 10), composition(1))
+    s = settleFlight(s, settle({ evidence: started(10), sectionRead: 10 }))
+    s = startFlight(s, { kind: "reread", epoch: 1, cause })
+    s = slotChanged(s, { kind: "paused", retryAt: 5 })
+    const slot = new Set([
+      "flight",
+      "flightCause",
+      "flightRevision",
+      "retryAt",
+      "recheck",
+      "trailing",
+      "rereadEpochs",
+      "answerPending",
+      "rereadTail",
+      "rereadWaiters",
+    ])
+    const changes: readonly SlotChange[] = [
+      { kind: "freed", alive: true },
+      { kind: "reread-ended", epoch: 1 },
+      { kind: "answered" },
+      { kind: "paused", retryAt: 1 },
+      { kind: "pause-ended" },
+      { kind: "recheck", why: { reason: "retry", site: "R16" } },
+      { kind: "tail", tail: Promise.resolve() },
+      { kind: "waiter", waiter: () => undefined },
+    ]
+    for (const change of changes) {
+      const next = slotChanged(s, change)
+      const moved = (Object.keys(s) as (keyof TargetState)[]).filter(
+        (k) => next[k] !== s[k]
+      )
+      expect(moved.length, change.kind).toBeGreaterThan(0)
+      expect(
+        moved.filter((k) => !slot.has(k)),
+        change.kind
+      ).toEqual([])
+    }
   })
 
   it("чужий політ не чіпає місця польоту, паузи, доказу й строку", () => {
-    const base = settleFlight(loading(), discardedInput({ retryAt: 400 }))
+    const base = slotChanged(attempt(loading(), 10), {
+      kind: "paused",
+      retryAt: 400,
+    })
     for (const outcome of SETTLE_OUTCOMES) {
       for (const flight of ["load", "keys", "reread"] as const) {
         const next = settleFlight(
           base,
-          settle({ own: false, flight, outcome, gen: 1, retryAt: 7 })
+          settle({ own: false, flight, outcome, sectionRead: 3 })
         )
         expect(next, `${flight} ${outcome}`).toEqual(base)
       }
@@ -410,13 +589,15 @@ describe("TargetState: політ осів — доказ, строк, місц�
     expect(failed({})).toMatchObject({ failures: 1, failedAt: 77 })
   })
 
-  it("чужого покоління польоту осідання не знімає", () => {
-    const flying = startFlight(createTargetState(), {
-      kind: "load",
-      epoch: 10,
-      cause: { reason: "mount" },
-    })
-    expect(settleFlight(flying, settle({ gen: 99 })).flight).toBe(1)
+  it("дефект самотесту знімає вимогу без доказу; робочий шлях — ні", () => {
+    const s = withReqs(composition(5), behind(5))
+    const dropped = dropRequirementForDefect(s, "composition-unconfirmed")
+    expect(kinds(dropped)).toEqual(["target-behind-header"])
+    expect(dropped.revision).toBe(s.revision + 1)
+    expect(kinds(settleFlight(s, settle({ evidence: started(4) })))).toEqual([
+      "composition-unconfirmed",
+      "target-behind-header",
+    ])
   })
 })
 
@@ -450,7 +631,10 @@ describe("TargetState: політ стартував", () => {
       cause,
     })
     const queued = startFlight(one, { kind: "load", epoch: 2, cause })
-    const idle = settleFlight(queued, settle({ epoch: 1 }))
+    const idle = slotChanged(settleFlight(queued, settle()), {
+      kind: "freed",
+      alive: true,
+    })
     const next = startFlight(idle, { kind: "load", epoch: 5, cause })
     expect(next).toMatchObject({
       gen: 2,
@@ -575,10 +759,14 @@ describe("TargetState: вимоги, видимість, ревізія", () => 
         kind: "load",
         epoch: 2,
         cause: { reason: "user" },
-        waiter: () => undefined,
       }
     )
-    const r = releaseTarget(changeVisibility(s, { subscribers: 1 }))
+    const r = releaseTarget(
+      changeVisibility(
+        slotChanged(s, { kind: "waiter", waiter: () => undefined }),
+        { subscribers: 1 }
+      )
+    )
     expect(r).toMatchObject({
       trailing: undefined,
       subscribers: 0,
@@ -642,15 +830,11 @@ describe("TargetState: дрібні гарантії переходів", () => 
   const why = { reason: "retry", site: "R18" } as const
 
   it("ціль відпущено чистить хвіст, перевірку, паузу, чекачів", () => {
-    let s = startFlight(createTargetState(), {
-      kind: "load",
-      epoch: 1,
-      cause,
-      recheck: why,
-      tail: Promise.resolve(),
-      waiter: () => undefined,
-    })
-    s = { ...s, retryAt: 5 }
+    let s = startFlight(createTargetState(), { kind: "load", epoch: 1, cause })
+    s = slotChanged(s, { kind: "recheck", why })
+    s = slotChanged(s, { kind: "tail", tail: Promise.resolve() })
+    s = slotChanged(s, { kind: "waiter", waiter: () => undefined })
+    s = slotChanged(s, { kind: "paused", retryAt: 5 })
     const r = releaseTarget(s)
     expect(r).toMatchObject({
       rereadTail: undefined,
@@ -667,29 +851,24 @@ describe("TargetState: дрібні гарантії переходів", () => 
     ).toBeUndefined()
   })
 
-  it("перечитування споживає перевірку, перша відкладена зберігається", () => {
-    let s = startFlight(createTargetState(), {
-      kind: "load",
-      epoch: 1,
-      cause,
-      recheck: why,
-    })
-    s = startFlight(s, {
-      kind: "load",
-      epoch: 2,
-      cause,
-      recheck: { reason: "retry", site: "R16" },
+  it("перечитування відкладеної перевірки не споживає; перша відкладена зберігається", () => {
+    let s = startFlight(createTargetState(), { kind: "load", epoch: 1, cause })
+    s = slotChanged(s, { kind: "recheck", why })
+    s = slotChanged(s, {
+      kind: "recheck",
+      why: { reason: "retry", site: "R16" },
     })
     expect(s.recheck).toEqual(why)
+    expect(startFlight(s, { kind: "reread", epoch: 3, cause }).recheck).toEqual(
+      why
+    )
     expect(
-      startFlight(s, { kind: "reread", epoch: 3, cause }).recheck
+      startFlight(createTargetState(), { kind: "reread", epoch: 3, cause })
+        .recheck
     ).toBeUndefined()
-    expect(
-      startFlight(s, { kind: "reread", epoch: 3, cause, recheck: why }).recheck
-    ).toEqual(why)
   })
 
-  it("ownerHeaderRead і sectionRead йдуть уперед; sectionRead лише для ТЧ", () => {
+  it("ownerHeaderRead іде вперед; без звіту ТЧ sectionRead не пишеться", () => {
     let s = settleFlight(
       createTargetState(),
       settle({ evidence: started(20), carriedHeader: true, headerRevision: 1 })
