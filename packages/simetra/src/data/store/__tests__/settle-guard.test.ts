@@ -2,13 +2,22 @@ import { readdirSync } from "node:fs"
 import { join, relative } from "node:path"
 import ts from "typescript"
 import { describe, expect, it } from "vitest"
+import {
+  addRequirement,
+  createTargetState,
+  slotChanged,
+  startFlight,
+  type TargetState,
+} from "../sync/target-state"
 
 /*
  * Страж осідання відповіді читання (план SK-2, Р-SK2-10; спека ядра синхронізації
  * §3, рядок SK-2). Кожна точка, що пише відповідь читання, кличе прохід
  * осідання `settlePass`, а його кроки — єдині місця своїх дій. Правила — за
  * символами type checker-а, не за іменами: псевдонім, деструктуризація, передача
- * функції значенням і помічник в іншому модулі не обходять їх.
+ * функції значенням і помічник в іншому модулі не обходять їх. Виняток —
+ * перелік мутаторів правила `widen` (7): він за текстом виклику, тож
+ * псевдонім мутатора його обходить; зміну на місці тоді зупиняє freeze.
  *
  * Крок гачка — властивість об'єкта, чий контекстний тип є `SettleHooks`
  * (також через `Pick` у `settleView`); його номер — за іменем властивості.
@@ -44,15 +53,13 @@ import { describe, expect, it } from "vitest"
  *     - `widen` — значення запису потрапляє в тип, що не є записом: `as`,
  *       анотація змінної чи параметра, присвоєння, `unknown` чи `any`, аргумент
  *       `Object.assign`/`Object.defineProperty(ies)`/`Reflect.set`/
- *       `Reflect.defineProperty` (у такому типі поле вже не `readonly`).
- *     Поля запису — `readonly`, але tsc відкидає лише прямий запис
- *     `s.targetState.failures = 0`; `Object.assign` і приведення типу він
- *     пропускає, тож їх тримає правило `widen`, а не тип. Не тримається:
- *     підроблене значення запису з типу, що вже не має ознак запису
- *     (`JSON.parse(…) as TargetState`, помічник, що повертає `unknown` як
- *     запис), — це приведення до запису, не з нього; зміна на місці через
- *     функцію поза переліком мутаторів, узагальнений параметр якої виводить
- *     тип запису.
+ *       `Reflect.defineProperty` — ранній сигнал у коді, не гарантія.
+ *     Зміну запису на місці зупиняє freeze: `sync/target-state.ts` заморожує
+ *     кожне своє значення (самотест «the target record is frozen»); страж
+ *     ловить заміну запису й побудову поза `sync/target-state.ts`. Поля
+ *     запису — `readonly`. Не тримається: підроблене значення запису з типу
+ *     без ознак запису (`JSON.parse(…) as TargetState`, помічник, що повертає
+ *     `unknown` як запис) — це приведення до запису, не з нього.
  */
 
 const DATA = join(import.meta.dirname, "..", "..")
@@ -2018,5 +2025,59 @@ import { createTargetState, slotChanged, type TargetState } from "./target-state
         exceptions
       )
     ).toEqual(["/v/a.ts::adopt record:assign ×2"])
+  })
+})
+
+// Зміну запису на місці зупиняє заморожування (рішення архітекторки 28.11):
+// форми, які страж за типами не бачить (перетин, псевдонім `Object.assign`,
+// `globalThis`), під час виконання кидають `TypeError` — модулі суворі.
+describe("the target record is frozen: an in-place change throws", () => {
+  const record = (): TargetState =>
+    slotChanged(
+      addRequirement(
+        startFlight(createTargetState(), {
+          kind: "reread",
+          epoch: 1,
+          cause: { reason: "interval" },
+        }),
+        { kind: "composition-unconfirmed", since: 1 }
+      ),
+      { kind: "waiter", waiter: () => undefined }
+    )
+
+  it("every transition result and the constructor are frozen with their arrays", () => {
+    const r = record()
+    for (const value of [
+      createTargetState(),
+      r,
+      r.requirements,
+      r.requirements[0],
+      r.rereadEpochs,
+      r.rereadWaiters,
+    ])
+      expect(Object.isFrozen(value)).toBe(true)
+  })
+
+  it("a write through an intersection type throws", () => {
+    const m: TargetState & { failures: number } = record()
+    expect(() => {
+      m.failures = 0
+    }).toThrow(TypeError)
+  })
+
+  it("Object.assign under an alias and through globalThis throws", () => {
+    const assign = Object.assign
+    expect(() => assign(record(), { failures: 0 })).toThrow(TypeError)
+    expect(() => globalThis.Object.assign(record(), { failures: 0 })).toThrow(
+      TypeError
+    )
+  })
+
+  it("a change of an array or a requirement inside the record throws", () => {
+    const r = record()
+    expect(() => (r.rereadEpochs as number[]).push(2)).toThrow(TypeError)
+    expect(() => {
+      ;(r.requirements[0] as { since: number }).since = 0
+    }).toThrow(TypeError)
   })
 })

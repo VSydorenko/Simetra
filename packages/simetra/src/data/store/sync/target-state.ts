@@ -125,6 +125,23 @@ export interface TargetState {
   readonly revision: number
 }
 
+/*
+ * Незмінність запису (рішення архітекторки 28.11): кожне значення, яке
+ * віддає цей файл, заморожене разом із масивами й вимогами в ньому. Зміна
+ * поля на місці (приведення, перетин типів, `Object.assign` під будь-яким
+ * ім'ям) кидає `TypeError` у суворому режимі модулів, тож змінити запис можна
+ * лише переходом. Копій заморожування не додає: переходи й так повертають
+ * нове значення.
+ */
+function frozen(state: TargetState): TargetState {
+  if (Object.isFrozen(state)) return state
+  for (const r of state.requirements) Object.freeze(r)
+  Object.freeze(state.requirements)
+  Object.freeze(state.rereadEpochs)
+  Object.freeze(state.rereadWaiters)
+  return Object.freeze(state)
+}
+
 /** Доказ, який ціль приносить без читання (гідратація знімка). */
 export interface InitialProof {
   readonly sectionRead?: number
@@ -136,7 +153,7 @@ export interface InitialProof {
  * знімок гідратації (`adopt`): епоха гідратації як епоха читання ТЧ.
  */
 export function createTargetState(proof: InitialProof = {}): TargetState {
-  return {
+  return frozen({
     requirements: [],
     okReadEpoch: undefined,
     readRevision: undefined,
@@ -161,7 +178,7 @@ export function createTargetState(proof: InitialProof = {}): TargetState {
     visible: undefined,
     subscribers: 0,
     revision: 0,
-  }
+  })
 }
 
 /** Вимога виду, якщо стоїть. */
@@ -196,9 +213,11 @@ const derivedInputs = (state: TargetState) =>
 function withRevision(prev: TargetState, next: TargetState): TargetState {
   const a = derivedInputs(prev)
   const b = derivedInputs(next)
-  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2]
-    ? next
-    : { ...next, revision: prev.revision + 1 }
+  return frozen(
+    a[0] === b[0] && a[1] === b[1] && a[2] === b[2]
+      ? next
+      : { ...next, revision: prev.revision + 1 }
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +266,10 @@ export function startFlight(
   state: TargetState,
   start: FlightStart
 ): TargetState {
+  return frozen(startedFlight(state, start))
+}
+
+function startedFlight(state: TargetState, start: FlightStart): TargetState {
   // Перевірку, хвіст і чекачів перечитування веде «місце польоту змінилось».
   switch (start.kind) {
     case "page":
@@ -501,6 +524,10 @@ export function slotChanged(
   state: TargetState,
   change: SlotChange
 ): TargetState {
+  return frozen(changedSlot(state, change))
+}
+
+function changedSlot(state: TargetState, change: SlotChange): TargetState {
   switch (change.kind) {
     case "freed":
       // Епоха старту лишається, як на `main`: її читають лише поруч із
@@ -685,8 +712,8 @@ export function derivedInputChanged(
     change === "tab-hidden" &&
     requirementOf(state, "composition-unconfirmed") === undefined
   )
-    return state
-  return { ...state, revision: state.revision + 1 }
+    return frozen(state)
+  return frozen({ ...state, revision: state.revision + 1 })
 }
 
 // ---------------------------------------------------------------------------
