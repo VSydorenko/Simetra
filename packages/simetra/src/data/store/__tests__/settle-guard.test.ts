@@ -698,18 +698,21 @@ function analyze(
   }
   const unwrap = (e: ts.Expression): ts.Expression =>
     ts.isParenthesizedExpression(e) ? unwrap(e.expression) : e
+  const isOwnerSymbol = (symbol: ts.Symbol | undefined): boolean =>
+    ownerFieldDecl !== undefined &&
+    symbol !== undefined &&
+    declOf(resolve(symbol)!) === ownerFieldDecl
+  // Ключ елемент-доступу — за літеральним типом, а не за записом ключа:
+  // `const k = "targetState" as const; s[k]` — те саме поле.
   const isOwnerField = (target: ts.Expression): boolean => {
     const e = unwrap(target)
-    const symbol = ts.isPropertyAccessExpression(e)
-      ? checker.getSymbolAtLocation(e.name)
-      : ts.isElementAccessExpression(e) &&
-          ts.isStringLiteralLike(e.argumentExpression)
-        ? checker.getSymbolAtLocation(e.argumentExpression)
-        : undefined
-    return (
-      ownerFieldDecl !== undefined &&
-      symbol !== undefined &&
-      declOf(resolve(symbol)!) === ownerFieldDecl
+    if (ts.isPropertyAccessExpression(e))
+      return isOwnerSymbol(checker.getSymbolAtLocation(e.name))
+    if (!ts.isElementAccessExpression(e)) return false
+    const key = checker.getTypeAtLocation(e.argumentExpression)
+    const object = checker.getTypeAtLocation(e.expression)
+    return (key.isUnion() ? key.types : [key]).some(
+      (k) => k.isStringLiteral() && isOwnerSymbol(object.getProperty(k.value))
     )
   }
   // Будь-яка форма присвоєння (`&&=`, `??=` теж): дозволене лише `=`.
@@ -1807,6 +1810,17 @@ export function fresh(): TargetState { return { failures: 0, flight: undefined }
     expect(bad(`  s["targetState"] = createTargetState()`)).toEqual([
       "/v/a.ts::bad record:assign",
     ])
+    // Обчислюваний ключ: поле — за літеральним типом ключа.
+    expect(
+      bad(
+        `  const k = "targetState" as const\n  const old = s.targetState\n  s[k] = old`
+      )
+    ).toEqual(["/v/a.ts::bad record:assign"])
+    expect(
+      bad(
+        `  const k: "loaded" | "targetState" = "targetState"\n  const old = s.targetState\n  ;(s as { [key: string]: unknown })[k] = old`
+      )
+    ).toEqual(["/v/a.ts::bad record:widen"])
     expect(
       bad(`  const saved = s.targetState\n  s.targetState &&= saved`)
     ).toEqual(["/v/a.ts::bad record:assign"])
