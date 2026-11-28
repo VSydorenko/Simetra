@@ -190,7 +190,8 @@ describe("Writer", () => {
   })
 
   // Р-SK3-6: підписка й `setVisible`, що не змінюють ефективної видимості,
-  // ревізії не рухають; знімок той самий, що й на `main` після перебудови.
+  // дають знімок, рівний знімку `main` після перебудови. Тест судить рівність
+  // знімків, а не нерухомість ревізії: нерухомість ловить характеризація.
   it("an unconfirmed composition keeps its snapshot when the effective visibility stays", async () => {
     const { core, fake } = setup()
     seed(fake, 1, 2)
